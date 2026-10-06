@@ -1,0 +1,62 @@
+name: tests
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  unit:
+    name: npm test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install dependencies
+        run: if [ -f package-lock.json ]; then npm ci; else npm install; fi
+      - run: npm test
+
+  newman:
+    name: newman (${{ matrix.auth }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        auth: [none, apikey, basic, bearer, jwt, oauth2, hmac]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install dependencies
+        run: if [ -f package-lock.json ]; then npm ci; else npm install; fi
+      - name: Start server (sqlite + local files)
+        env:
+          PORT: '3000'
+          AUTH_MODE: ${{ matrix.auth }}
+          DB_DRIVER: sqlite
+          FILE_STORE: local
+          SEED_ON_START: always
+          PUBLIC_BASE_URL: http://127.0.0.1:3000
+          LOG_LEVEL: warn
+        run: |
+          nohup node src/server.js > server.log 2>&1 &
+          for i in $(seq 1 60); do curl -fsS http://127.0.0.1:3000/ready && break; sleep 1; done
+      - name: Run Postman collection with Newman
+        run: |
+          npx newman run postman/API-Test-Tool.postman_collection.json \
+            -e postman/API-Test-Tool.postman_environment.json \
+            --env-var baseUrl=http://127.0.0.1:3000 \
+            --env-var authMode=${{ matrix.auth }} \
+            --working-dir postman \
+            --reporters cli,junit --reporter-junit-export newman-results/${{ matrix.auth }}.xml
+      - name: Server log
+        if: failure()
+        run: cat server.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: newman-${{ matrix.auth }}
+          path: newman-results/

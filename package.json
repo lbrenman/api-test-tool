@@ -1,0 +1,48 @@
+{
+  "name": "api-test-tool",
+  "version": "1.0.0",
+  "description": "Mock API target + inspector for outgoing integration tests, and an OpenAPI contract tester for incoming implementations.",
+  "main": "src/server.js",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js",
+    "seed": "node scripts/seed.js",
+    "test": "node --test --test-concurrency=1 \"test/**/*.test.js\"",
+    "postman": "node scripts/run-newman.js",
+    "postman:build": "node scripts/build-postman.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/lbrenman/api-test-tool.git"
+  },
+  "dependencies": {
+    "@apidevtools/swagger-parser": "^10.1.1",
+    "@aws-sdk/client-s3": "^3.800.0",
+    "@aws-sdk/s3-request-presigner": "^3.800.0",
+    "@faker-js/faker": "^9.6.0",
+    "ajv": "^8.17.1",
+    "ajv-formats": "^3.0.1",
+    "archiver": "^7.0.1",
+    "better-sqlite3": "^12.0.0",
+    "busboy": "^1.6.0",
+    "dayjs": "^1.11.13",
+    "exceljs": "^4.4.0",
+    "express": "^5.1.0",
+    "jose": "^6.0.11",
+    "jpeg-js": "^0.4.4",
+    "js-yaml": "^4.1.0",
+    "pdfkit": "^0.16.0",
+    "pg": "^8.16.0",
+    "pngjs": "^7.0.0",
+    "randexp": "^0.5.3",
+    "swagger2openapi": "^7.0.8"
+  },
+  "devDependencies": {
+    "newman": "^6.2.1",
+    "supertest": "^7.1.0"
+  }
+}

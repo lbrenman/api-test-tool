@@ -1,0 +1,27 @@
+{
+  "name": "api-test-tool",
+  "image": "mcr.microsoft.com/devcontainers/javascript-node:1-22-bookworm",
+  "features": {
+    "ghcr.io/devcontainers/features/github-cli:1": {}
+  },
+  "forwardPorts": [3000],
+  "portsAttributes": {
+    "3000": {
+      "label": "API Test Tool",
+      "onAutoForward": "openBrowser",
+      "protocol": "http"
+    }
+  },
+  "containerEnv": {
+    "PORT": "3000",
+    "DB_DRIVER": "sqlite",
+    "FILE_STORE": "local"
+  },
+  "onCreateCommand": "npm install",
+  "postStartCommand": "bash .devcontainer/start.sh",
+  "customizations": {
+    "vscode": {
+      "extensions": ["dbaeumer.vscode-eslint", "humao.rest-client"]
+    }
+  }
+}

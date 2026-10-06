@@ -1,0 +1,2 @@
+Hello from the API Test Tool fixture.
+Used by the multipart upload request.

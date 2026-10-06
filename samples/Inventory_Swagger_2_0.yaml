@@ -1,0 +1,137 @@
+swagger: '2.0'
+info:
+  title: Warehouse Inventory API
+  version: 2.3.0
+  description: |
+    Small Swagger 2.0 sample used to exercise the tester's 2.0 -> 3.0 conversion.
+    Point the tester at this tool's mock (Mock from spec) or at your own implementation.
+host: inventory.example.invalid
+basePath: /inventory/v2
+schemes: [https]
+consumes: [application/json]
+produces: [application/json]
+securityDefinitions:
+  ApiKey:
+    type: apiKey
+    in: header
+    name: X-API-Key
+security:
+  - ApiKey: []
+paths:
+  /items:
+    get:
+      operationId: listItems
+      summary: List stock items
+      parameters:
+        - name: warehouse
+          in: query
+          type: string
+          enum: [BOS, ATL, SFO]
+        - name: limit
+          in: query
+          type: integer
+          minimum: 1
+          maximum: 100
+          default: 20
+      responses:
+        '200':
+          description: Items
+          schema:
+            type: object
+            required: [items, total]
+            properties:
+              items:
+                type: array
+                items: {$ref: '#/definitions/Item'}
+              total: {type: integer}
+          examples:
+            application/json:
+              total: 1
+              items:
+                - sku: WID-00042
+                  name: Widget, large
+                  warehouse: BOS
+                  quantity: 120
+                  unitCost: 4.75
+                  lastCountedAt: '2026-09-30T12:00:00Z'
+                  discontinued: false
+                  binLocation: null
+        '401': {$ref: '#/responses/Unauthorized'}
+    post:
+      operationId: createItem
+      summary: Add a stock item
+      parameters:
+        - name: body
+          in: body
+          required: true
+          schema: {$ref: '#/definitions/NewItem'}
+      responses:
+        '201':
+          description: Created
+          headers:
+            Location:
+              type: string
+              description: URL of the new item
+          schema: {$ref: '#/definitions/Item'}
+        '400': {$ref: '#/responses/BadRequest'}
+        '401': {$ref: '#/responses/Unauthorized'}
+  /items/{sku}:
+    parameters:
+      - name: sku
+        in: path
+        required: true
+        type: string
+        pattern: '^[A-Z]{3}-[0-9]{5}$'
+    get:
+      operationId: getItem
+      summary: Get one stock item
+      responses:
+        '200':
+          description: Item
+          schema: {$ref: '#/definitions/Item'}
+        '401': {$ref: '#/responses/Unauthorized'}
+        '404': {$ref: '#/responses/NotFound'}
+    delete:
+      operationId: deleteItem
+      summary: Remove a stock item
+      responses:
+        '204': {description: Deleted}
+        '401': {$ref: '#/responses/Unauthorized'}
+        '404': {$ref: '#/responses/NotFound'}
+definitions:
+  NewItem:
+    type: object
+    required: [sku, name, warehouse, quantity]
+    properties:
+      sku: {type: string, pattern: '^[A-Z]{3}-[0-9]{5}$', example: WID-00042}
+      name: {type: string, maxLength: 120, example: 'Widget, large'}
+      warehouse: {type: string, enum: [BOS, ATL, SFO]}
+      quantity: {type: integer, minimum: 0}
+      unitCost: {type: number, format: double, minimum: 0}
+      binLocation:
+        type: string
+        x-nullable: true
+  Item:
+    allOf:
+      - $ref: '#/definitions/NewItem'
+      - type: object
+        required: [lastCountedAt, discontinued]
+        properties:
+          lastCountedAt: {type: string, format: date-time}
+          discontinued: {type: boolean}
+  Error:
+    type: object
+    required: [code, message]
+    properties:
+      code: {type: string}
+      message: {type: string}
+responses:
+  BadRequest:
+    description: Invalid input
+    schema: {$ref: '#/definitions/Error'}
+  Unauthorized:
+    description: Missing or invalid API key
+    schema: {$ref: '#/definitions/Error'}
+  NotFound:
+    description: Item not found
+    schema: {$ref: '#/definitions/Error'}

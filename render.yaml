@@ -1,0 +1,38 @@
+# Render Blueprint. Free web services have no persistent disk:
+# - either uncomment the disk (paid plan) and keep sqlite + local files,
+# - or use DB_DRIVER=postgres (e.g. Neon) + FILE_STORE=s3 (R2, S3, Tigris, MinIO...).
+services:
+  - type: web
+    name: api-test-tool
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: starter
+    healthCheckPath: /health
+    envVars:
+      - key: PORT
+        value: "3000"
+      - key: ADMIN_PASSWORD
+        generateValue: true
+      - key: DB_DRIVER
+        value: postgres
+      - key: DATABASE_URL
+        sync: false
+      - key: FILE_STORE
+        value: s3
+      - key: S3_BUCKET
+        sync: false
+      - key: S3_REGION
+        value: auto
+      - key: S3_ENDPOINT
+        sync: false
+      - key: S3_ACCESS_KEY_ID
+        sync: false
+      - key: S3_SECRET_ACCESS_KEY
+        sync: false
+      - key: S3_FORCE_PATH_STYLE
+        value: "true"
+      # PUBLIC_BASE_URL is auto-detected from RENDER_EXTERNAL_URL
+    # disk:
+    #   name: data
+    #   mountPath: /data
+    #   sizeGB: 1

@@ -1,0 +1,11 @@
+node_modules
+data
+.env
+*.db
+coverage
+newman-results
+.git
+.github
+.devcontainer
+test
+postman
