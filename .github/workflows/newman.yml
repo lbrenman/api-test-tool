@@ -86,11 +86,18 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - name: Start MinIO
+      - name: Start an S3-compatible server (MinIO, SeaweedFS fallback)
         run: |
-          docker run -d --name minio -p 9000:9000 -e MINIO_ROOT_USER=minioadmin -e MINIO_ROOT_PASSWORD=minioadmin minio/minio server /data
-          for i in $(seq 1 30); do curl -fsS http://127.0.0.1:9000/minio/health/live && break; sleep 1; done
-          AWS_ACCESS_KEY_ID=minioadmin AWS_SECRET_ACCESS_KEY=minioadmin aws --endpoint-url http://127.0.0.1:9000 --region us-east-1 s3 mb s3://att-test
+          set -x
+          docker run -d --name s3 -p 9000:9000 -e MINIO_ROOT_USER=minioadmin -e MINIO_ROOT_PASSWORD=minioadmin \
+            quay.io/minio/minio:RELEASE.2025-04-22T22-12-26Z server /data \
+          || docker run -d --name s3 -p 9000:9000 -e MINIO_ROOT_USER=minioadmin -e MINIO_ROOT_PASSWORD=minioadmin \
+            minio/minio:RELEASE.2025-04-22T22-12-26Z server /data \
+          || { printf '{"identities":[{"name":"admin","credentials":[{"accessKey":"minioadmin","secretKey":"minioadmin"}],"actions":["Admin","Read","List","Tagging","Write"]}]}' > /tmp/s3.json; \
+               docker run -d --name s3 -p 9000:8333 -v /tmp/s3.json:/etc/s3.json chrislusf/seaweedfs server -s3 -s3.config=/etc/s3.json; }
+          for i in $(seq 1 60); do curl -s -o /dev/null http://127.0.0.1:9000/ && break; sleep 1; done
+          sleep 3
+          for i in $(seq 1 10); do AWS_ACCESS_KEY_ID=minioadmin AWS_SECRET_ACCESS_KEY=minioadmin aws --endpoint-url http://127.0.0.1:9000 --region us-east-1 s3 mb s3://att-test && break; sleep 3; done
       - name: Install dependencies
         run: if [ -f package-lock.json ]; then npm ci; else npm install; fi
       - name: npm test
