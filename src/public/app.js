@@ -492,7 +492,7 @@
             clear(tokenOut).append(h('div', { class: 'stack' }, h('div', { class: 'row' }, h('b', null, `expires in ${t.expires_in}s`), h('button', { class: 'small', onclick: () => copy(t.access_token) }, 'Copy token'), h('button', { class: 'small', onclick: () => copy(`Authorization: Bearer ${t.access_token}`) }, 'Copy header')),
               codeBlock(t.access_token), codeBlock(pretty(t.decoded))));
           }) }, 'Issue token'), tokenOut,
-          h('div', { class: 'small muted' }, 'curl:'), codeBlock(`curl -s -u ${a.clients[0]?.clientId || 'demo-client'}:${a.clients[0]?.secret || 'demo-secret'} -d grant_type=client_credentials -d scope="read write" ${a.oauth.tokenUrl}`)),
+          h('div', { class: 'small muted' }, 'curl:'), codeBlock(`curl -s -u '${a.clients[0]?.clientId || 'demo-client'}:${a.clients[0]?.secret || 'demo-secret'}' -d grant_type=client_credentials -d scope="read write" '${a.oauth.tokenUrl}'`)),
         h('div', { class: 'card' }, h('h2', null, 'OAuth server'), kv({ token: a.oauth.tokenUrl, authorize: a.oauth.authorizeUrl, metadata: a.oauth.metadata, jwks: a.jwt.jwks, issuer: a.jwt.issuer, audience: a.jwt.audience, alg: a.jwt.alg, 'demo users': a.oauth.users.join(', ') })))));
     el.append(h('div', { class: 'card' }, h('h2', null, 'OAuth clients'),
       h('div', { class: 'table-wrap' }, h('table', null, h('thead', null, h('tr', null, ['Client id', 'Secret', 'Scopes', 'Redirect URIs', 'Source', ''].map((x) => h('th', null, x)))),
@@ -511,7 +511,7 @@
       h('button', { onclick: guard(async () => {
         const r = await api('POST', '/auth/hmac-sign', { method: hmacMethod.value, path: hmacPath.value, body: hmacBody.value || undefined });
         clear(hmacOut).append(h('div', { class: 'stack' }, h('div', { class: 'small muted' }, 'Canonical string (valid for the skew window):'), codeBlock(r.canonical), kv(r.headers),
-          h('button', { class: 'small', onclick: () => copy(`curl -s ${location.origin}${hmacPath.value} -X ${hmacMethod.value} -H 'Authorization: ${r.headers.Authorization}' -H 'X-Timestamp: ${r.headers['X-Timestamp']}'${hmacBody.value ? ` -H 'Content-Type: application/json' --data-binary '${hmacBody.value.replace(/'/g, "'\\''")}'` : ''}`) }, 'Copy curl')));
+          h('button', { class: 'small', onclick: () => copy(`curl -s '${location.origin}${hmacPath.value}' -X ${hmacMethod.value} -H 'Authorization: ${r.headers.Authorization}' -H 'X-Timestamp: ${r.headers['X-Timestamp']}'${hmacBody.value ? ` -H 'Content-Type: application/json' --data-binary '${hmacBody.value.replace(/'/g, "'\\''")}'` : ''}`) }, 'Copy curl')));
       }) }, 'Sign'), hmacOut));
   };
 

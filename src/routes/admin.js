@@ -35,13 +35,20 @@ module.exports = function adminRouter(ctx, { adminAuth, filesApi }) {
       jwt: " -H \"Authorization: Bearer $TOKEN\"", oauth2: " -H \"Authorization: Bearer $TOKEN\"", hmac: ' -H "Authorization: HMAC …" -H "X-Timestamp: …"',
     }[mode];
     const q = mode === 'apikey' && settings.get('apiKeyIn') === 'query' ? `?${settings.get('apiKeyName')}=${settings.get('apiKey')}` : '';
+    // URLs are always single-quoted: zsh (the macOS default shell) treats an unquoted "?" as a glob.
+    const quote = (u) => `'${u.replace(/'/g, "'\\''")}'`;
+    const sep = (path) => (path.includes('?') ? '&' : '?');
+    const withKey = (path) => (q ? `${path}${sep(path)}${q.slice(1)}` : path);
     const curls = [
-      `curl -s ${base}/v1/employees${q ? `${q}&` : '?'}limit=2${authHeader}`,
-      `curl -s "${base}/v1/p/cursor/products?limit=5${q ? `&${q.slice(1)}` : ''}"${authHeader}`,
-      `curl -s -X POST ${base}/hooks/my-webhook -H 'Content-Type: application/json' -d '{"hello":"inspector"}'`,
-      `curl -s -i ${base}/v1/employees/1${q} -H 'X-Force-Error: 503'${authHeader}`,
+      `curl -s ${quote(`${base}${withKey('/v1/employees?limit=2')}`)}${authHeader}`,
+      `curl -s ${quote(`${base}${withKey('/v1/p/cursor/products?limit=5')}`)}${authHeader}`,
+      `curl -s -X POST ${quote(`${base}/hooks/my-webhook`)} -H 'Content-Type: application/json' -d '{"hello":"inspector"}'`,
+      `curl -s -i ${quote(`${base}${withKey('/v1/employees/1')}`)} -H 'X-Force-Error: 503'${authHeader}`,
     ];
-    if (mode === 'jwt' || mode === 'oauth2') curls.unshift(`TOKEN=$(curl -s -u demo-client:demo-secret -d grant_type=client_credentials ${base}/oauth/token | sed -E 's/.*"access_token":"([^"]+)".*/\\1/')`);
+    if (mode === 'jwt' || mode === 'oauth2') {
+      const c = (await oauth.clients())[0] || { clientId: 'demo-client', secret: 'demo-secret' };
+      curls.unshift(`TOKEN=$(curl -s -u ${quote(`${c.clientId}:${c.secret}`)} -d grant_type=client_credentials ${quote(`${base}/oauth/token`)} | sed -E 's/.*"access_token":"([^"]+)".*/\\1/')`);
+    }
     res.json({
       version: pkg.version,
       baseUrl: base,
