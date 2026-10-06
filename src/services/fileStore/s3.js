@@ -26,6 +26,10 @@ class S3FileStore {
       region: this.cfg.region || 'us-east-1',
       endpoint: this.cfg.endpoint || undefined,
       forcePathStyle: !!this.cfg.forcePathStyle,
+      // Newer SDKs add CRC32 checksums by default, which breaks presigned PUTs from plain HTTP clients
+      // and some S3-compatible services (R2, MinIO). Only checksum when the API requires it.
+      requestChecksumCalculation: 'WHEN_REQUIRED',
+      responseChecksumValidation: 'WHEN_REQUIRED',
       credentials: this.cfg.accessKeyId ? { accessKeyId: this.cfg.accessKeyId, secretAccessKey: this.cfg.secretAccessKey } : undefined,
     });
     this.tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'api-test-tool-s3-'));
