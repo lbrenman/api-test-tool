@@ -41,7 +41,8 @@ class TesterService {
   }
 
   async samples() {
-    const files = (await fs.readdir(SAMPLES_DIR).catch(() => [])).filter((f) => /\.(ya?ml|json)$/i.test(f));
+    const files = (await fs.readdir(SAMPLES_DIR).catch(() => [])).filter((f) => /\.(ya?ml|json)$/i.test(f))
+      .sort((a, b) => Number(/swagger_?2/i.test(a)) - Number(/swagger_?2/i.test(b)) || a.localeCompare(b));
     return [
       ...files.map((f) => ({ id: f, name: f.replace(/[_-]/g, ' ').replace(/\.(ya?ml|json)$/i, ''), file: f, url: `/samples/${f}` })),
       { id: 'self', name: 'This tool (live /openapi.json)', url: '/openapi.json' },

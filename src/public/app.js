@@ -574,7 +574,7 @@
     wrap.append(checksView(r.checks));
     const pane = h('div');
     const views = {
-      response: () => (res ? h('div', { class: 'stack' }, kv(res.headers), res.body !== null ? codeBlock(pretty(res.body)) : h('div', { class: 'muted' }, `[binary ${fmtBytes(res.size)}]`)) : h('div', { class: 'muted' }, r.error || '')),
+      response: () => (res ? h('div', { class: 'stack' }, kv(res.headers), res.body === '' ? h('div', { class: 'muted small' }, '(empty body)') : res.body !== null ? codeBlock(pretty(res.body)) : h('div', { class: 'muted' }, `[binary ${fmtBytes(res.size)}]`)) : h('div', { class: 'muted' }, r.error || '')),
       request: () => (r.request ? h('div', { class: 'stack' }, h('div', null, method(r.request.method), ' ', h('code', null, r.request.url)), kv(r.request.headers), r.request.body ? codeBlock(pretty(r.request.body)) : null) : h('div', { class: 'muted' }, 'Not sent')),
       token: () => (r.tokenExchange ? codeBlock(pretty(r.tokenExchange)) : h('div', { class: 'muted' }, 'No token request for this call.')),
     };

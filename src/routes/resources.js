@@ -103,6 +103,11 @@ module.exports = function resourcesRouter(ctx) {
   r.get('/:resource/:id', async (req, res) => {
     const { name, doc } = await loadItem(req);
     const out = await sendItem(res, name, doc);
+    // Explicit If-None-Match wins even when the client also sends Cache-Control: no-cache (Postman does).
+    const inm = req.get('if-none-match');
+    if (inm && (inm.trim() === '*' || inm.split(',').map((s) => s.trim().replace(/^W\//, '')).includes(res.get('ETag')))) {
+      return res.status(304).end();
+    }
     res.json(project(out, parseFields(req.query.fields)));
   });
 

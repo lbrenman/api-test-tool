@@ -97,7 +97,8 @@ test('chunked download has no Content-Length', async () => {
 
 test('presigned PUT then GET (local HMAC-signed URLs)', async () => {
   const p = await request(t.app).post('/v1/files/presign').send({ method: 'PUT', name: 'presigned.txt', contentType: 'text/plain', expiresIn: 60 }).expect(201);
-  assert.match(p.body.url, /\/v1\/files\/presigned\//);
+  if (t.ctx.files.store.name === 'local') assert.match(p.body.url, /\/v1\/files\/presigned\//);
+  else assert.match(p.body.url, /X-Amz-Signature=/);
   const put = await fetch(p.body.url, { method: 'PUT', headers: { 'Content-Type': 'text/plain' }, body: 'via presigned url' });
   assert.equal(put.status, 200);
   const g = await request(t.app).post('/v1/files/presign').send({ method: 'GET', fileId: p.body.fileId }).expect(201);

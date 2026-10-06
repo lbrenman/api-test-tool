@@ -12,53 +12,55 @@
         "type": "text/javascript",
         "exec": [
           "// Applies the auth mode in {{authMode}} to /v1 requests. Requests with header X-Skip-Auth: 1 go out unauthenticated.",
-          "const sdk = require('postman-collection');",
-          "const CryptoJS = require('crypto-js');",
-          "const mode = pm.environment.get('authMode') || pm.collectionVariables.get('authMode') || 'none';",
-          "const skip = pm.request.headers.has('X-Skip-Auth');",
-          "if (skip) pm.request.headers.remove('X-Skip-Auth');",
-          "const resolved = new sdk.Url(pm.variables.replaceIn(pm.request.url.toString()));",
-          "const p = resolved.getPath();",
-          "const isApi = p.indexOf('/v1/') === 0 && p.indexOf('/v1/files/presigned/') !== 0;",
-          "if (!isApi || skip || mode === 'none') return;",
-          "const set = (k, v) => pm.request.headers.upsert({ key: k, value: v });",
-          "if (mode === 'apikey') {",
-          "  const name = pm.environment.get('apiKeyName') || 'X-API-Key';",
-          "  if ((pm.environment.get('apiKeyIn') || 'header') === 'query') pm.request.url.addQueryParams([{ key: name, value: pm.environment.get('apiKey') }]);",
-          "  else set(name, pm.environment.get('apiKey'));",
-          "} else if (mode === 'basic') {",
-          "  set('Authorization', 'Basic ' + CryptoJS.enc.Base64.stringify(CryptoJS.enc.Utf8.parse(pm.environment.get('basicUser') + ':' + pm.environment.get('basicPass'))));",
-          "} else if (mode === 'bearer') {",
-          "  set('Authorization', 'Bearer ' + pm.environment.get('bearerToken'));",
-          "} else if (mode === 'jwt' || mode === 'oauth2') {",
-          "  const cached = pm.collectionVariables.get('cachedToken');",
-          "  const exp = Number(pm.collectionVariables.get('cachedTokenExp') || 0);",
-          "  if (cached && exp > Date.now() + 15000) { set('Authorization', 'Bearer ' + cached); return; }",
-          "  pm.sendRequest({",
-          "    url: pm.environment.get('baseUrl') + '/oauth/token', method: 'POST',",
-          "    header: [{ key: 'Authorization', value: 'Basic ' + CryptoJS.enc.Base64.stringify(CryptoJS.enc.Utf8.parse(pm.environment.get('clientId') + ':' + pm.environment.get('clientSecret'))) }],",
-          "    body: { mode: 'urlencoded', urlencoded: [{ key: 'grant_type', value: 'client_credentials' }, { key: 'scope', value: pm.environment.get('scope') || 'read write' }] },",
-          "  }, (err, res) => {",
-          "    if (err || res.code !== 200) { console.error('token request failed', err || res.text()); return; }",
-          "    const tok = res.json();",
-          "    pm.collectionVariables.set('cachedToken', tok.access_token);",
-          "    pm.collectionVariables.set('cachedTokenExp', String(Date.now() + tok.expires_in * 1000));",
-          "    set('Authorization', 'Bearer ' + tok.access_token);",
-          "  });",
-          "} else if (mode === 'hmac') {",
-          "  const pathQuery = resolved.getPathWithQuery();",
-          "  const ts = String(Math.floor(Date.now() / 1000));",
-          "  const b = pm.request.body;",
-          "  let bodyHash;",
-          "  const streamed = p.indexOf('/v1/files/') === 0 && p !== '/v1/files/base64' && p !== '/v1/files/presign';",
-          "  if (!b || b.isEmpty() || (b.mode === 'raw' && !b.raw)) bodyHash = CryptoJS.SHA256('').toString(CryptoJS.enc.Hex);",
-          "  else if (streamed || b.mode !== 'raw') bodyHash = 'UNSIGNED-PAYLOAD';",
-          "  else bodyHash = CryptoJS.SHA256(CryptoJS.enc.Utf8.parse(pm.variables.replaceIn(b.raw))).toString(CryptoJS.enc.Hex);",
-          "  const canonical = [pm.request.method.toUpperCase(), pathQuery, ts, bodyHash].join('\\n');",
-          "  const sig = CryptoJS.HmacSHA256(canonical, pm.environment.get('hmacSecret')).toString(CryptoJS.enc.Base64);",
-          "  set('Authorization', 'HMAC ' + pm.environment.get('hmacKeyId') + ':' + sig);",
-          "  set('X-Timestamp', ts);",
-          "}"
+          "(function applyAuth() {",
+          "  const sdk = require('postman-collection');",
+          "  const CryptoJS = require('crypto-js');",
+          "  const mode = pm.environment.get('authMode') || pm.collectionVariables.get('authMode') || 'none';",
+          "  const skip = pm.request.headers.has('X-Skip-Auth');",
+          "  if (skip) pm.request.headers.remove('X-Skip-Auth');",
+          "  const resolved = new sdk.Url(pm.variables.replaceIn(pm.request.url.toString()));",
+          "  const p = resolved.getPath();",
+          "  const isApi = p.indexOf('/v1/') === 0 && p.indexOf('/v1/files/presigned/') !== 0;",
+          "  if (!isApi || skip || mode === 'none') return;",
+          "  const set = (k, v) => pm.request.headers.upsert({ key: k, value: v });",
+          "  if (mode === 'apikey') {",
+          "    const name = pm.environment.get('apiKeyName') || 'X-API-Key';",
+          "    if ((pm.environment.get('apiKeyIn') || 'header') === 'query') pm.request.url.addQueryParams([{ key: name, value: pm.environment.get('apiKey') }]);",
+          "    else set(name, pm.environment.get('apiKey'));",
+          "  } else if (mode === 'basic') {",
+          "    set('Authorization', 'Basic ' + CryptoJS.enc.Base64.stringify(CryptoJS.enc.Utf8.parse(pm.environment.get('basicUser') + ':' + pm.environment.get('basicPass'))));",
+          "  } else if (mode === 'bearer') {",
+          "    set('Authorization', 'Bearer ' + pm.environment.get('bearerToken'));",
+          "  } else if (mode === 'jwt' || mode === 'oauth2') {",
+          "    const cached = pm.collectionVariables.get('cachedToken');",
+          "    const exp = Number(pm.collectionVariables.get('cachedTokenExp') || 0);",
+          "    if (cached && exp > Date.now() + 15000) { set('Authorization', 'Bearer ' + cached); return; }",
+          "    pm.sendRequest({",
+          "      url: pm.environment.get('baseUrl') + '/oauth/token', method: 'POST',",
+          "      header: [{ key: 'Authorization', value: 'Basic ' + CryptoJS.enc.Base64.stringify(CryptoJS.enc.Utf8.parse(pm.environment.get('clientId') + ':' + pm.environment.get('clientSecret'))) }],",
+          "      body: { mode: 'urlencoded', urlencoded: [{ key: 'grant_type', value: 'client_credentials' }, { key: 'scope', value: pm.environment.get('scope') || 'read write' }] },",
+          "    }, (err, res) => {",
+          "      if (err || res.code !== 200) { console.error('token request failed', err || res.text()); return; }",
+          "      const tok = res.json();",
+          "      pm.collectionVariables.set('cachedToken', tok.access_token);",
+          "      pm.collectionVariables.set('cachedTokenExp', String(Date.now() + tok.expires_in * 1000));",
+          "      set('Authorization', 'Bearer ' + tok.access_token);",
+          "    });",
+          "  } else if (mode === 'hmac') {",
+          "    const pathQuery = resolved.getPathWithQuery();",
+          "    const ts = String(Math.floor(Date.now() / 1000));",
+          "    const b = pm.request.body;",
+          "    let bodyHash;",
+          "    const streamed = p.indexOf('/v1/files/') === 0 && p !== '/v1/files/base64' && p !== '/v1/files/presign';",
+          "    if (!b || b.isEmpty() || (b.mode === 'raw' && !b.raw)) bodyHash = CryptoJS.SHA256('').toString(CryptoJS.enc.Hex);",
+          "    else if (streamed || b.mode !== 'raw') bodyHash = 'UNSIGNED-PAYLOAD';",
+          "    else bodyHash = CryptoJS.SHA256(CryptoJS.enc.Utf8.parse(pm.variables.replaceIn(b.raw))).toString(CryptoJS.enc.Hex);",
+          "    const canonical = [pm.request.method.toUpperCase(), pathQuery, ts, bodyHash].join('\\n');",
+          "    const sig = CryptoJS.HmacSHA256(canonical, pm.environment.get('hmacSecret')).toString(CryptoJS.enc.Base64);",
+          "    set('Authorization', 'HMAC ' + pm.environment.get('hmacKeyId') + ':' + sig);",
+          "    set('X-Timestamp', ts);",
+          "  }",
+          "})();"
         ]
       }
     },
@@ -1556,11 +1558,44 @@
       ]
     },
     {
-      "id": "att-001c",
+      "id": "att-001d",
       "name": "Pagination (follow to the end)",
       "item": [
         {
           "id": "att-0015",
+          "name": "Reset walkers",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/health",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "health"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "const b = pm.environment.get('baseUrl');",
+                  "pm.environment.set('totalEmployees', pm.response.json().data.employees); pm.environment.set('totalProducts', pm.response.json().data.products);",
+                  "pm.environment.set('walk_ids', ''); pm.environment.set('w_offset', 0); pm.environment.set('w_page', 1); pm.environment.set('w_cursor', '');",
+                  "pm.environment.set('w_after', 0); pm.environment.set('w_token', '');",
+                  "pm.environment.set('w_link', b + '/v1/p/link/employees?page=1&per_page=40'); pm.environment.set('w_hal', b + '/v1/p/hal/products?page=1&size=50');"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "att-0016",
           "name": "offset",
           "request": {
             "method": "GET",
@@ -1590,17 +1625,6 @@
           },
           "event": [
             {
-              "listen": "prerequest",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "if (!pm.environment.get('walk_active')) { pm.environment.set('walk_active', '1'); pm.environment.set('walk_count', 0); pm.environment.set('walk_ids', '');",
-                  "pm.environment.set('w_offset', 0);",
-                  "}"
-                ]
-              }
-            },
-            {
               "listen": "test",
               "script": {
                 "type": "text/javascript",
@@ -1614,7 +1638,7 @@
                   "pm.environment.set('walk_ids', ids.join(','));",
                   "if (more) { postman.setNextRequest(pm.info.requestName); } else {",
                   "  pm.test('walked every item exactly once', () => { pm.expect(new Set(ids).size).to.eql(ids.length); pm.expect(ids.length).to.eql(Number(pm.environment.get(total))); });",
-                  "  ['walk_active', 'walk_count', 'walk_ids', 'w_offset', 'w_page', 'w_cursor', 'w_after', 'w_next', 'w_token'].forEach(k => pm.environment.unset(k));",
+                  "  pm.environment.set('walk_ids', '');",
                   "}"
                 ]
               }
@@ -1622,7 +1646,7 @@
           ]
         },
         {
-          "id": "att-0016",
+          "id": "att-0017",
           "name": "page",
           "request": {
             "method": "GET",
@@ -1652,17 +1676,6 @@
           },
           "event": [
             {
-              "listen": "prerequest",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "if (!pm.environment.get('walk_active')) { pm.environment.set('walk_active', '1'); pm.environment.set('walk_count', 0); pm.environment.set('walk_ids', '');",
-                  "pm.environment.set('w_page', 1);",
-                  "}"
-                ]
-              }
-            },
-            {
               "listen": "test",
               "script": {
                 "type": "text/javascript",
@@ -1676,7 +1689,7 @@
                   "pm.environment.set('walk_ids', ids.join(','));",
                   "if (more) { postman.setNextRequest(pm.info.requestName); } else {",
                   "  pm.test('walked every item exactly once', () => { pm.expect(new Set(ids).size).to.eql(ids.length); pm.expect(ids.length).to.eql(Number(pm.environment.get(total))); });",
-                  "  ['walk_active', 'walk_count', 'walk_ids', 'w_offset', 'w_page', 'w_cursor', 'w_after', 'w_next', 'w_token'].forEach(k => pm.environment.unset(k));",
+                  "  pm.environment.set('walk_ids', '');",
                   "}"
                 ]
               }
@@ -1684,7 +1697,7 @@
           ]
         },
         {
-          "id": "att-0017",
+          "id": "att-0018",
           "name": "cursor",
           "request": {
             "method": "GET",
@@ -1714,17 +1727,6 @@
           },
           "event": [
             {
-              "listen": "prerequest",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "if (!pm.environment.get('walk_active')) { pm.environment.set('walk_active', '1'); pm.environment.set('walk_count', 0); pm.environment.set('walk_ids', '');",
-                  "pm.environment.set('w_cursor', '');",
-                  "}"
-                ]
-              }
-            },
-            {
               "listen": "test",
               "script": {
                 "type": "text/javascript",
@@ -1738,7 +1740,7 @@
                   "pm.environment.set('walk_ids', ids.join(','));",
                   "if (more) { postman.setNextRequest(pm.info.requestName); } else {",
                   "  pm.test('walked every item exactly once', () => { pm.expect(new Set(ids).size).to.eql(ids.length); pm.expect(ids.length).to.eql(Number(pm.environment.get(total))); });",
-                  "  ['walk_active', 'walk_count', 'walk_ids', 'w_offset', 'w_page', 'w_cursor', 'w_after', 'w_next', 'w_token'].forEach(k => pm.environment.unset(k));",
+                  "  pm.environment.set('walk_ids', '');",
                   "}"
                 ]
               }
@@ -1746,7 +1748,7 @@
           ]
         },
         {
-          "id": "att-0018",
+          "id": "att-0019",
           "name": "keyset",
           "request": {
             "method": "GET",
@@ -1776,17 +1778,6 @@
           },
           "event": [
             {
-              "listen": "prerequest",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "if (!pm.environment.get('walk_active')) { pm.environment.set('walk_active', '1'); pm.environment.set('walk_count', 0); pm.environment.set('walk_ids', '');",
-                  "pm.environment.set('w_after', 0);",
-                  "}"
-                ]
-              }
-            },
-            {
               "listen": "test",
               "script": {
                 "type": "text/javascript",
@@ -1800,7 +1791,7 @@
                   "pm.environment.set('walk_ids', ids.join(','));",
                   "if (more) { postman.setNextRequest(pm.info.requestName); } else {",
                   "  pm.test('walked every item exactly once', () => { pm.expect(new Set(ids).size).to.eql(ids.length); pm.expect(ids.length).to.eql(Number(pm.environment.get(total))); });",
-                  "  ['walk_active', 'walk_count', 'walk_ids', 'w_offset', 'w_page', 'w_cursor', 'w_after', 'w_next', 'w_token'].forEach(k => pm.environment.unset(k));",
+                  "  pm.environment.set('walk_ids', '');",
                   "}"
                 ]
               }
@@ -1808,30 +1799,19 @@
           ]
         },
         {
-          "id": "att-0019",
+          "id": "att-001a",
           "name": "link (RFC 8288)",
           "request": {
             "method": "GET",
             "header": [],
             "url": {
-              "raw": "{{w_next}}",
+              "raw": "{{w_link}}",
               "host": [
-                "{{w_next}}"
+                "{{w_link}}"
               ]
             }
           },
           "event": [
-            {
-              "listen": "prerequest",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "if (!pm.environment.get('walk_active')) { pm.environment.set('walk_active', '1'); pm.environment.set('walk_count', 0); pm.environment.set('walk_ids', '');",
-                  "pm.environment.set('w_next', pm.environment.get('baseUrl') + '/v1/p/link/employees?page=1&per_page=40');",
-                  "}"
-                ]
-              }
-            },
             {
               "listen": "test",
               "script": {
@@ -1843,12 +1823,12 @@
                   "pm.test('X-Total-Count', () => pm.expect(Number(pm.response.headers.get('X-Total-Count'))).to.eql(Number(pm.environment.get('totalEmployees'))));",
                   "const m = /<([^>]+)>;\\s*rel=\"next\"/.exec(pm.response.headers.get('Link') || '');",
                   "const more = !!m;",
-                  "if (m) pm.environment.set('w_next', m[1]);",
+                  "if (m) pm.environment.set('w_link', m[1]);",
                   "const ids = (pm.environment.get('walk_ids') || '').split(',').filter(Boolean).concat(items.map(x => String(x.id)));",
                   "pm.environment.set('walk_ids', ids.join(','));",
                   "if (more) { postman.setNextRequest(pm.info.requestName); } else {",
                   "  pm.test('walked every item exactly once', () => { pm.expect(new Set(ids).size).to.eql(ids.length); pm.expect(ids.length).to.eql(Number(pm.environment.get(total))); });",
-                  "  ['walk_active', 'walk_count', 'walk_ids', 'w_offset', 'w_page', 'w_cursor', 'w_after', 'w_next', 'w_token'].forEach(k => pm.environment.unset(k));",
+                  "  pm.environment.set('walk_ids', '');",
                   "}"
                 ]
               }
@@ -1856,30 +1836,19 @@
           ]
         },
         {
-          "id": "att-001a",
+          "id": "att-001b",
           "name": "HAL",
           "request": {
             "method": "GET",
             "header": [],
             "url": {
-              "raw": "{{w_next}}",
+              "raw": "{{w_hal}}",
               "host": [
-                "{{w_next}}"
+                "{{w_hal}}"
               ]
             }
           },
           "event": [
-            {
-              "listen": "prerequest",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "if (!pm.environment.get('walk_active')) { pm.environment.set('walk_active', '1'); pm.environment.set('walk_count', 0); pm.environment.set('walk_ids', '');",
-                  "pm.environment.set('w_next', pm.environment.get('baseUrl') + '/v1/p/hal/products?page=1&size=50');",
-                  "}"
-                ]
-              }
-            },
             {
               "listen": "test",
               "script": {
@@ -1889,12 +1858,12 @@
                   "const body = pm.response.json();",
                   "const total = 'totalProducts'; const items = body._embedded.products;",
                   "const more = !!body._links.next;",
-                  "if (more) pm.environment.set('w_next', body._links.next.href);",
+                  "if (more) pm.environment.set('w_hal', body._links.next.href);",
                   "const ids = (pm.environment.get('walk_ids') || '').split(',').filter(Boolean).concat(items.map(x => String(x.id)));",
                   "pm.environment.set('walk_ids', ids.join(','));",
                   "if (more) { postman.setNextRequest(pm.info.requestName); } else {",
                   "  pm.test('walked every item exactly once', () => { pm.expect(new Set(ids).size).to.eql(ids.length); pm.expect(ids.length).to.eql(Number(pm.environment.get(total))); });",
-                  "  ['walk_active', 'walk_count', 'walk_ids', 'w_offset', 'w_page', 'w_cursor', 'w_after', 'w_next', 'w_token'].forEach(k => pm.environment.unset(k));",
+                  "  pm.environment.set('walk_ids', '');",
                   "}"
                 ]
               }
@@ -1902,7 +1871,7 @@
           ]
         },
         {
-          "id": "att-001b",
+          "id": "att-001c",
           "name": "token (nextPageToken)",
           "request": {
             "method": "GET",
@@ -1932,17 +1901,6 @@
           },
           "event": [
             {
-              "listen": "prerequest",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "if (!pm.environment.get('walk_active')) { pm.environment.set('walk_active', '1'); pm.environment.set('walk_count', 0); pm.environment.set('walk_ids', '');",
-                  "pm.environment.set('w_token', '');",
-                  "}"
-                ]
-              }
-            },
-            {
               "listen": "test",
               "script": {
                 "type": "text/javascript",
@@ -1956,7 +1914,7 @@
                   "pm.environment.set('walk_ids', ids.join(','));",
                   "if (more) { postman.setNextRequest(pm.info.requestName); } else {",
                   "  pm.test('walked every item exactly once', () => { pm.expect(new Set(ids).size).to.eql(ids.length); pm.expect(ids.length).to.eql(Number(pm.environment.get(total))); });",
-                  "  ['walk_active', 'walk_count', 'walk_ids', 'w_offset', 'w_page', 'w_cursor', 'w_after', 'w_next', 'w_token'].forEach(k => pm.environment.unset(k));",
+                  "  pm.environment.set('walk_ids', '');",
                   "}"
                 ]
               }
@@ -1966,11 +1924,11 @@
       ]
     },
     {
-      "id": "att-001l",
+      "id": "att-001m",
       "name": "Chaos forcing headers",
       "item": [
         {
-          "id": "att-001d",
+          "id": "att-001e",
           "name": "X-Force-Error: 503",
           "request": {
             "method": "GET",
@@ -2009,7 +1967,7 @@
           ]
         },
         {
-          "id": "att-001e",
+          "id": "att-001f",
           "name": "X-Force-Error: 429",
           "request": {
             "method": "GET",
@@ -2046,7 +2004,7 @@
           ]
         },
         {
-          "id": "att-001f",
+          "id": "att-001g",
           "name": "X-Force-Status: 202",
           "request": {
             "method": "GET",
@@ -2082,7 +2040,7 @@
           ]
         },
         {
-          "id": "att-001g",
+          "id": "att-001h",
           "name": "X-Force-Latency: 300",
           "request": {
             "method": "GET",
@@ -2118,7 +2076,7 @@
           ]
         },
         {
-          "id": "att-001h",
+          "id": "att-001i",
           "name": "X-Force-Error: malformed-json",
           "request": {
             "method": "GET",
@@ -2154,7 +2112,7 @@
           ]
         },
         {
-          "id": "att-001i",
+          "id": "att-001j",
           "name": "X-Force-Error: wrong-content-type",
           "request": {
             "method": "GET",
@@ -2189,7 +2147,7 @@
           ]
         },
         {
-          "id": "att-001j",
+          "id": "att-001k",
           "name": "X-Force-Error: empty-body",
           "request": {
             "method": "GET",
@@ -2224,7 +2182,7 @@
           ]
         },
         {
-          "id": "att-001k",
+          "id": "att-001l",
           "name": "Unknown chaos type → 400",
           "request": {
             "method": "GET",
@@ -2263,11 +2221,11 @@
       ]
     },
     {
-      "id": "att-0025",
+      "id": "att-0026",
       "name": "Files",
       "item": [
         {
-          "id": "att-001m",
+          "id": "att-001n",
           "name": "List",
           "request": {
             "method": "GET",
@@ -2303,7 +2261,7 @@
           ]
         },
         {
-          "id": "att-001n",
+          "id": "att-001o",
           "name": "Multipart upload",
           "request": {
             "method": "POST",
@@ -2351,7 +2309,7 @@
           ]
         },
         {
-          "id": "att-001o",
+          "id": "att-001p",
           "name": "Download multipart file",
           "request": {
             "method": "GET",
@@ -2384,7 +2342,7 @@
           ]
         },
         {
-          "id": "att-001p",
+          "id": "att-001q",
           "name": "Raw PUT",
           "request": {
             "method": "PUT",
@@ -2426,7 +2384,7 @@
           ]
         },
         {
-          "id": "att-001q",
+          "id": "att-001r",
           "name": "Base64 upload",
           "request": {
             "method": "POST",
@@ -2471,7 +2429,7 @@
           ]
         },
         {
-          "id": "att-001r",
+          "id": "att-001s",
           "name": "Base64 download",
           "request": {
             "method": "GET",
@@ -2503,7 +2461,7 @@
           ]
         },
         {
-          "id": "att-001s",
+          "id": "att-001t",
           "name": "Presign PUT",
           "request": {
             "method": "POST",
@@ -2548,7 +2506,7 @@
           ]
         },
         {
-          "id": "att-001t",
+          "id": "att-001u",
           "name": "Upload to presigned URL",
           "request": {
             "method": "PUT",
@@ -2582,7 +2540,7 @@
           ]
         },
         {
-          "id": "att-001u",
+          "id": "att-001v",
           "name": "Presign GET",
           "request": {
             "method": "POST",
@@ -2627,7 +2585,7 @@
           ]
         },
         {
-          "id": "att-001v",
+          "id": "att-001w",
           "name": "Download from presigned URL",
           "request": {
             "method": "GET",
@@ -2653,7 +2611,7 @@
           ]
         },
         {
-          "id": "att-001w",
+          "id": "att-001x",
           "name": "Range download → 206",
           "request": {
             "method": "GET",
@@ -2691,7 +2649,7 @@
           ]
         },
         {
-          "id": "att-001x",
+          "id": "att-001y",
           "name": "Range not satisfiable → 416",
           "request": {
             "method": "GET",
@@ -2729,7 +2687,7 @@
           ]
         },
         {
-          "id": "att-001y",
+          "id": "att-001z",
           "name": "Chunked download",
           "request": {
             "method": "GET",
@@ -2761,7 +2719,7 @@
           ]
         },
         {
-          "id": "att-001z",
+          "id": "att-0020",
           "name": "tus: create",
           "request": {
             "method": "POST",
@@ -2805,7 +2763,7 @@
           ]
         },
         {
-          "id": "att-0020",
+          "id": "att-0021",
           "name": "tus: patch chunk 1",
           "request": {
             "method": "PATCH",
@@ -2848,7 +2806,7 @@
           ]
         },
         {
-          "id": "att-0021",
+          "id": "att-0022",
           "name": "tus: head",
           "request": {
             "method": "HEAD",
@@ -2879,7 +2837,7 @@
           ]
         },
         {
-          "id": "att-0022",
+          "id": "att-0023",
           "name": "tus: patch chunk 2 (completes)",
           "request": {
             "method": "PATCH",
@@ -2923,7 +2881,7 @@
           ]
         },
         {
-          "id": "att-0023",
+          "id": "att-0024",
           "name": "tus file in the shared pool (range)",
           "request": {
             "method": "GET",
@@ -2960,7 +2918,7 @@
           ]
         },
         {
-          "id": "att-0024",
+          "id": "att-0025",
           "name": "Delete raw file",
           "request": {
             "method": "DELETE",
@@ -2992,11 +2950,11 @@
       ]
     },
     {
-      "id": "att-0028",
+      "id": "att-0029",
       "name": "Headers & inspector",
       "item": [
         {
-          "id": "att-0026",
+          "id": "att-0027",
           "name": "Request id echo",
           "request": {
             "method": "GET",
@@ -3036,7 +2994,7 @@
           ]
         },
         {
-          "id": "att-0027",
+          "id": "att-0028",
           "name": "Inspector catch-all",
           "request": {
             "method": "POST",

@@ -14,7 +14,7 @@ class S3FileStore {
     this.cfg = cfg;
     this.name = 's3';
     this.bucket = cfg.bucket;
-    this.prefix = 'files/';
+    this.prefix = cfg.prefix === undefined || cfg.prefix === null ? 'files/' : String(cfg.prefix);
   }
 
   async init() {

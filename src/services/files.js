@@ -28,7 +28,7 @@ async function createStore(settings) {
     ? new S3FileStore({
       bucket: settings.get('s3Bucket'), region: settings.get('s3Region'), endpoint: settings.get('s3Endpoint'),
       accessKeyId: settings.get('s3AccessKeyId'), secretAccessKey: settings.get('s3SecretAccessKey'),
-      forcePathStyle: settings.get('s3ForcePathStyle'),
+      forcePathStyle: settings.get('s3ForcePathStyle'), prefix: settings.get('s3Prefix'),
     })
     : new LocalFileStore(settings.get('fileDir'));
   await store.init();

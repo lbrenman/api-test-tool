@@ -122,7 +122,7 @@ class ResourceService {
       return {
         employeeNumber: existing?.employeeNumber,
         title: '', level: 'L1', isActive: true, salary: 0, salaryDecimal: '0.00', performanceRating: null,
-        managerId: null, skills: [], certifications: [], address: {}, phoneNumbers: [], hireDate: null,
+        managerId: null, skills: [], certifications: [], address: {}, phoneNumbers: [], hireDate: new Date().toISOString().slice(0, 10),
         metadata: {}, avatarFileId: null,
         ...doc,
       };
@@ -132,7 +132,7 @@ class ResourceService {
       if (doc.priceDecimal !== undefined && doc.price === undefined) doc.price = parseFloat(doc.priceDecimal);
       return {
         description: '', inStock: true, stockQty: 0, weightKg: 0, dimensions: { l: 0, w: 0, h: 0, unit: 'cm' },
-        tags: [], variants: [], rating: null, releaseDate: null, discontinuedAt: null, imageFileIds: [],
+        tags: [], variants: [], rating: null, releaseDate: new Date().toISOString().slice(0, 10), discontinuedAt: null, imageFileIds: [],
         ...doc,
       };
     }

@@ -40,8 +40,7 @@ const status = (code) => `pm.test('status ${code}', () => pm.response.to.have.st
 const problem = (code) => [status(code), "pm.test('problem+json', () => pm.expect(pm.response.headers.get('Content-Type')).to.include('application/problem+json'));", `pm.test('problem status field', () => pm.expect(pm.response.json().status).to.eql(${code}));`];
 
 // ---------------------------------------------------------------- collection-level scripts
-const collectionPre = [
-  "// Applies the auth mode in {{authMode}} to /v1 requests. Requests with header X-Skip-Auth: 1 go out unauthenticated.",
+const collectionPreBody = [
   "const sdk = require('postman-collection');",
   "const CryptoJS = require('crypto-js');",
   "const mode = pm.environment.get('authMode') || pm.collectionVariables.get('authMode') || 'none';",
@@ -89,6 +88,13 @@ const collectionPre = [
   "  set('Authorization', 'HMAC ' + pm.environment.get('hmacKeyId') + ':' + sig);",
   "  set('X-Timestamp', ts);",
   "}",
+];
+// The sandbox does not allow top-level return, so the body runs inside a function.
+const collectionPre = [
+  '// Applies the auth mode in {{authMode}} to /v1 requests. Requests with header X-Skip-Auth: 1 go out unauthenticated.',
+  '(function applyAuth() {',
+  ...collectionPreBody.map((l) => `  ${l}`),
+  '})();',
 ];
 
 const collectionTest = [
@@ -158,9 +164,10 @@ const query = folder('Query: fields / filter / sort', [
 ]);
 
 // Pagination walkers: each request loops on itself with setNextRequest until the last page.
-function walker(name, raw, { init, step }) {
+// Walker variables are initialised by the "Reset walkers" request (not in request pre-scripts), because the
+// collection-level auth/HMAC script runs first and must already see the final URL.
+function walker(name, raw, { step }) {
   return req(name, 'GET', raw, {
-    pre: ["if (!pm.environment.get('walk_active')) { pm.environment.set('walk_active', '1'); pm.environment.set('walk_count', 0); pm.environment.set('walk_ids', '');", ...init, '}'],
     tests: [
       status(200),
       'const body = pm.response.json();',
@@ -169,19 +176,29 @@ function walker(name, raw, { init, step }) {
       "pm.environment.set('walk_ids', ids.join(','));",
       'if (more) { postman.setNextRequest(pm.info.requestName); } else {',
       "  pm.test('walked every item exactly once', () => { pm.expect(new Set(ids).size).to.eql(ids.length); pm.expect(ids.length).to.eql(Number(pm.environment.get(total))); });",
-      "  ['walk_active', 'walk_count', 'walk_ids', 'w_offset', 'w_page', 'w_cursor', 'w_after', 'w_next', 'w_token'].forEach(k => pm.environment.unset(k));",
+      "  pm.environment.set('walk_ids', '');",
       '}',
     ],
   });
 }
 const pagination = folder('Pagination (follow to the end)', [
-  walker('offset', '/v1/p/offset/employees?offset={{w_offset}}&limit=40', { init: ["pm.environment.set('w_offset', 0);"], step: ["const total = 'totalEmployees'; const items = body.data;", "const more = body.meta.offset + body.meta.limit < body.meta.total;", "pm.environment.set('w_offset', body.meta.offset + body.meta.limit);"] }),
-  walker('page', '/v1/p/page/products?page={{w_page}}&size=50', { init: ["pm.environment.set('w_page', 1);"], step: ["const total = 'totalProducts'; const items = body.data;", "const more = body.meta.page < body.meta.totalPages;", "pm.environment.set('w_page', body.meta.page + 1);"] }),
-  walker('cursor', '/v1/p/cursor/employees?limit=40&cursor={{w_cursor}}', { init: ["pm.environment.set('w_cursor', '');"], step: ["const total = 'totalEmployees'; const items = body.data;", 'const more = !!body.nextCursor;', "pm.environment.set('w_cursor', body.nextCursor || '');"] }),
-  walker('keyset', '/v1/p/keyset/products?after_id={{w_after}}&limit=60', { init: ["pm.environment.set('w_after', 0);"], step: ["const total = 'totalProducts'; const items = body.data;", 'const more = body.hasMore;', "pm.environment.set('w_after', body.lastId);"] }),
-  walker('link (RFC 8288)', '{{w_next}}', { init: ["pm.environment.set('w_next', pm.environment.get('baseUrl') + '/v1/p/link/employees?page=1&per_page=40');"], step: ["const total = 'totalEmployees'; const items = body;", "pm.test('X-Total-Count', () => pm.expect(Number(pm.response.headers.get('X-Total-Count'))).to.eql(Number(pm.environment.get('totalEmployees'))));", "const m = /<([^>]+)>;\\s*rel=\"next\"/.exec(pm.response.headers.get('Link') || '');", 'const more = !!m;', "if (m) pm.environment.set('w_next', m[1]);"] }),
-  walker('HAL', '{{w_next}}', { init: ["pm.environment.set('w_next', pm.environment.get('baseUrl') + '/v1/p/hal/products?page=1&size=50');"], step: ["const total = 'totalProducts'; const items = body._embedded.products;", 'const more = !!body._links.next;', "if (more) pm.environment.set('w_next', body._links.next.href);"] }),
-  walker('token (nextPageToken)', '/v1/p/token/employees?pageSize=40&pageToken={{w_token}}', { init: ["pm.environment.set('w_token', '');"], step: ["const total = 'totalEmployees'; const items = body.items;", 'const more = body.nextPageToken !== null;', "pm.environment.set('w_token', body.nextPageToken || '');"] }),
+  req('Reset walkers', 'GET', '/health', {
+    tests: [
+      status(200),
+      "const b = pm.environment.get('baseUrl');",
+      "pm.environment.set('totalEmployees', pm.response.json().data.employees); pm.environment.set('totalProducts', pm.response.json().data.products);",
+      "pm.environment.set('walk_ids', ''); pm.environment.set('w_offset', 0); pm.environment.set('w_page', 1); pm.environment.set('w_cursor', '');",
+      "pm.environment.set('w_after', 0); pm.environment.set('w_token', '');",
+      "pm.environment.set('w_link', b + '/v1/p/link/employees?page=1&per_page=40'); pm.environment.set('w_hal', b + '/v1/p/hal/products?page=1&size=50');",
+    ],
+  }),
+  walker('offset', '/v1/p/offset/employees?offset={{w_offset}}&limit=40', { step: ["const total = 'totalEmployees'; const items = body.data;", "const more = body.meta.offset + body.meta.limit < body.meta.total;", "pm.environment.set('w_offset', body.meta.offset + body.meta.limit);"] }),
+  walker('page', '/v1/p/page/products?page={{w_page}}&size=50', { step: ["const total = 'totalProducts'; const items = body.data;", "const more = body.meta.page < body.meta.totalPages;", "pm.environment.set('w_page', body.meta.page + 1);"] }),
+  walker('cursor', '/v1/p/cursor/employees?limit=40&cursor={{w_cursor}}', { step: ["const total = 'totalEmployees'; const items = body.data;", 'const more = !!body.nextCursor;', "pm.environment.set('w_cursor', body.nextCursor || '');"] }),
+  walker('keyset', '/v1/p/keyset/products?after_id={{w_after}}&limit=60', { step: ["const total = 'totalProducts'; const items = body.data;", 'const more = body.hasMore;', "pm.environment.set('w_after', body.lastId);"] }),
+  walker('link (RFC 8288)', '{{w_link}}', { step: ["const total = 'totalEmployees'; const items = body;", "pm.test('X-Total-Count', () => pm.expect(Number(pm.response.headers.get('X-Total-Count'))).to.eql(Number(pm.environment.get('totalEmployees'))));", "const m = /<([^>]+)>;\\s*rel=\"next\"/.exec(pm.response.headers.get('Link') || '');", 'const more = !!m;', "if (m) pm.environment.set('w_link', m[1]);"] }),
+  walker('HAL', '{{w_hal}}', { step: ["const total = 'totalProducts'; const items = body._embedded.products;", 'const more = !!body._links.next;', "if (more) pm.environment.set('w_hal', body._links.next.href);"] }),
+  walker('token (nextPageToken)', '/v1/p/token/employees?pageSize=40&pageToken={{w_token}}', { step: ["const total = 'totalEmployees'; const items = body.items;", 'const more = body.nextPageToken !== null;', "pm.environment.set('w_token', body.nextPageToken || '');"] }),
 ]);
 
 const chaos = folder('Chaos forcing headers', [

@@ -25,6 +25,7 @@ const DEFS = [
   { key: 's3AccessKeyId', env: 'S3_ACCESS_KEY_ID', def: '', type: 'string', section: 'storage', restart: true, secret: true },
   { key: 's3SecretAccessKey', env: 'S3_SECRET_ACCESS_KEY', def: '', type: 'string', section: 'storage', restart: true, secret: true },
   { key: 's3ForcePathStyle', env: 'S3_FORCE_PATH_STYLE', def: false, type: 'bool', section: 'storage', restart: true },
+  { key: 's3Prefix', env: 'S3_PREFIX', def: 'files/', type: 'string', section: 'storage', restart: true, desc: 'Object key prefix (lets several instances share a bucket)' },
   { key: 'maxFileSizeMb', env: 'MAX_FILE_SIZE_MB', def: 100, type: 'int', section: 'storage', min: 1 },
 
   // ---- seed ----

@@ -107,6 +107,7 @@ Settings marked **restart** can only be set through the environment.
 | `FILE_STORE` | `local` | restart. `local` or `s3` |
 | `FILE_DIR` | `./data/files` | restart |
 | `S3_BUCKET`, `S3_REGION`, `S3_ENDPOINT`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`, `S3_FORCE_PATH_STYLE` | — | restart. Any S3-compatible service (AWS, R2, Tigris, MinIO) |
+| `S3_PREFIX` | `files/` | restart. Object key prefix, so several instances can share a bucket |
 | `MAX_FILE_SIZE_MB` | `100` | Enforced on every upload path (413 `problem+json`) |
 | `SEED_ON_START` | `if-empty` | `always`, `if-empty`, `never` |
 | `SEED_EMPLOYEES` / `SEED_PRODUCTS` | `250` / `500` | |
