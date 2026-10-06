@@ -111,3 +111,21 @@ jobs:
             grep -n -A 14 "^not ok\|^    not ok" test-output.txt | head -c 20000 | python3 -c "import sys; print('::error title=failing tests::' + sys.stdin.read().replace('%','%25').replace('\r','').replace('\n','%0A'))"
           fi
           exit $status
+
+  docker:
+    name: docker build + smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t api-test-tool .
+      - name: Run container and smoke test
+        run: |
+          docker run -d --name att -p 3000:3000 -v att-data:/data -e ADMIN_PASSWORD=ci-secret api-test-tool
+          for i in $(seq 1 60); do curl -fsS http://127.0.0.1:3000/ready && break; sleep 1; done
+          curl -fsS http://127.0.0.1:3000/health | grep '"status":"ok"'
+          curl -fsS "http://127.0.0.1:3000/v1/p/cursor/employees?limit=2" | grep nextCursor
+          curl -fsS -o /dev/null -r 0-99 -w '%{http_code}' http://127.0.0.1:3000/v1/files/sample-large-bin/download | grep 206
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:3000/admin/api/overview)" = "401"
+          docker restart att && sleep 5
+          for i in $(seq 1 30); do curl -fsS http://127.0.0.1:3000/ready && break; sleep 1; done
+          curl -fsS http://127.0.0.1:3000/health | grep '"employees":250'
