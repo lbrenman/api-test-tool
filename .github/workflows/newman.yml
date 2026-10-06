@@ -93,4 +93,13 @@ jobs:
           AWS_ACCESS_KEY_ID=minioadmin AWS_SECRET_ACCESS_KEY=minioadmin aws --endpoint-url http://127.0.0.1:9000 --region us-east-1 s3 mb s3://att-test
       - name: Install dependencies
         run: if [ -f package-lock.json ]; then npm ci; else npm install; fi
-      - run: npm test
+      - name: npm test
+        shell: bash
+        run: |
+          npm test 2>&1 | tee test-output.txt
+          status=${PIPESTATUS[0]}
+          if [ "$status" != "0" ]; then
+            # Surface failures as annotations (readable without downloading logs)
+            grep -n -A 14 "^not ok\|^    not ok" test-output.txt | head -c 20000 | python3 -c "import sys; print('::error title=failing tests::' + sys.stdin.read().replace('%','%25').replace('\r','').replace('\n','%0A'))"
+          fi
+          exit $status
