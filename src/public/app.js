@@ -105,6 +105,116 @@
     return el;
   }
 
+  // ---------------------------------------------------------------- component guides (tooltips)
+  // Each main component gets a "?" button. Hover, focus or tap it to see the steps to use the component
+  // and curl commands built from the resolved base URL and the auth mode that is active right now.
+  // The guides only read the configuration (env or dashboard override); they never change it.
+  let CURL = null;
+  let PASSWORD_REQUIRED = false;
+
+  async function loadCurlCtx() {
+    const [a] = await Promise.all([api('GET', '/auth'), SETTINGS ? Promise.resolve() : loadSettings()]);
+    const base = a.oauth.tokenUrl.replace(/\/oauth\/token$/, '');
+    const client = a.clients.find((c) => c.secret) || a.clients[0];
+    CURL = window.ATT_GUIDES.makeCurl({
+      base,
+      mode: a.mode,
+      apiKey: a.apiKey,
+      basic: a.basic,
+      bearer: a.bearer,
+      hmac: { keyId: a.hmac.keyId, secret: a.hmac.secret },
+      tokenUrl: a.oauth.tokenUrl,
+      client: client ? { clientId: client.clientId, secret: client.secret || '' } : null,
+      required: (sval('requiredHeaders') || []).map((r) => ({ name: r.name, value: r.value })),
+      adminPasswordRequired: PASSWORD_REQUIRED,
+    });
+    return CURL;
+  }
+
+  const inlineCode = (text) => String(text).split('`').map((part, i) => (i % 2 ? h('code', null, part) : part));
+
+  let openTip = null;
+  function closeTip() {
+    if (!openTip) return;
+    openTip.pop.remove();
+    openTip.btn.setAttribute('aria-expanded', 'false');
+    openTip.btn.classList.remove('open');
+    openTip = null;
+  }
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && openTip) { const b = openTip.btn; closeTip(); b.focus(); } });
+  document.addEventListener('pointerdown', (e) => {
+    if (openTip && !openTip.pop.contains(e.target) && !openTip.btn.contains(e.target)) closeTip();
+  });
+  window.addEventListener('resize', () => openTip?.place());
+  document.addEventListener('scroll', () => openTip?.place(), true);
+  window.addEventListener('hashchange', closeTip);
+
+  /** A "?" button that opens the guide for one component. extra: values for the examples (spec id, file id…). */
+  function tip(id, extra) {
+    const btn = h('button', { type: 'button', class: 'tip-btn', 'aria-label': 'How to use this', 'aria-expanded': 'false', 'aria-haspopup': 'dialog' }, '?');
+    let hoverTimer = null;
+    let pinned = false;
+
+    const render = () => {
+      if (!CURL || !window.ATT_GUIDES) return h('div', { class: 'tip-pop', role: 'dialog' }, 'Guide unavailable — reload the page.');
+      const g = window.ATT_GUIDES.build(CURL, typeof extra === 'function' ? extra() : extra || {})[id];
+      if (!g) return h('div', { class: 'tip-pop', role: 'dialog' }, 'No guide for this component.');
+      return h('div', { class: 'tip-pop', role: 'dialog', 'aria-label': `How to use ${g.title}` },
+        h('div', { class: 'row between tip-head' }, h('b', null, g.title), h('button', { class: 'small', type: 'button', 'aria-label': 'Close', onclick: () => { closeTip(); btn.focus(); } }, '✕')),
+        h('p', { class: 'tip-purpose' }, inlineCode(g.purpose)),
+        h('div', { class: 'tip-label' }, 'Steps'),
+        h('ol', { class: 'tip-steps' }, g.steps.map((st) => h('li', null, inlineCode(st)))),
+        g.curls?.length ? h('div', { class: 'tip-label' }, 'Try it with curl') : null,
+        (g.curls || []).map(([label, cmd]) => h('div', { class: 'tip-curl' },
+          h('div', { class: 'row between' }, h('span', { class: 'small' }, label), h('button', { class: 'small', type: 'button', onclick: () => copy(cmd) }, 'Copy')),
+          h('pre', null, cmd))),
+        h('div', { class: 'tip-foot small muted' }, 'Auth in these examples: ', h('b', null, CURL.mode), ` — ${CURL.authLabel}. It follows AUTH_MODE or the override on the `, h('a', { href: '#/auth' }, 'Auth'), ' page.'));
+    };
+
+    const open = () => {
+      if (openTip?.btn === btn) return;
+      closeTip();
+      const pop = render();
+      document.body.appendChild(pop);
+      const place = () => {
+        const r = btn.getBoundingClientRect();
+        const vw = document.documentElement.clientWidth;
+        const vh = window.innerHeight;
+        const width = Math.min(560, vw - 24);
+        pop.style.width = `${width}px`;
+        pop.style.left = `${Math.max(12, Math.min(r.left, vw - width - 12))}px`;
+        const below = vh - r.bottom - 18;
+        const above = r.top - 18;
+        if (below >= 260 || below >= above) {
+          pop.style.top = `${r.bottom + 6}px`; pop.style.bottom = ''; pop.style.maxHeight = `${Math.max(160, below)}px`;
+        } else {
+          pop.style.top = ''; pop.style.bottom = `${vh - r.top + 6}px`; pop.style.maxHeight = `${Math.max(160, above)}px`;
+        }
+      };
+      place();
+      openTip = { btn, pop, place };
+      btn.setAttribute('aria-expanded', 'true');
+      btn.classList.add('open');
+      pop.addEventListener('mouseenter', () => clearTimeout(hoverTimer));
+      pop.addEventListener('mouseleave', () => { if (!pinned) hoverTimer = setTimeout(() => { if (openTip?.btn === btn) closeTip(); }, 250); });
+    };
+
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      e.preventDefault(); // inside <summary> this would toggle the <details>
+      if (openTip?.btn === btn && pinned) { pinned = false; closeTip(); return; }
+      pinned = true;
+      open();
+    });
+    btn.addEventListener('mouseenter', () => { clearTimeout(hoverTimer); if (!openTip || openTip.btn !== btn) { pinned = false; hoverTimer = setTimeout(open, 200); } });
+    btn.addEventListener('mouseleave', () => { clearTimeout(hoverTimer); if (!pinned) hoverTimer = setTimeout(() => { if (openTip?.btn === btn) closeTip(); }, 250); });
+    btn.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); btn.click(); } });
+    return btn;
+  }
+
+  /** A card heading with its guide button. */
+  const titled = (text, id, extra) => h('h2', { class: 'with-tip' }, text, tip(id, extra));
+
   // ---------------------------------------------------------------- theme
   function setTheme(t) {
     if (t) document.documentElement.dataset.theme = t; else delete document.documentElement.dataset.theme;
@@ -127,7 +237,7 @@
     auth: { purpose: 'Choose how /v1 calls must authenticate (none, API key, Basic, Bearer, JWT, OAuth2, HMAC), see the credentials, manage OAuth clients and get test tokens.' },
     chaos: { purpose: 'Make the mock API misbehave on purpose: random errors, latency, timeouts, broken JSON and rate limits, globally or per route, so you can test client error handling.' },
     headers: { purpose: 'Headers added to every response, and headers every /v1 request must carry (missing ones return 400).' },
-    openapi: { purpose: 'The OpenAPI 3.1 description of the mock API, regenerated live from the current settings. Import it into Fusion, Postman or any client.' },
+    openapi: { purpose: 'The OpenAPI 3.1 description of the mock API, regenerated live from the current settings. Import it into your API platform, Postman or any client.' },
     tester: { purpose: 'Test an API you built: load its OpenAPI spec, call your implementation, and check every response against the spec.' },
     help: { purpose: 'What this tool does and how to use each page.' },
   };
@@ -170,6 +280,8 @@
     clear(mainEl);
     const fn = VIEWS[page] || VIEWS.overview;
     try {
+      SETTINGS = null;
+      await loadCurlCtx().catch((e) => { if (e.status === 401) throw e; });
       cleanup = (await fn(mainEl, parts.slice(1))) || null;
     } catch (e) {
       if (e.status !== 401) mainEl.append(h('div', { class: 'card' }, h('h2', null, 'Something went wrong'), h('pre', null, e.message)));
@@ -271,17 +383,19 @@
       h('div', { class: 'card stat' }, h('span', { class: 'muted' }, 'Chaos'), h('b', null, `${o.chaos.errorRate}%`), h('span', { class: 'small muted' }, `${o.chaos.errorTypes} · ${o.chaos.latency.join('-')} ms`)),
       h('div', { class: 'card stat' }, h('span', { class: 'muted' }, 'Health'), h('b', { style: { color: health?.status === 'ok' ? 'var(--ok)' : 'var(--err)' } }, health?.status || 'unknown'), h('span', { class: 'small muted' }, `db ${o.storage.db} · files ${o.storage.files}`))));
     el.append(h('div', { class: 'grid cols-2' },
-      h('div', { class: 'card' }, h('h2', null, 'Endpoints'),
+      h('div', { class: 'card' }, titled('Endpoints', 'overview.endpoints'),
         h('table', null, h('tbody', null, Object.entries(o.urls).map(([k, v]) => h('tr', null, h('th', null, k), h('td', null, h('code', null, v)), h('td', null, h('button', { class: 'small', onclick: () => copy(v) }, 'copy'))))))),
-      h('div', { class: 'card' }, h('h2', null, 'Data'),
+      h('div', { class: 'card' }, titled('Data', 'overview.data'),
         kv({ ...o.counts, files: o.files, 'inspector captures': o.inspector, 'last seed': o.lastSeed ? `${fmtDate(o.lastSeed.at)} (seed ${o.lastSeed.seed})` : 'never' }))));
-    el.append(h('div', { class: 'card' }, h('h2', null, 'Quick curls'), o.curls.map((c) => h('div', { class: 'row', style: { marginBottom: '8px', flexWrap: 'nowrap' } }, h('pre', { style: { flex: '1' } }, c), h('button', { class: 'small', onclick: () => copy(c) }, 'copy')))));
+    const quick = CURL ? window.ATT_GUIDES.build(CURL)['overview.curls'].curls.map(([, cmd]) => cmd) : o.curls;
+    el.append(h('div', { class: 'card' }, titled('Quick curls', 'overview.curls'), h('div', { class: 'small muted', style: { marginBottom: '8px' } }, `Built for the active auth mode (${o.authMode}) and any required headers.`), quick.map((c) => h('div', { class: 'row', style: { marginBottom: '8px', flexWrap: 'nowrap' } }, h('pre', { style: { flex: '1' } }, c), h('button', { class: 'small', onclick: () => copy(c) }, 'copy')))));
   };
 
   VIEWS.settings = async (el) => {
     await loadSettings();
     const data = await api('GET', '/settings');
     el.append(header('Settings', 'Env sets defaults; dashboard changes override them and persist in the database.',
+      tip('settings'),
       h('button', { class: 'danger', onclick: guard(async () => { if (!confirm('Reset ALL dashboard overrides to env defaults?')) return; await api('POST', '/settings/reset', {}); toast('All overrides cleared', 'ok'); route(); }) }, 'Reset all to env defaults')));
     for (const section of data.sections) {
       const keys = SETTINGS.filter((s) => s.section === section).map((s) => s.key);
@@ -306,7 +420,7 @@
     el.append(header('Data', 'Deterministic Faker data with relational integrity.'));
     el.append(h('div', { class: 'grid cols-4' }, Object.entries(counts).map(([k, v]) => h('div', { class: 'card stat' }, h('span', { class: 'muted' }, k), h('b', null, v)))));
     el.append(h('div', { class: 'grid cols-2' },
-      h('div', { class: 'card stack' }, h('h2', null, 'Reset & re-seed'),
+      h('div', { class: 'card stack' }, titled('Reset & re-seed', 'data.seed'),
         h('div', { class: 'grid cols-3' }, field('Employees', emp), field('Products', prod), field('Random seed', seed)),
         h('label', { class: 'check' }, files, 'Regenerate sample files'),
         h('div', { class: 'row' },
@@ -319,7 +433,7 @@
             } finally { e.target.disabled = false; }
           }) }, 'Reset & re-seed'),
           h('button', { class: 'danger', onclick: guard(async () => { if (!confirm('Delete all employees, products, departments and categories?')) return; await api('POST', '/data/clear'); toast('Cleared', 'ok'); route(); }) }, 'Clear all data'))),
-      h('div', { class: 'card stack' }, h('h2', null, 'Preview'), field('Resource', which), preview)));
+      h('div', { class: 'card stack' }, titled('Preview & API access', 'data.preview'), field('Resource', which), preview)));
     which.dispatchEvent(new Event('change'));
   };
 
@@ -400,7 +514,7 @@
           h('h3', null, 'Headers'), kv(e.response.headers), showBody(e.response.body, 'Body'),
           e.forward ? h('div', null, h('h3', null, 'Forwarded'), codeBlock(pretty({ url: e.forward.url, status: e.forward.status, error: e.forward.error, durationMs: e.forward.durationMs }))) : null) : h('div', { class: 'muted' }, 'Pending…')),
         curl: () => h('div', { class: 'stack' }, codeBlock(e.curl), h('button', { onclick: () => copy(e.curl) }, 'Copy curl')),
-        replay: () => h('div', { class: 'stack' }, field('Replay to', replayTarget, 'Leave blank to replay against this server (same path). A full URL with a path replaces the path.'),
+        replay: () => h('div', { class: 'stack' }, h('div', { class: 'row' }, tip('inspector.replay', { captureId: e.id }), h('span', { class: 'small muted' }, 'How to replay')), field('Replay to', replayTarget, 'Leave blank to replay against this server (same path). A full URL with a path replaces the path.'),
           h('button', { class: 'primary', onclick: guard(async () => {
             clear(replayOut).append(h('div', { class: 'muted' }, 'Sending…'));
             const r = await api('POST', `/inspector/${encodeURIComponent(e.id)}/replay`, { targetUrl: replayTarget.value || undefined });
@@ -441,13 +555,13 @@
       h('label', { class: 'check', title: 'INSPECTOR_LOG_ALL' }, logAll, 'Record /v1 & /oauth'),
       h('a', { class: 'btn', href: '/admin/api/inspector/export' }, 'Export JSON'),
       h('button', { class: 'danger', onclick: guard(async () => { if (!confirm('Clear all captured requests?')) return; await api('DELETE', '/inspector'); }) }, 'Clear')));
-    el.append(h('div', { class: 'card' }, h('div', { class: 'row', style: { flexWrap: 'nowrap' } }, filterSource, filterMethod, filterText),
+    el.append(h('div', { class: 'card' }, h('div', { class: 'row', style: { flexWrap: 'nowrap' } }, tip('inspector.capture'), filterSource, filterMethod, filterText),
       h('details', { style: { marginTop: '10px' } }, h('summary', null, 'Default response, rules & forwarding'),
         h('div', { class: 'grid cols-2', style: { marginTop: '10px' } },
-          h('div', null, h('h3', null, 'Default response'), settingsForm(['inspectorResponseStatus', 'inspectorResponseContentType', 'inspectorResponseBody', 'inspectorResponseHeaders', 'inspectorResponseDelayMs'])),
-          h('div', null, h('h3', null, 'Path rules (first match wins)'), settingsForm(['inspectorRules']),
+          h('div', null, h('h3', { class: 'with-tip' }, 'Default response', tip('inspector.rules')), settingsForm(['inspectorResponseStatus', 'inspectorResponseContentType', 'inspectorResponseBody', 'inspectorResponseHeaders', 'inspectorResponseDelayMs'])),
+          h('div', null, h('h3', { class: 'with-tip' }, 'Path rules (first match wins)', tip('inspector.rules')), settingsForm(['inspectorRules']),
             h('div', { class: 'small muted' }, 'Rule: {"method":"POST","path":"/hooks/{name}","status":202,"contentType":"application/json","body":{"ok":true,"hook":"{{params.name}}"},"headers":[{"name":"X-Demo","value":"{{uuid}}"}],"delayMs":0}. Paths support *, ** and {param}; templates: {{uuid}} {{now}} {{id}} {{path}} {{params.x}} {{query.x}} {{body.x}} {{baseUrl}}.'),
-            h('h3', null, 'Auto-forward'), h('label', { class: 'check' }, fwdEnabled, 'Forward every capture'), field('Forward URL (path is appended)', fwdUrl),
+            h('h3', { class: 'with-tip' }, 'Auto-forward', tip('inspector.forward')), h('label', { class: 'check' }, fwdEnabled, 'Forward every capture'), field('Forward URL (path is appended)', fwdUrl),
             h('button', { onclick: guard(async () => { await api('PUT', '/settings', { inspectorForwardEnabled: fwdEnabled.checked, inspectorForwardUrl: fwdUrl.value }); toast('Forwarding saved', 'ok'); }) }, 'Save forwarding'))))));
     el.append(h('div', { class: 'split' }, h('div', { class: 'card', style: { padding: '0' } }, listEl), detailEl));
     renderList();
@@ -472,14 +586,15 @@
     }
     el.append(header('Files', 'One shared pool for multipart, raw, base64, tus, presigned, range and chunked transfers.',
       h('button', { onclick: guard(async () => { const r = await api('POST', '/files/regenerate'); toast(`Regenerated ${r.generated} sample files`, 'ok'); route(); }) }, 'Regenerate samples')));
-    el.append(h('div', { class: 'card row' }, input, h('button', { class: 'primary', onclick: guard(async () => {
+    const fileExtra = list[0] ? { fileId: list[0].id, fileName: list[0].name } : {};
+    el.append(h('div', { class: 'card row' }, tip('files.upload', fileExtra), input, h('button', { class: 'primary', onclick: guard(async () => {
       for (const file of input.files) {
         await api('POST', '/files/upload', file, { headers: { 'Content-Type': 'application/octet-stream', 'X-Content-Type': file.type || 'application/octet-stream', 'X-Filename': encodeURIComponent(file.name) } });
       }
       toast(`Uploaded ${input.files.length} file(s)`, 'ok');
       route();
     }) }, 'Upload')));
-    el.append(h('div', { class: 'card table-wrap' }, list.length ? h('table', null, h('thead', null, h('tr', null, ['Name', 'Type', 'Size', 'Source', 'SHA-256', ''].map((x) => h('th', null, x)))), tbody) : h('div', { class: 'empty' }, 'No files yet.')));
+    el.append(h('div', { class: 'card table-wrap' }, titled('File pool', 'files.download', fileExtra), list.length ? h('table', null, h('thead', null, h('tr', null, ['Name', 'Type', 'Size', 'Source', 'SHA-256', ''].map((x) => h('th', null, x)))), tbody) : h('div', { class: 'empty' }, 'No files yet.')));
   };
 
   // ---------------------------------------------------------------- auth
@@ -500,17 +615,17 @@
 
     el.append(header('Auth', `Active mode: ${a.mode}. Applies globally to /v1/*.`));
     el.append(h('div', { class: 'grid cols-2' },
-      h('div', { class: 'card stack' }, h('h2', null, 'Mode & credentials'), settingsForm(['authMode', 'apiKey', 'apiKeyName', 'apiKeyIn', 'basicUser', 'basicPass', 'bearerToken', 'jwtAlg', 'jwtIssuer', 'jwtAudience', 'hmacKeyId', 'hmacSecret', 'hmacMaxSkewSeconds'], { onSaved: route })),
+      h('div', { class: 'card stack' }, titled('Mode & credentials', 'auth.mode'), settingsForm(['authMode', 'apiKey', 'apiKeyName', 'apiKeyIn', 'basicUser', 'basicPass', 'bearerToken', 'jwtAlg', 'jwtIssuer', 'jwtAudience', 'hmacKeyId', 'hmacSecret', 'hmacMaxSkewSeconds'], { onSaved: route })),
       h('div', null,
-        h('div', { class: 'card stack' }, h('h2', null, 'Get a test token'), field('Client', clientSel), field('Scope', scope),
+        h('div', { class: 'card stack' }, titled('Get a test token', 'auth.token'), field('Client', clientSel), field('Scope', scope),
           h('button', { class: 'primary', onclick: guard(async () => {
             const t = await api('POST', '/auth/test-token', { clientId: clientSel.value, scope: scope.value || undefined });
             clear(tokenOut).append(h('div', { class: 'stack' }, h('div', { class: 'row' }, h('b', null, `expires in ${t.expires_in}s`), h('button', { class: 'small', onclick: () => copy(t.access_token) }, 'Copy token'), h('button', { class: 'small', onclick: () => copy(`Authorization: Bearer ${t.access_token}`) }, 'Copy header')),
               codeBlock(t.access_token), codeBlock(pretty(t.decoded))));
           }) }, 'Issue token'), tokenOut,
           h('div', { class: 'small muted' }, 'curl:'), codeBlock(`curl -s -u '${a.clients[0]?.clientId || 'demo-client'}:${a.clients[0]?.secret || 'demo-secret'}' -d grant_type=client_credentials -d scope="read write" '${a.oauth.tokenUrl}'`)),
-        h('div', { class: 'card' }, h('h2', null, 'OAuth server'), kv({ token: a.oauth.tokenUrl, authorize: a.oauth.authorizeUrl, metadata: a.oauth.metadata, jwks: a.jwt.jwks, issuer: a.jwt.issuer, audience: a.jwt.audience, alg: a.jwt.alg, 'demo users': a.oauth.users.join(', ') })))));
-    el.append(h('div', { class: 'card' }, h('h2', null, 'OAuth clients'),
+        h('div', { class: 'card' }, titled('OAuth server', 'auth.server'), kv({ token: a.oauth.tokenUrl, authorize: a.oauth.authorizeUrl, metadata: a.oauth.metadata, jwks: a.jwt.jwks, issuer: a.jwt.issuer, audience: a.jwt.audience, alg: a.jwt.alg, 'demo users': a.oauth.users.join(', ') })))));
+    el.append(h('div', { class: 'card' }, titled('OAuth clients', 'auth.clients'),
       h('div', { class: 'table-wrap' }, h('table', null, h('thead', null, h('tr', null, ['Client id', 'Secret', 'Scopes', 'Redirect URIs', 'Source', ''].map((x) => h('th', null, x)))),
         h('tbody', null, a.clients.map((c) => h('tr', null, h('td', { class: 'mono' }, c.clientId), h('td', { class: 'mono' }, c.secret || '(public)'), h('td', null, c.scopes.join(' ')), h('td', { class: 'small' }, (c.redirectUris || []).join(' ') || 'any'),
           h('td', null, h('span', { class: 'badge' }, c.source)),
@@ -521,7 +636,7 @@
         toast(`Client ${c.clientId} created (secret ${c.secret})`, 'ok');
         route();
       }) }, 'Add client'))));
-    el.append(h('div', { class: 'card stack' }, h('h2', null, 'HMAC signer'),
+    el.append(h('div', { class: 'card stack' }, titled('HMAC signer', 'auth.hmac'),
       h('div', { class: 'small muted' }, 'Canonical string: METHOD \\n PATH+QUERY \\n X-Timestamp \\n hex(SHA-256(body)). Signature: base64(HMAC-SHA256(secret, canonical)).'),
       h('div', { class: 'grid cols-3' }, field('Method', hmacMethod), field('Path + query', hmacPath)), field('Body', hmacBody),
       h('button', { onclick: guard(async () => {
@@ -536,11 +651,11 @@
     await loadSettings();
     el.append(header('Chaos', 'Random error and latency injection for /v1/*, plus deterministic forcing headers.'));
     el.append(h('div', { class: 'grid cols-2' },
-      h('div', { class: 'card' }, h('h2', null, 'Rates & latency'), settingsForm(['errorRate', 'errorTypes', 'latencyMinMs', 'latencyMaxMs', 'chaosTimeoutSeconds', 'chaosSlowDripMs', 'rateLimitRpm'])),
+      h('div', { class: 'card' }, titled('Rates & latency', 'chaos.rates'), settingsForm(['errorRate', 'errorTypes', 'latencyMinMs', 'latencyMaxMs', 'chaosTimeoutSeconds', 'chaosSlowDripMs', 'rateLimitRpm'])),
       h('div', null,
-        h('div', { class: 'card' }, h('h2', null, 'Per-route overrides'), settingsForm(['chaosRouteOverrides']),
+        h('div', { class: 'card' }, titled('Per-route overrides', 'chaos.routes'), settingsForm(['chaosRouteOverrides']),
           h('div', { class: 'small muted' }, 'Example: [{"path":"/v1/products","errorRate":50,"errorTypes":"503,timeout"},{"path":"/v1/files","method":"POST","latencyMinMs":500,"latencyMaxMs":2000}]')),
-        h('div', { class: 'card' }, h('h2', null, 'Forcing headers (always win)'),
+        h('div', { class: 'card' }, titled('Forcing headers (always win)', 'chaos.force'),
           h('table', null, h('tbody', null,
             [['X-Force-Error: 503', 'problem+json with that status (any 4xx/5xx)'],
               ['X-Force-Error: timeout | reset', 'hang until the client gives up / drop the socket'],
@@ -555,14 +670,15 @@
     await loadSettings();
     el.append(header('Headers', 'Custom response headers on every response; required request headers on /v1/*.'));
     el.append(h('div', { class: 'grid cols-2' },
-      h('div', { class: 'card' }, h('h2', null, 'Response headers'), settingsForm(['responseHeaders']), h('div', { class: 'small muted' }, 'JSON list: [{"name":"X-Env","value":"demo"}]. Env format: Name:Value;Name2:Value2')),
-      h('div', { class: 'card' }, h('h2', null, 'Required request headers'), settingsForm(['requiredHeaders']), h('div', { class: 'small muted' }, 'JSON list: [{"name":"X-Tenant"},{"name":"X-Env","value":"demo"}]. Missing or wrong values return 400 problem+json. Env format: X-Tenant,X-Env=demo'))));
+      h('div', { class: 'card' }, titled('Response headers', 'headers.response'), settingsForm(['responseHeaders']), h('div', { class: 'small muted' }, 'JSON list: [{"name":"X-Env","value":"demo"}]. Env format: Name:Value;Name2:Value2')),
+      h('div', { class: 'card' }, titled('Required request headers', 'headers.required'), settingsForm(['requiredHeaders']), h('div', { class: 'small muted' }, 'JSON list: [{"name":"X-Tenant"},{"name":"X-Env","value":"demo"}]. Missing or wrong values return 400 problem+json. Env format: X-Tenant,X-Env=demo'))));
   };
 
   // ---------------------------------------------------------------- openapi
   VIEWS.openapi = async (el) => {
     const text = await fetch('/openapi.yaml').then((r) => r.text());
     el.append(header('OpenAPI', 'Generated live from the current settings (auth, date format, headers, chaos).',
+      tip('openapi'),
       h('a', { class: 'btn', href: '/openapi.json', download: 'api-test-tool.openapi.json' }, 'Download JSON'),
       h('a', { class: 'btn', href: '/openapi.yaml', download: 'api-test-tool.openapi.yaml' }, 'Download YAML'),
       h('a', { class: 'btn primary', href: '/docs', target: '_blank', rel: 'noopener' }, 'Swagger UI ↗')));
@@ -584,16 +700,16 @@
     };
     el.append(header('API Tester', 'Test an implementation against its OpenAPI spec: try operations, validate responses, run the whole contract.'));
     el.append(h('div', { class: 'grid cols-2' },
-      h('div', { class: 'card stack' }, h('h2', null, 'Add a spec'), field('Name', name),
+      h('div', { class: 'card stack' }, titled('Add a spec', 'tester.add'), field('Name', name),
         h('div', { class: 'row' }, file, h('button', { onclick: guard(async () => { if (!file.files[0]) return toast('Choose a file', 'err'); await create({ name: name.value || file.files[0].name.replace(/\.(ya?ml|json)$/i, ''), content: await file.files[0].text() }); }) }, 'Upload')),
         h('div', { class: 'row', style: { flexWrap: 'nowrap' } }, url, h('button', { onclick: guard(() => create({ name: name.value || undefined, url: url.value })) }, 'Load URL')),
         paste, h('button', { class: 'primary', onclick: guard(() => create({ name: name.value || undefined, content: paste.value })) }, 'Load pasted spec')),
-      h('div', { class: 'card stack' }, h('h2', null, 'Bundled samples'),
+      h('div', { class: 'card stack' }, titled('Bundled samples', 'tester.samples'),
         samples.map((s) => h('div', { class: 'row between' }, h('div', null, h('div', null, s.name), h('div', { class: 'small muted mono' }, s.url)),
           h('div', { class: 'row' },
             h('button', { class: 'small primary', onclick: guard(() => create({ sample: s.id === 'self' ? 'self' : s.file })) }, 'Load'),
             s.file ? h('button', { class: 'small', title: 'Load the same file through the URL loader', onclick: guard(() => create({ name: `${s.name} (via URL)`, url: `${location.origin}${s.url}` })) }, 'Load via URL') : null))))));
-    el.append(h('div', { class: 'card table-wrap' }, h('h2', null, 'Specs'),
+    el.append(h('div', { class: 'card table-wrap' }, titled('Specs', 'tester.specs'),
       specs.length ? h('table', null, h('thead', null, h('tr', null, ['Name', 'Version', 'Ops', 'Target', 'Last run', ''].map((x) => h('th', null, x)))),
         h('tbody', null, specs.map((s) => h('tr', { class: 'clickable', onclick: () => { location.hash = `#/tester/${s.id}`; } },
           h('td', null, h('div', null, s.name), h('div', { class: 'small muted' }, `${s.source?.type || ''}${s.converted ? ' · converted from 2.0' : ''}`)),
@@ -620,7 +736,8 @@
     const pane = h('div');
     const views = {
       response: () => (res ? h('div', { class: 'stack' }, kv(res.headers), res.body === '' ? h('div', { class: 'muted small' }, '(empty body)') : res.body !== null ? codeBlock(pretty(res.body)) : h('div', { class: 'muted' }, `[binary ${fmtBytes(res.size)}]`)) : h('div', { class: 'muted' }, r.error || '')),
-      request: () => (r.request ? h('div', { class: 'stack' }, h('div', null, method(r.request.method), ' ', h('code', null, r.request.url)), kv(r.request.headers), r.request.body ? codeBlock(pretty(r.request.body)) : null) : h('div', { class: 'muted' }, 'Not sent')),
+      request: () => (r.request ? h('div', { class: 'stack' }, h('div', { class: 'row between' }, h('div', null, method(r.request.method), ' ', h('code', null, r.request.url)),
+        h('button', { class: 'small', title: 'The exact request that was sent, with the same headers and credentials', onclick: () => copy(window.ATT_GUIDES.fromSentRequest(r.request)) }, 'Copy as curl')), kv(r.request.headers), r.request.body ? codeBlock(pretty(r.request.body)) : null) : h('div', { class: 'muted' }, 'Not sent')),
       token: () => (r.tokenExchange ? codeBlock(pretty(r.tokenExchange)) : h('div', { class: 'muted' }, 'No token request for this call.')),
     };
     wrap.append(tabs([{ id: 'response', label: 'Response' }, { id: 'request', label: 'Request' }, { id: 'token', label: 'Token exchange' }], (k) => clear(pane).append(views[k]())), pane);
@@ -646,6 +763,7 @@
     el.append(t, body);
 
     async function refresh() { spec = await api('GET', `/tester/specs/${specId}`); }
+    const specExtra = () => ({ specId: spec.id, specName: spec.name, firstOpId: spec.operations[0]?.id });
 
     const draw = guard(async (k) => {
       clear(body);
@@ -709,7 +827,7 @@
       const servers = (spec.doc.servers || []).map((s) => s.url);
       const mockOut = h('div');
       body.append(h('div', { class: 'grid cols-2' },
-        h('div', { class: 'card stack' }, h('h2', null, 'Target'), field('Name', nameIn),
+        h('div', { class: 'card stack' }, titled('Target', 'tester.target', specExtra), field('Name', nameIn),
           field('Base URL override', base, servers.length ? `Spec servers: ${servers.join(', ')}` : 'The spec declares no servers.'),
           h('div', { class: 'row' }, servers.map((s) => h('button', { class: 'small', onclick: () => { base.value = s; } }, `use ${s}`)), h('button', { class: 'small', onclick: () => { base.value = location.origin; } }, 'use this tool')),
           auth,
@@ -724,7 +842,7 @@
             toast('Target saved', 'ok');
           }) }, 'Save target')),
         h('div', null,
-          h('div', { class: 'card stack' }, h('h2', null, 'Mock from spec'),
+          h('div', { class: 'card stack' }, titled('Mock from spec', 'tester.mock', specExtra),
             h('p', { class: 'muted small' }, 'Serve this spec\'s documented 2xx responses (examples first) from this tool under /mock/<name>, then run the contract against it. Useful before an implementation exists — and it shows how the spec\'s own examples fare against its schemas.'),
             h('div', { class: 'row' },
               h('button', { onclick: guard(async () => { const m = await api('POST', `/tester/specs/${spec.id}/mock`, { useAsTarget: true }); clear(mockOut).append(h('div', { class: 'small' }, `${m.count} rules installed; target set to `, h('code', null, m.url))); await refresh(); base.value = spec.target.baseUrl; }) }, 'Install mock & use as target'),
@@ -734,7 +852,7 @@
 
     async function drawLint() {
       const lint = await api('GET', `/tester/specs/${spec.id}/lint`);
-      body.append(h('div', { class: 'card' }, h('div', { class: 'row' }, h('span', { class: 'badge fail' }, `${lint.counts.error} errors`), h('span', { class: 'badge warn' }, `${lint.counts.warning} warnings`), h('span', { class: 'badge info' }, `${lint.counts.info} info`)),
+      body.append(h('div', { class: 'card' }, titled('Spec lint', 'tester.lint', specExtra), h('div', { class: 'row' }, h('span', { class: 'badge fail' }, `${lint.counts.error} errors`), h('span', { class: 'badge warn' }, `${lint.counts.warning} warnings`), h('span', { class: 'badge info' }, `${lint.counts.info} info`)),
         lint.issues.length ? lint.issues.map((i) => h('div', { class: `issue ${i.severity}` }, h('div', { class: 'row' }, h('b', null, i.rule), h('code', { class: 'small muted' }, i.pointer)), h('div', null, i.message), i.fix ? h('div', { class: 'small', style: { marginTop: '4px' } }, h('b', null, 'Fix: '), i.fix) : null))
           : h('div', { class: 'empty' }, 'No issues found.')));
     }
@@ -748,7 +866,8 @@
           method(op.method), h('div', { style: { minWidth: 0 } }, h('div', { class: 'path' }, op.path), h('div', { class: 'small muted' }, op.operationId || op.summary || '')), op.secured ? h('span', { class: 'small muted', title: 'secured' }, '🔒') : h('span'));
         listEl.append(item);
       }
-      body.append(h('div', { class: 'split' }, h('div', { class: 'card', style: { padding: 0 } }, listEl), detail));
+      body.append(h('div', { class: 'card row' }, tip('tester.tryit', () => ({ ...specExtra(), firstOpId: (current || spec.operations[0])?.id })), h('span', { class: 'muted' }, 'Pick an operation, adjust the request, and press Send. Every response is checked against the spec.')),
+        h('div', { class: 'split' }, h('div', { class: 'card', style: { padding: 0 } }, listEl), detail));
       detail.append(h('div', { class: 'card empty' }, 'Pick an operation.'));
 
       const showOp = guard(async (op, exampleName) => {
@@ -818,7 +937,7 @@
           clear(out).append(runView(run));
         } finally { runBtn.disabled = false; }
       }) }, 'Run all');
-      body.append(h('div', { class: 'card stack' }, h('h2', null, 'Contract run'),
+      body.append(h('div', { class: 'card stack' }, titled('Contract run', 'tester.run', specExtra),
         h('div', { class: 'small muted' }, 'Order: collection POSTs (creates) → collection GETs (lists) → item operations → DELETEs. IDs are captured from Location headers and response bodies and fed into later path parameters.'),
         h('div', { class: 'row' }, h('label', { class: 'check' }, negative, 'Negative tests (no auth → 401, missing required field → 400/422, unknown id → 404)'), h('label', { class: 'check' }, lenient, 'Lenient allOf')),
         h('div', { class: 'grid cols-2' }, field('Variables (override captured values)', vars), field('Only these operations (none selected = all)', opsSel)),
@@ -844,7 +963,7 @@
     async function drawHistory() {
       const runs = await api('GET', `/tester/specs/${spec.id}/runs`);
       const out = h('div');
-      body.append(h('div', { class: 'card table-wrap' }, runs.length ? h('table', null, h('thead', null, h('tr', null, ['Started', 'Target', 'Result', 'Options', ''].map((x) => h('th', null, x)))),
+      body.append(h('div', { class: 'card table-wrap' }, titled('Run history', 'tester.history', specExtra), runs.length ? h('table', null, h('thead', null, h('tr', null, ['Started', 'Target', 'Result', 'Options', ''].map((x) => h('th', null, x)))),
         h('tbody', null, runs.map((r) => h('tr', null, h('td', null, fmtDate(r.startedAt)), h('td', { class: 'small mono' }, r.baseUrl),
           h('td', null, h('span', { class: `badge ${r.summary.failed ? 'fail' : 'pass'}` }, `${r.summary.passed}/${r.summary.total} passed`)),
           h('td', { class: 'small' }, `${r.options.negative ? 'negative' : ''} ${r.options.lenientAllOf ? 'lenient' : ''}`),
@@ -878,7 +997,7 @@
       toc.map(([id, label]) => h('a', { class: 'btn small', href: `#/help/${id}` }, label)))));
 
     el.append(section('what', 'What this tool is',
-      h('p', null, 'One server that helps you test an API platform (for example Amplify Fusion) in both directions:'),
+      h('p', null, 'One server that helps you test an API platform or integration in both directions:'),
       h('div', { class: 'grid cols-2' },
         h('div', { class: 'help-box' }, h('h3', null, '1. Outgoing testing — a mock API to call'),
           h('p', null, 'Point an integration at this server and it behaves like a realistic third-party API:'),
@@ -905,7 +1024,7 @@
         h('span', null, 'Pick a pagination style by path, e.g. ', code('/v1/p/cursor/employees'), ' or ', code('/v1/p/link/products'), '. All seven are listed under ', link('#/help/urls', 'URLs and reserved paths'), '.'),
         h('span', null, 'Send webhooks or any unknown call to ', code(`${B}/<any-path>`), ' and watch them arrive on the ', link('#/inspector', 'Inspector'), ' page.'),
         h('span', null, 'Test error handling: add ', code('X-Force-Error: 503'), ' to one request, or set a random error rate on the ', link('#/chaos', 'Chaos'), ' page.'),
-        h('span', null, 'Import the live spec from ', link('#/openapi', 'OpenAPI'), ' (', code(`${B}/openapi.json`), ') into Fusion or Postman to get every endpoint pre-defined.'))));
+        h('span', null, 'Import the live spec from ', link('#/openapi', 'OpenAPI'), ' (', code(`${B}/openapi.json`), ') into your API platform or Postman to get every endpoint pre-defined.'))));
 
     el.append(section('quick-incoming', 'Quick start: incoming testing',
       steps(
@@ -969,6 +1088,7 @@
   async function start() {
     const s = await fetch('/admin/api/session').then((r) => r.json()).catch(() => ({ authenticated: false, passwordRequired: true }));
     if (!s.authenticated) { showLogin(); return; }
+    PASSWORD_REQUIRED = !!s.passwordRequired;
     shell();
     if (!s.passwordRequired) $('#logout-btn').classList.add('hidden');
     window.addEventListener('hashchange', route);

@@ -161,3 +161,27 @@ hr { border: none; border-top: 1px solid var(--border); margin: 14px 0; }
 @keyframes flash { from { box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 55%, transparent); } to { box-shadow: 0 0 0 0 transparent; } }
 @media (prefers-reduced-motion: reduce) { .flash { animation: none; } }
 .welcome { border-left: 4px solid var(--accent); }
+
+/* component guides ("?" tooltips with steps and curl examples) */
+.with-tip { display: flex; align-items: center; gap: 8px; }
+.tip-btn {
+  width: 22px; height: 22px; padding: 0; border-radius: 50%; justify-content: center; flex: none;
+  font-size: 12px; font-weight: 700; line-height: 1; color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); background: var(--panel);
+}
+.tip-btn:hover, .tip-btn.open { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); }
+.tip-pop {
+  position: fixed; z-index: 60; overflow-y: auto; overscroll-behavior: contain;
+  background: var(--panel); color: var(--fg); border: 1px solid var(--border); border-radius: var(--radius);
+  box-shadow: 0 12px 36px rgba(0, 0, 0, .22); padding: 12px 14px; font-size: 13px; text-align: left;
+}
+.tip-pop .tip-head { margin-bottom: 4px; }
+.tip-pop .tip-head b { font-size: 14px; }
+.tip-pop .tip-purpose { margin: 4px 0 10px; color: var(--muted); }
+.tip-pop .tip-label { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 10px 0 4px; }
+.tip-pop .tip-steps { margin: 0; padding-left: 20px; }
+.tip-pop .tip-steps li { margin: 3px 0; }
+.tip-pop .tip-curl { margin: 6px 0 10px; }
+.tip-pop .tip-curl pre { margin-top: 4px; max-height: 220px; white-space: pre; overflow-x: auto; word-break: normal; }
+.tip-pop .tip-foot { border-top: 1px solid var(--border); padding-top: 8px; margin-top: 4px; }
+.tip-pop code { background: var(--code-bg); padding: 0 4px; border-radius: 4px; }

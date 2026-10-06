@@ -3,7 +3,7 @@
 [![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://codespaces.new/lbrenman/api-test-tool)
 [![tests](https://github.com/lbrenman/api-test-tool/actions/workflows/newman.yml/badge.svg)](https://github.com/lbrenman/api-test-tool/actions/workflows/newman.yml)
 
-One deployable app for testing an API platform (for example Amplify Fusion) in both directions:
+One deployable app for testing an API platform or integration in both directions:
 
 1. **Outgoing testing — a realistic mock target.** Your integration calls this tool. It serves seeded employees and products with every JSON type you need to parse, seven pagination styles side by side, error and latency injection, a shared file pool exposed over every common HTTP file protocol, seven auth modes with a built-in OAuth 2.0 server, custom and required headers, and a **webhook.site-style inspector** that captures anything sent to any other path.
 2. **Incoming testing — a contract tester.** Load the OpenAPI spec you implemented (3.0, 3.1 or Swagger 2.0). The tool generates sample requests, calls your implementation through a server-side proxy, validates every response against the spec, and runs the whole contract with ID chaining and negative tests.
@@ -36,7 +36,7 @@ Everything runs in one Node.js process on one port, with a vanilla-JS dashboard 
 
 ### GitHub Codespaces (fastest)
 
-Click the badge above. The devcontainer installs dependencies, starts the server, and makes port 3000 **public** so external systems (Fusion, webhooks, Postman) can reach it. The dashboard URL is printed in the terminal:
+Click the badge above. The devcontainer installs dependencies, starts the server, and makes port 3000 **public** so external systems (your API platform, webhooks, Postman) can reach it. The dashboard URL is printed in the terminal:
 
 ```
 https://<codespace-name>-3000.app.github.dev/dashboard
@@ -84,7 +84,7 @@ Fly.io, Render and Northflank are covered in [Deployment](#deployment).
 | **Inspector** | Catch-all capture with the actual path, live stream (SSE), detected auth (Basic user, decoded JWT, API keys), pretty bodies and multipart parts, copy as curl, replay, auto-forward, configurable responses and path rules. |
 | **Generated OpenAPI** | `/openapi.json` and `/openapi.yaml` (OAS 3.1) are regenerated from the live settings: server URL, date format, auth scheme, required headers, chaos headers, all pagination paths and the file endpoints. Swagger UI is at `/docs`. |
 | **API tester** | Upload, paste or URL load for OAS 3.0, 3.1 and Swagger 2.0. Spec lint, per-operation "try it" with generated samples that honour `pattern`/`format`/`enum`/limits, auth profiles (none, API key, Basic, Bearer, OAuth2 client credentials), response validation, run-all contract mode with ID chaining and negative tests, run history, and JSON and HTML reports. "Mock from spec" serves a spec's examples from this tool. |
-| **Dashboard** | Overview, Settings (with source badges and resets), Data, Inspector, Files, Auth, Chaos, Headers, OpenAPI, API Tester, and About & Help (what each page does, quick starts, reserved paths, handy headers). Every page has a "? Help" link. Responsive, with light and dark themes. |
+| **Dashboard** | Overview, Settings (with source badges and resets), Data, Inspector, Files, Auth, Chaos, Headers, OpenAPI, API Tester, and About & Help (what each page does, quick starts, reserved paths, handy headers). Every page has a "? Help" link, and every main component has a **"?" guide** (hover, focus or tap) with numbered steps for using it in your integration or tests and copy-ready curl commands. The curls use the resolved base URL, the auth mode that is active right now (from `AUTH_MODE` or a dashboard override — the guides never change it), and any required request headers; in `jwt`/`oauth2` mode they fetch a token first, and in `hmac` mode they sign the request with `openssl`. The tester's **Try it → Request** tab adds "Copy as curl" for the exact call it sent. Responsive, with light and dark themes. |
 
 ---
 
@@ -433,7 +433,7 @@ This walkthrough uses the bundled Supplier Order Collaboration spec (`samples/Su
    - warnings for examples that fail their own schemas (the shipment examples, which follow from the issue above);
    - info that `Idempotency-Key` is required on both POSTs (the tester sends a fresh UUID every time).
 3. **Set the target** on the **Target** tab:
-   - a base URL override (your Fusion endpoint, for example);
+   - a base URL override (your implementation's endpoint, for example);
    - an auth profile from the spec's `securitySchemes`: API key (`X-API-Key`), or OAuth2 client credentials with an overridable token URL, client id/secret, scopes and Basic or body client auth. **Test token request** shows the full token exchange. Tokens are cached until they expire.
    - default headers, a timeout, and the **Lenient allOf** toggle.
 4. **Try it.** Pick an operation. The form is pre-filled from named examples, then schema examples, then generated values that honour `pattern` (`^PO-[0-9]{10}$`, `^SHP-[0-9]{8}-[0-9]{5}$`, …), `format`, `enum`, limits and nullability. Switch between named examples, edit path, query, header and body values, or pick files from the pool for multipart and binary bodies. Requests go through the server-side proxy, so CORS never applies. You see the full request, the response, the token exchange, and every check:
