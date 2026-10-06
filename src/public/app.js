@@ -115,7 +115,23 @@
   const PAGES = [
     ['overview', 'Overview'], ['settings', 'Settings'], ['data', 'Data'], ['inspector', 'Inspector'], ['files', 'Files'],
     ['auth', 'Auth'], ['chaos', 'Chaos'], ['headers', 'Headers'], ['openapi', 'OpenAPI'], ['tester', 'API Tester'],
+    ['help', 'About & Help'],
   ];
+  // One-line purpose of each page; shown in the Help guide and as the tooltip of each page's help link.
+  const PAGE_HELP = {
+    overview: { purpose: 'Your starting point: the URLs to give integrations, current auth mode, health, data counts and copy-ready curl commands.' },
+    settings: { purpose: 'Every setting in one place. Environment variables set defaults; changes here override them and survive restarts. Badges show where each value comes from.' },
+    data: { purpose: 'The seeded mock data (employees, products, departments, categories): counts, a preview, re-seed with different sizes, or clear it.' },
+    inspector: { purpose: 'A webhook catcher. Anything sent to this server on a non-reserved path shows up here live, with headers, auth, body and the response that was returned.' },
+    files: { purpose: 'The shared file pool used by every file protocol (multipart, raw, base64, tus, presigned, range, chunked). Upload, download, delete or regenerate samples.' },
+    auth: { purpose: 'Choose how /v1 calls must authenticate (none, API key, Basic, Bearer, JWT, OAuth2, HMAC), see the credentials, manage OAuth clients and get test tokens.' },
+    chaos: { purpose: 'Make the mock API misbehave on purpose: random errors, latency, timeouts, broken JSON and rate limits, globally or per route, so you can test client error handling.' },
+    headers: { purpose: 'Headers added to every response, and headers every /v1 request must carry (missing ones return 400).' },
+    openapi: { purpose: 'The OpenAPI 3.1 description of the mock API, regenerated live from the current settings. Import it into Fusion, Postman or any client.' },
+    tester: { purpose: 'Test an API you built: load its OpenAPI spec, call your implementation, and check every response against the spec.' },
+    help: { purpose: 'What this tool does and how to use each page.' },
+  };
+  let currentPage = 'overview';
   let cleanup = null;
   let navEl;
   let mainEl;
@@ -141,14 +157,16 @@
     return h('div', { class: 'topbar' },
       h('div', { class: 'row' }, h('button', { class: 'menu-btn small', onclick: () => navEl.classList.toggle('open'), 'aria-label': 'Menu' }, '☰'),
         h('div', null, h('h1', null, title), sub ? h('div', { class: 'muted' }, sub) : null)),
-      h('div', { class: 'row' }, actions));
+      h('div', { class: 'row' }, actions,
+        currentPage !== 'help' ? h('a', { class: 'btn help-link', href: `#/help/${currentPage}`, title: PAGE_HELP[currentPage]?.purpose || 'Help' }, '? Help') : null));
   }
 
   async function route() {
     if (cleanup) { try { cleanup(); } catch { /* ignore */ } cleanup = null; }
     const parts = (location.hash.replace(/^#\/?/, '') || 'overview').split('/');
     const page = parts[0];
-    for (const a of navEl.querySelectorAll('a[data-page]')) a.classList.toggle('active', a.dataset.page === page);
+    currentPage = VIEWS[page] ? page : 'overview';
+    for (const a of navEl.querySelectorAll('a[data-page]')) a.classList.toggle('active', a.dataset.page === currentPage);
     clear(mainEl);
     const fn = VIEWS[page] || VIEWS.overview;
     try {
@@ -236,6 +254,17 @@
     const health = await fetch('/health').then((r) => r.json()).catch(() => null);
     el.append(header('Overview', o.baseUrl, h('a', { class: 'btn', href: '/docs', target: '_blank', rel: 'noopener' }, 'API docs ↗')));
     for (const w of o.warnings) el.append(h('div', { class: 'card', style: { borderLeft: '4px solid var(--warn)' } }, w));
+    let dismissed = false;
+    try { dismissed = localStorage.getItem('att-welcome-dismissed') === '1'; } catch { /* storage unavailable */ }
+    if (!dismissed) {
+      const welcome = h('div', { class: 'card welcome' },
+        h('div', { class: 'row between' }, h('b', null, 'New here?'),
+          h('button', { class: 'small', onclick: () => { try { localStorage.setItem('att-welcome-dismissed', '1'); } catch { /* ignore */ } welcome.remove(); } }, 'Dismiss')),
+        h('p', { style: { margin: '6px 0 10px' } }, 'This tool does two jobs: it is a realistic API for your integrations to call (outgoing testing), and it checks an API you built against its OpenAPI spec (incoming testing).'),
+        h('div', { class: 'row' }, h('a', { class: 'btn primary', href: '#/help' }, 'Read the guide'),
+          h('a', { class: 'btn', href: '#/help/quick-outgoing' }, 'Quick start: outgoing'), h('a', { class: 'btn', href: '#/help/quick-incoming' }, 'Quick start: incoming')));
+      el.append(welcome);
+    }
     el.append(h('div', { class: 'grid cols-4' },
       h('div', { class: 'card stat' }, h('span', { class: 'muted' }, 'Auth mode'), h('b', null, o.authMode)),
       h('div', { class: 'card stat' }, h('span', { class: 'muted' }, 'Date format'), h('b', null, o.dateFormat)),
@@ -813,6 +842,112 @@
 
     draw(sub || 'target');
   }
+
+  // ---------------------------------------------------------------- about & help
+  VIEWS.help = async (el, params) => {
+    const o = await api('GET', '/overview');
+    const B = o.baseUrl;
+    const code = (t) => h('code', null, t);
+    const section = (id, title, ...body) => h('section', { class: 'card help-section', id: `help-${id}` }, h('h2', null, title), body);
+    const steps = (...items) => h('ol', { class: 'help-steps' }, items.map((i) => h('li', null, i)));
+    const link = (href, text) => h('a', { href }, text);
+
+    const toc = [
+      ['what', 'What this tool is'], ['quick-outgoing', 'Quick start: outgoing testing'], ['quick-incoming', 'Quick start: incoming testing'],
+      ['urls', 'URLs and reserved paths'], ['pages', 'Page guide'], ['headers-cheat', 'Useful request headers'], ['more', 'More information'],
+    ];
+
+    el.append(header('About & Help', `API Test Tool ${o.version} · ${B}`));
+    el.append(h('div', { class: 'card' }, h('div', { class: 'row' }, h('b', null, 'On this page:'),
+      toc.map(([id, label]) => h('a', { class: 'btn small', href: `#/help/${id}` }, label)))));
+
+    el.append(section('what', 'What this tool is',
+      h('p', null, 'One server that helps you test an API platform (for example Amplify Fusion) in both directions:'),
+      h('div', { class: 'grid cols-2' },
+        h('div', { class: 'help-box' }, h('h3', null, '1. Outgoing testing — a mock API to call'),
+          h('p', null, 'Point an integration at this server and it behaves like a realistic third-party API:'),
+          h('ul', null,
+            h('li', null, 'Seeded employees and products with every JSON type worth parsing (decimals as strings, nulls, nested objects, unicode).'),
+            h('li', null, 'Seven pagination styles side by side, so you can test each one.'),
+            h('li', null, 'Seven auth modes and a built-in OAuth 2.0 server.'),
+            h('li', null, 'Files over every common HTTP protocol.'),
+            h('li', null, 'Errors and slowness on demand (Chaos).'),
+            h('li', null, 'An Inspector that catches webhooks and any other call your integration makes.'))),
+        h('div', { class: 'help-box' }, h('h3', null, '2. Incoming testing — check an API you built'),
+          h('p', null, 'Load the OpenAPI spec you implemented and the API Tester:'),
+          h('ul', null,
+            h('li', null, 'Lints the spec for problems that break validation.'),
+            h('li', null, 'Builds sample requests from the spec, including its examples and regex patterns.'),
+            h('li', null, 'Calls your implementation through this server (no CORS issues).'),
+            h('li', null, 'Validates status codes, headers and bodies against the spec.'),
+            h('li', null, 'Runs the whole contract with ID chaining and negative tests, and saves reports.'))))));
+
+    el.append(section('quick-outgoing', 'Quick start: outgoing testing',
+      steps(
+        h('span', null, 'Give your integration the API base URL ', code(`${B}/v1`), '. Try ', code('GET /v1/employees?limit=5'), '.'),
+        h('span', null, 'Choose an auth mode on the ', link('#/auth', 'Auth'), ' page (currently ', h('b', null, o.authMode), '). The page shows the credentials to configure, and "Get a test token" issues an OAuth/JWT token.'),
+        h('span', null, 'Pick a pagination style by path, e.g. ', code('/v1/p/cursor/employees'), ' or ', code('/v1/p/link/products'), '. All seven are listed under ', link('#/help/urls', 'URLs and reserved paths'), '.'),
+        h('span', null, 'Send webhooks or any unknown call to ', code(`${B}/<any-path>`), ' and watch them arrive on the ', link('#/inspector', 'Inspector'), ' page.'),
+        h('span', null, 'Test error handling: add ', code('X-Force-Error: 503'), ' to one request, or set a random error rate on the ', link('#/chaos', 'Chaos'), ' page.'),
+        h('span', null, 'Import the live spec from ', link('#/openapi', 'OpenAPI'), ' (', code(`${B}/openapi.json`), ') into Fusion or Postman to get every endpoint pre-defined.'))));
+
+    el.append(section('quick-incoming', 'Quick start: incoming testing',
+      steps(
+        h('span', null, 'Open ', link('#/tester', 'API Tester'), ' and load your spec: upload, paste, or a URL. OpenAPI 3.0, 3.1 and Swagger 2.0 all work. To try it first, load the bundled Supplier Order sample.'),
+        h('span', null, 'Read the ', h('b', null, 'Spec lint'), ' tab. It flags problems that make valid responses fail validation, such as allOf combined with additionalProperties: false, and placeholder server or token URLs.'),
+        h('span', null, 'On the ', h('b', null, 'Target'), ' tab, set the base URL of your implementation and an auth profile (API key, OAuth2 client credentials with your token URL, Basic or Bearer). "Test token request" shows the full token exchange.'),
+        h('span', null, 'Use ', h('b', null, 'Try it'), ' to send one operation at a time. The form is pre-filled from the spec; every response gets a list of pass/fail checks.'),
+        h('span', null, 'Use ', h('b', null, 'Run all'), ' for the whole contract. IDs from Location headers and responses are reused in later calls; tick "Negative tests" to also check 401, 400/422 and 404 handling. Results are kept under ', h('b', null, 'History'), ' with HTML and JSON reports.'),
+        h('span', null, 'No implementation yet? "Install mock & use as target" serves the spec\'s own examples from this server so you can rehearse the run.'))));
+
+    el.append(section('urls', 'URLs and reserved paths',
+      h('p', null, 'These paths belong to the tool. ', h('b', null, 'Every other path is captured by the Inspector.')),
+      h('div', { class: 'table-wrap' }, h('table', null, h('tbody', null,
+        [
+          ['/v1/employees, /v1/products, /v1/departments, /v1/categories', 'Mock API with full CRUD (list, create, get, replace, patch, delete). Lists use offset pagination.'],
+          ['/v1/p/{offset|page|cursor|keyset|link|hal|token}/{resource}', 'The same lists with each pagination style.'],
+          ['/v1/departments/{id}/employees, /v1/categories/{id}/products', 'Nested collections.'],
+          ['/v1/files/…', 'File protocols: multipart, raw, base64, tus, presign, download (range), chunked.'],
+          ['/oauth/token, /oauth/authorize, /oauth/introspect, /oauth/revoke', 'Built-in OAuth 2.0 server.'],
+          ['/.well-known/jwks.json, /.well-known/oauth-authorization-server', 'Signing keys and OAuth discovery.'],
+          ['/openapi.json, /openapi.yaml, /docs', 'Live OpenAPI and Swagger UI.'],
+          ['/health, /ready', 'Health and readiness checks.'],
+          ['/samples/…', 'Bundled example specs for the API Tester.'],
+          ['/dashboard, /admin/api/…', 'This dashboard and its API (password protected when ADMIN_PASSWORD is set).'],
+          ['/mock/{spec}/…', 'Not reserved — created by "Mock from spec" as Inspector rules.'],
+        ].map(([p, d]) => h('tr', null, h('td', null, code(p)), h('td', null, d))))))));
+
+    el.append(section('pages', 'Page guide',
+      PAGES.filter(([id]) => id !== 'help').map(([id, label]) => h('div', { class: 'help-page', id: `help-${id}` },
+        h('div', { class: 'row between' }, h('h3', { style: { margin: 0 } }, label), h('a', { class: 'btn small', href: `#/${id}` }, `Open ${label}`)),
+        h('p', { style: { margin: '4px 0 0' } }, PAGE_HELP[id].purpose)))));
+
+    el.append(section('headers-cheat', 'Useful request headers',
+      h('div', { class: 'table-wrap' }, h('table', null, h('tbody', null,
+        [
+          ['X-Force-Error: 503', 'Return that error (any 4xx/5xx), or a failure type: timeout, reset, malformed-json, truncated-body, empty-body, wrong-content-type, slow-drip.'],
+          ['X-Force-Status: 202', 'Keep the real response but change its status code.'],
+          ['X-Force-Latency: 2000', 'Add that many milliseconds of delay.'],
+          ['Idempotency-Key: <uuid>', 'On POST: repeating the request returns the original response; reusing the key with a different body returns 409.'],
+          ['If-Match: <etag>', 'On PUT/PATCH/DELETE: 412 if the resource changed since you read it.'],
+          ['If-None-Match: <etag>', 'On GET: 304 if nothing changed.'],
+          ['X-Request-Id / X-Correlation-Id', 'Echoed back (generated if missing) for tracing.'],
+        ].map(([hd, d]) => h('tr', null, h('td', null, code(hd)), h('td', null, d))))))));
+
+    el.append(section('more', 'More information',
+      h('ul', null,
+        h('li', null, h('a', { href: 'https://github.com/lbrenman/api-test-tool#readme', target: '_blank', rel: 'noopener' }, 'README on GitHub ↗'), ' — every setting, curl examples for each auth mode, deployment and troubleshooting.'),
+        h('li', null, h('a', { href: '/docs', target: '_blank', rel: 'noopener' }, 'Swagger UI ↗'), ' — try every mock API endpoint in the browser.'),
+        h('li', null, h('a', { href: '/openapi.json', target: '_blank', rel: 'noopener' }, 'openapi.json ↗'), ' and ', h('a', { href: '/health', target: '_blank', rel: 'noopener' }, 'health ↗'), '.'),
+        h('li', null, 'Postman: the repo\'s ', code('postman/'), ' folder has a collection covering every feature; set its ', code('authMode'), ' variable to match the Auth page.'))));
+
+    // Jump to a section: #/help/<section-or-page>
+    const target = params[0] && document.getElementById(`help-${params[0]}`);
+    if (target) {
+      target.classList.add('flash');
+      requestAnimationFrame(() => target.scrollIntoView({ block: 'start' }));
+    } else window.scrollTo(0, 0);
+  };
 
   // ---------------------------------------------------------------- boot
   async function start() {

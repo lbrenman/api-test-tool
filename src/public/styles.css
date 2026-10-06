@@ -147,3 +147,17 @@ tr.selected td { background: color-mix(in srgb, var(--accent) 12%, var(--panel))
 details > summary { cursor: pointer; }
 hr { border: none; border-top: 1px solid var(--border); margin: 14px 0; }
 .hidden { display: none !important; }
+
+/* about & help */
+.help-section { scroll-margin-top: 16px; }
+.help-section p, .help-section li { max-width: 80ch; }
+.help-steps li { margin: 6px 0; }
+.help-box { background: var(--panel-2); border-radius: 8px; padding: 12px 14px; }
+.help-box h3 { margin-top: 0; }
+.help-box ul { margin: 0; padding-left: 18px; }
+.help-page { padding: 10px 0; border-bottom: 1px solid var(--border); scroll-margin-top: 16px; }
+.help-page:last-child { border-bottom: none; }
+.flash { animation: flash 1.6s ease-out; }
+@keyframes flash { from { box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 55%, transparent); } to { box-shadow: 0 0 0 0 transparent; } }
+@media (prefers-reduced-motion: reduce) { .flash { animation: none; } }
+.welcome { border-left: 4px solid var(--accent); }
