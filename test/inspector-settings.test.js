@@ -36,12 +36,13 @@ test('catch-all captures unknown paths with the actual path, auth and body', asy
     for (let i = 0; i < 8; i++) await request(t.app).get(`/r/${i}`);
     assert.ok((await request(t.app).get('/admin/api/inspector')).body.length <= 5);
 
-    // reserved prefixes are not captured
+    // with INSPECTOR_LOG_ALL off, reserved prefixes are not captured
+    await t.ctx.settings.set('inspectorLogAll', false);
     await request(t.app).get('/v1/unknown').expect(404);
     const last = (await request(t.app).get('/admin/api/inspector')).body[0];
     assert.notEqual(last.path, '/v1/unknown');
 
-    // INSPECTOR_LOG_ALL captures /v1 traffic
+    // back on: /v1 traffic is captured
     await t.ctx.settings.set('inspectorLogAll', true);
     await request(t.app).get('/v1/employees/1').expect(200);
     await new Promise((r) => setTimeout(r, 50));
@@ -49,6 +50,64 @@ test('catch-all captures unknown paths with the actual path, auth and body', asy
     assert.equal(v1.kind, 'v1');
     assert.equal(v1.status, 200);
   } finally { await t.close(); }
+});
+
+test('API traffic is recorded by default: /v1 (incl. early rejections), /oauth, dropped connections; plumbing is not', async () => {
+  const t = await makeApp({ SEED_SAMPLE_FILES: 'false', AUTH_MODE: 'apikey', API_KEY: 'k1' });
+  const settle = () => new Promise((r) => setTimeout(r, 60));
+  const all = async () => (await request(t.app).get('/admin/api/inspector')).body;
+  try {
+    assert.equal(t.ctx.settings.get('inspectorLogAll'), true);
+
+    // authorised call: request + real response body
+    await request(t.app).get('/v1/employees?limit=2').set('X-API-Key', 'k1').expect(200);
+    // rejected by auth
+    await request(t.app).get('/v1/products').expect(401);
+    // rejected by the body parser (never reaches the routers)
+    await request(t.app).post('/v1/employees').set('X-API-Key', 'k1').set('Content-Type', 'application/json').send('{bad json').expect(400);
+    // OAuth token request (form body kept)
+    await request(t.app).post('/oauth/token').type('form').send({ grant_type: 'client_credentials', client_id: 'nobody', client_secret: 'x' });
+    // the tool's own plumbing is never recorded
+    await request(t.app).get('/health').expect(200);
+    await request(t.app).get('/openapi.json').expect(200);
+    await request(t.app).get('/dashboard/').expect(200);
+    await settle();
+
+    const items = await all();
+    const ok = items.find((x) => x.path === '/v1/employees' && x.method === 'GET');
+    assert.equal(ok.kind, 'v1');
+    assert.equal(ok.status, 200);
+    const okFull = (await request(t.app).get(`/admin/api/inspector/${ok.id}`)).body;
+    assert.equal(okFull.query.limit, '2');
+    assert.equal(okFull.response.body.kind, 'json');
+    assert.ok(JSON.parse(okFull.response.body.text).data.length === 2);
+
+    assert.equal(items.find((x) => x.path === '/v1/products').status, 401);
+    const bad = items.find((x) => x.path === '/v1/employees' && x.method === 'POST');
+    assert.equal(bad.status, 400);
+    assert.equal((await request(t.app).get(`/admin/api/inspector/${bad.id}`)).body.body.text, '{bad json');
+
+    const tok = items.find((x) => x.path === '/oauth/token');
+    assert.equal(tok.kind, 'oauth');
+    assert.equal((await request(t.app).get(`/admin/api/inspector/${tok.id}`)).body.body.fields.grant_type, 'client_credentials');
+
+    for (const p of ['/health', '/openapi.json', '/dashboard/', '/admin/api/inspector']) assert.ok(!items.some((x) => x.path === p), `${p} should not be recorded`);
+  } finally { await t.close(); }
+});
+
+test('connections dropped by chaos are recorded as aborted', async () => {
+  const { listen } = require('./helpers');
+  const t = await listen({ SEED_SAMPLE_FILES: 'false' });
+  try {
+    await fetch(`${t.url}/v1/employees/1`, { headers: { 'X-Force-Error': 'reset' } }).catch(() => null);
+    let e;
+    for (let i = 0; i < 40 && !e; i++) {
+      await new Promise((r) => setTimeout(r, 50));
+      e = (await t.ctx.inspector.list()).find((x) => x.path === '/v1/employees/1');
+    }
+    assert.ok(e, 'dropped request should be recorded');
+    assert.equal(e.aborted, true);
+  } finally { await t.stop(); }
 });
 
 test('admin API requires ADMIN_PASSWORD when set; session cookie and Basic fallback', async () => {

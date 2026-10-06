@@ -109,6 +109,7 @@ async function createApp(opts = {}) {
   app.use(requestId());
   app.use(responseHeaders(settings));
   app.use(cors(settings));
+  app.use(logAll(ctx)); // records /v1 and /oauth traffic when INSPECTOR_LOG_ALL is on
 
   // Platform + OAuth (always open)
   app.use(platformRouter(ctx));
@@ -128,7 +129,6 @@ async function createApp(opts = {}) {
   // Mock API
   const v1 = express.Router();
   v1.use(v1Body(settings));
-  v1.use(logAll(ctx));
   v1.use(requiredHeaders(settings));
   v1.use(rateLimit(settings));
   v1.use(makeAuth(ctx));

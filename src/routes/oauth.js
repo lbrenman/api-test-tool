@@ -3,6 +3,7 @@
 // authorize (login/consent page), introspect (RFC 7662), revoke (RFC 7009), metadata (RFC 8414) and JWKS.
 const express = require('express');
 const { OAuthError, OAuthService } = require('../services/oauth');
+const { verify } = require('../middleware/body');
 
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
@@ -48,7 +49,7 @@ function redirectWith(res, uri, params) {
 module.exports = function oauthRouter(ctx) {
   const { oauth, keys, baseUrl, settings } = ctx;
   const r = express.Router();
-  const forms = [express.urlencoded({ extended: false }), express.json()];
+  const forms = [express.urlencoded({ extended: false, verify }), express.json({ verify })];
 
   const AUTH_PARAMS = ['response_type', 'client_id', 'redirect_uri', 'scope', 'state', 'code_challenge', 'code_challenge_method'];
 

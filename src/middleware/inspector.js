@@ -1,5 +1,5 @@
 'use strict';
-// Catch-all capture for every non-reserved path, plus optional capture of /v1/* traffic (INSPECTOR_LOG_ALL).
+// Catch-all capture for every non-reserved path, plus capture of /v1/* and /oauth/* traffic (INSPECTOR_LOG_ALL).
 
 function readRaw(req, limit) {
   return new Promise((resolve, reject) => {
@@ -44,41 +44,58 @@ function catchAll(ctx) {
   };
 }
 
-// Captures /v1/* requests after body parsing; the response is recorded when it finishes.
+const MAX_RESPONSE_CAPTURE = 65536;
+
+// Which API traffic is recorded when INSPECTOR_LOG_ALL is on. The dashboard, admin API, docs and
+// health probes are the tool's own plumbing and are never recorded.
+function apiKind(path) {
+  if (path === '/v1' || path.startsWith('/v1/')) return 'v1';
+  if (path.startsWith('/oauth/') || path.startsWith('/.well-known/')) return 'oauth';
+  return null;
+}
+
+// Records /v1/* and /oauth/* calls. Mounted before every router and body parser, so requests that are
+// rejected early (malformed body, missing headers, auth, rate limit, chaos) are recorded too. The entry is
+// written once the response finishes, or when the connection closes early (chaos drop/timeout, client abort).
 function logAll(ctx) {
   const { inspector, settings } = ctx;
   return function inspectorLogAll(req, res, next) {
-    if (!settings.get('inspectorLogAll')) return next();
+    const kind = apiKind(req.path);
+    if (!kind || !settings.get('inspectorLogAll')) return next();
     const started = Date.now();
+    const ip = req.ip; // read now: a dropped socket loses its remote address
     const chunks = [];
     let size = 0;
+    const keep = (chunk, enc) => {
+      if (!chunk || typeof chunk === 'function' || size >= MAX_RESPONSE_CAPTURE) return;
+      const b = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk, typeof enc === 'string' ? enc : 'utf8');
+      chunks.push(b);
+      size += b.length;
+    };
     const origWrite = res.write;
     const origEnd = res.end;
-    res.write = function w(chunk, ...rest) {
-      if (chunk && size < 65536) { const b = Buffer.from(chunk); chunks.push(b); size += b.length; }
-      return origWrite.call(this, chunk, ...rest);
+    res.write = function w(chunk, ...rest) { keep(chunk, rest[0]); return origWrite.call(this, chunk, ...rest); };
+    res.end = function e(chunk, ...rest) { keep(chunk, rest[0]); return origEnd.call(this, chunk, ...rest); };
+    let done = false;
+    const finish = () => {
+      if (done) return;
+      done = true;
+      const aborted = !res.writableFinished;
+      inspector.record(req, Buffer.isBuffer(req.rawBody) ? req.rawBody : Buffer.alloc(0), kind, {
+        startedAt: started,
+        ip,
+        status: res.headersSent || !aborted ? res.statusCode : null,
+        headers: { ...res.getHeaders() },
+        body: Buffer.concat(chunks).subarray(0, MAX_RESPONSE_CAPTURE),
+        contentType: res.get('Content-Type'),
+        durationMs: Date.now() - started,
+        aborted,
+      }).catch((err) => console.error('[inspector]', err.message));
     };
-    res.end = function e(chunk, ...rest) {
-      if (chunk && typeof chunk !== 'function' && size < 65536) { const b = Buffer.from(chunk); chunks.push(b); size += b.length; }
-      return origEnd.call(this, chunk, ...rest);
-    };
-    const pending = inspector.capture(req, Buffer.isBuffer(req.rawBody) ? req.rawBody : Buffer.alloc(0), 'v1');
-    res.on('finish', async () => {
-      try {
-        const entry = await pending;
-        await inspector.complete(entry, {
-          status: res.statusCode,
-          headers: { ...res.getHeaders() },
-          body: Buffer.concat(chunks).subarray(0, 65536),
-          contentType: res.get('Content-Type'),
-          durationMs: Date.now() - started,
-        });
-      } catch (e) {
-        console.error('[inspector]', e.message);
-      }
-    });
+    res.on('finish', finish);
+    res.on('close', finish);
     next();
   };
 }
 
-module.exports = { catchAll, logAll };
+module.exports = { catchAll, logAll, apiKind };

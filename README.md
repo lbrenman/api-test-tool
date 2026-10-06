@@ -139,7 +139,7 @@ Settings marked **restart** can only be set through the environment.
 | `RESPONSE_HEADERS` | — | `Name:Value;Name2:Value2`, added to every response |
 | `REQUIRED_HEADERS` | — | `Name,Name2=expected`. 400 on `/v1/*` when missing or wrong |
 | `INSPECTOR_RETENTION` | `500` | Captures kept |
-| `INSPECTOR_LOG_ALL` | `false` | Also capture `/v1/*` traffic |
+| `INSPECTOR_LOG_ALL` | `true` | Also record `/v1/*` and `/oauth/*` calls (with their real responses). Toggle on the Inspector page. |
 | `INSPECTOR_RESPONSE_STATUS`, `…_CONTENT_TYPE`, `…_BODY`, `…_HEADERS`, `…_DELAY_MS` | `200`, `application/json`, receipt, —, `0` | Default catch-all response |
 | `INSPECTOR_RULES` | — | JSON path rules (first match wins) |
 | `INSPECTOR_FORWARD_ENABLED` / `INSPECTOR_FORWARD_URL` | `false` / — | Auto-forward captures |
@@ -150,7 +150,7 @@ Settings marked **restart** can only be set through the environment.
 
 ## Route map
 
-These prefixes are reserved: `/v1`, `/oauth`, `/.well-known`, `/admin`, `/dashboard`, `/docs`, `/openapi.json`, `/openapi.yaml`, `/samples`, `/health`, `/ready`, and `GET /` (which redirects to the dashboard). **Every other path, and every method, is captured by the inspector.**
+These prefixes are reserved: `/v1`, `/oauth`, `/.well-known`, `/admin`, `/dashboard`, `/docs`, `/openapi.json`, `/openapi.yaml`, `/samples`, `/health`, `/ready`, and `GET /` (which redirects to the dashboard). **Every other path, and every method, is captured by the inspector.** Calls to `/v1` and `/oauth` are recorded there too (unless `INSPECTOR_LOG_ALL=false`); the dashboard, admin API, docs and health probes never are.
 
 | Path | Purpose |
 |---|---|
@@ -418,7 +418,7 @@ curl -s -X POST "$B/hooks/order-created?env=dev" -H 'Content-Type: application/j
   Available templates: `{{uuid}}`, `{{now}}`, `{{nowEpoch}}`, `{{id}}`, `{{path}}`, `{{method}}`, `{{params.x}}`, `{{query.x}}`, `{{body.x}}`, `{{baseUrl}}`.
 - **Detail pane:** copy as curl, replay (to this server or any URL), and auto-forward every capture to a target URL (the original path is appended).
 - **Housekeeping:** export JSON, clear. The last `INSPECTOR_RETENTION` captures are kept.
-- `INSPECTOR_LOG_ALL=true` also records `/v1/*` traffic.
+- **API traffic:** `/v1/*` and `/oauth/*` calls are recorded with their real responses, including requests rejected early (bad JSON, missing headers, auth, rate limit) and connections dropped by chaos (shown as *dropped*). Filter by source (webhooks / mock API / OAuth) or switch it off with **Record /v1 & /oauth** (`INSPECTOR_LOG_ALL`). Streamed file uploads show their size only.
 
 ---
 
@@ -551,7 +551,7 @@ npm run postman        # Newman across all auth modes
 | 401 under `jwt`/`oauth2` with a token from another environment | The issuer is the base URL. Tokens from `localhost` aren't valid on the Fly URL. Set `JWT_ISSUER` to pin it. |
 | HMAC 401 "signature mismatch" | Compare your canonical string with the one in the 401 body's `errors[0]`. Usual causes: missing query string, wrong body bytes, or the hash for a streamed upload (use `UNSIGNED-PAYLOAD`). |
 | `/v1/...` returns 400 "Missing required header" | `REQUIRED_HEADERS` is set (see the Headers page). |
-| Inspector doesn't show `/v1` calls | Turn on `INSPECTOR_LOG_ALL`; only non-reserved paths are captured by default. |
+| Inspector doesn't show `/v1` or `/oauth` calls | Tick **Record /v1 & /oauth** on the Inspector page (or set `INSPECTOR_LOG_ALL=true`). The dashboard, docs and `/health` are never recorded. |
 | Tester: "No usable base URL" | The spec's servers are relative or placeholders. Set a base URL override on the Target tab. |
 | Tester: every `Shipment` response fails | That's the spec's allOf issue. Fix the spec, or enable **Lenient allOf**. |
 | Large uploads time out on the host | Check the platform's request timeout. tus uploads are resumable and avoid this. |

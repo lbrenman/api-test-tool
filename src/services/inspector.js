@@ -137,7 +137,7 @@ function summary(e) {
     id: e.id, ts: e.ts, method: e.method, path: e.path, query: e.query, kind: e.kind, ip: e.ip,
     contentType: e.headers['content-type'] || null, size: e.body?.size || 0,
     status: e.response?.status ?? null, durationMs: e.durationMs ?? null, authScheme: e.auth?.scheme || (e.auth?.apiKey ? 'api-key' : null),
-    rule: e.response?.rule ?? null, forwarded: e.forward ? e.forward.status ?? 'error' : null,
+    rule: e.response?.rule ?? null, aborted: e.response?.aborted || false, forwarded: e.forward ? e.forward.status ?? 'error' : null,
   };
 }
 
@@ -150,6 +150,34 @@ class InspectorService extends EventEmitter {
   }
 
   async capture(req, rawBody, kind = 'catch-all') {
+    const entry = await this.build(req, rawBody, kind);
+    await this.save(entry);
+    await this.ctx.repo.trim('inspector', this.ctx.settings.get('inspectorRetention'));
+    this.emit('request', summary(entry));
+    return entry;
+  }
+
+  // One-shot capture of API traffic (/v1, /oauth) once its response is done (or the connection dropped).
+  async record(req, rawBody, kind, response) {
+    const entry = await this.build(req, rawBody, kind);
+    const { durationMs, aborted, startedAt, ip, ...res } = response;
+    if (ip && !entry.ip) entry.ip = ip;
+    if (startedAt) entry.ts = new Date(startedAt).toISOString();
+    entry.response = {
+      status: res.status,
+      headers: res.headers,
+      rule: null,
+      aborted: !!aborted,
+      body: res.body && res.body.length ? describeBody(res.contentType || res.headers?.['content-type'], res.body) : null,
+    };
+    entry.durationMs = durationMs;
+    await this.save(entry);
+    await this.ctx.repo.trim('inspector', this.ctx.settings.get('inspectorRetention'));
+    this.emit('request', summary(entry));
+    return entry;
+  }
+
+  async build(req, rawBody, kind) {
     const url = new URL(req.originalUrl, this.ctx.baseUrl(req));
     const headers = { ...req.headers };
     const ct = headers['content-type'];
@@ -173,9 +201,11 @@ class InspectorService extends EventEmitter {
       body,
       requestId: req.id,
     };
-    await this.save(entry);
-    await this.ctx.repo.trim('inspector', this.ctx.settings.get('inspectorRetention'));
-    this.emit('request', summary(entry));
+    // File uploads stream straight to the file store; note the size instead of the bytes.
+    const declared = Number(headers['content-length']) || 0;
+    if (body.kind === 'empty' && kind !== 'catch-all' && (declared > 0 || headers['transfer-encoding'])) {
+      entry.body = { kind: 'streamed', size: declared };
+    }
     return entry;
   }
 

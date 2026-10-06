@@ -122,7 +122,7 @@
     overview: { purpose: 'Your starting point: the URLs to give integrations, current auth mode, health, data counts and copy-ready curl commands.' },
     settings: { purpose: 'Every setting in one place. Environment variables set defaults; changes here override them and survive restarts. Badges show where each value comes from.' },
     data: { purpose: 'The seeded mock data (employees, products, departments, categories): counts, a preview, re-seed with different sizes, or clear it.' },
-    inspector: { purpose: 'A webhook catcher. Anything sent to this server on a non-reserved path shows up here live, with headers, auth, body and the response that was returned.' },
+    inspector: { purpose: 'Every call made to this server shows up here live, with headers, auth, body and the response that was returned: webhooks and other calls to unreserved paths, plus mock API (/v1) and OAuth (/oauth) calls. Filter by source, or switch API recording off with the checkbox at the top of the page.' },
     files: { purpose: 'The shared file pool used by every file protocol (multipart, raw, base64, tus, presigned, range, chunked). Upload, download, delete or regenerate samples.' },
     auth: { purpose: 'Choose how /v1 calls must authenticate (none, API key, Basic, Bearer, JWT, OAuth2, HMAC), see the credentials, manage OAuth clients and get test tokens.' },
     chaos: { purpose: 'Make the mock API misbehave on purpose: random errors, latency, timeouts, broken JSON and rate limits, globally or per route, so you can test client error handling.' },
@@ -332,11 +332,21 @@
     const detailEl = h('div');
     const filterText = h('input', { type: 'text', placeholder: 'Filter path, header, body…', 'aria-label': 'Filter' });
     const filterMethod = h('select', { 'aria-label': 'Method' }, ['', 'GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'].map((m) => h('option', { value: m }, m || 'All methods')));
+    const filterSource = h('select', { 'aria-label': 'Source' },
+      [['', 'All sources'], ['catch-all', 'Webhooks / other paths'], ['v1', 'Mock API (/v1)'], ['oauth', 'OAuth (/oauth)']].map(([v, l]) => h('option', { value: v }, l)));
     const live = h('span', { class: 'live-dot' });
     const count = h('span', { class: 'muted small' });
+    const logAll = h('input', { type: 'checkbox', checked: !!sval('inspectorLogAll') });
+    logAll.addEventListener('change', guard(async () => {
+      await api('PUT', '/settings', { inspectorLogAll: logAll.checked });
+      await loadSettings(true);
+      toast(logAll.checked ? 'Recording /v1 and /oauth calls' : 'Only webhooks / other paths are recorded now', 'ok');
+    }));
+    const SOURCE_LABEL = { v1: '/v1', oauth: 'OAuth' };
 
     const matches = (it) => {
       if (filterMethod.value && it.method !== filterMethod.value) return false;
+      if (filterSource.value && (it.kind || 'catch-all') !== filterSource.value) return false;
       const q = filterText.value.trim().toLowerCase();
       if (!q) return true;
       return JSON.stringify(it).toLowerCase().includes(q);
@@ -345,17 +355,20 @@
       clear(listEl);
       const shown = items.filter(matches);
       count.textContent = `${shown.length} of ${items.length}`;
-      if (!shown.length) listEl.append(h('div', { class: 'empty' }, items.length ? 'No captures match the filter.' : 'No requests captured yet. Send anything to this base URL (other than /v1, /oauth, /admin, /dashboard, /docs, /openapi.*, /health).'));
+      if (!shown.length) listEl.append(h('div', { class: 'empty' }, items.length ? 'No captures match the filter.' : `No requests captured yet. Send a webhook to any unreserved path (e.g. ${location.origin}/hooks/test)${logAll.checked ? ' or call the mock API under /v1' : ''}.`));
       for (const it of shown) {
         listEl.append(h('div', { class: `list-item ${it.id === selected ? 'active' : ''}`, onclick: () => { selected = it.id; history.replaceState(null, '', `#/inspector/${it.id}`); renderList(); showDetail(it.id); } },
           method(it.method),
           h('div', { style: { minWidth: 0 } }, h('div', { class: 'path', title: it.path }, it.path + (it.query && Object.keys(it.query).length ? `?${new URLSearchParams(it.query)}` : '')),
-            h('div', { class: 'small muted' }, `${fmtTime(it.ts)} · ${it.ip || ''} · ${fmtBytes(it.size)}${it.kind === 'v1' ? ' · /v1' : ''}${it.rule ? ` · ${it.rule}` : ''}`)),
-          h('span', { class: statusClass(it.status) }, it.status ?? '…')));
+            h('div', { class: 'small muted' }, `${fmtTime(it.ts)} · ${it.ip || ''} · ${fmtBytes(it.size)}${it.durationMs != null ? ` · ${it.durationMs} ms` : ''}${it.rule ? ` · ${it.rule}` : ''}`)),
+          h('div', { class: 'row', style: { gap: '6px', flexWrap: 'nowrap' } },
+            SOURCE_LABEL[it.kind] ? h('span', { class: 'badge' }, SOURCE_LABEL[it.kind]) : null,
+            h('span', { class: statusClass(it.aborted ? null : it.status), title: it.aborted ? 'The connection closed before the response finished' : '' }, it.aborted ? `${it.status ?? ''} dropped`.trim() : (it.status ?? '…')))));
       }
     };
     const showBody = (b, title) => {
       if (!b || b.kind === 'empty') return h('div', { class: 'muted small' }, `${title}: empty`);
+      if (b.kind === 'streamed') return h('div', { class: 'muted small' }, `${title}: ${b.size ? fmtBytes(b.size) : 'chunked'} streamed to the file store (not kept by the Inspector)`);
       const parts = [h('div', { class: 'row between' }, h('b', null, `${title} · ${b.kind} · ${fmtBytes(b.size)}${b.truncated ? ' (truncated)' : ''}`))];
       if (b.kind === 'multipart' && b.multipart) {
         parts.push(h('table', null, h('thead', null, h('tr', null, h('th', null, 'Part'), h('th', null, 'Type'), h('th', null, 'Value / file'))),
@@ -382,7 +395,8 @@
           h('h3', null, 'Headers'), kv(e.headers),
           showBody(e.body, 'Body')),
         auth: () => (e.auth ? codeBlock(pretty(e.auth)) : h('div', { class: 'muted' }, 'No credentials detected.')),
-        response: () => (e.response ? h('div', { class: 'stack' }, h('div', null, 'Status ', h('b', { class: statusClass(e.response.status) }, e.response.status), e.response.rule ? h('span', { class: 'badge' }, e.response.rule) : null, ` · ${e.durationMs ?? '?'} ms`),
+        response: () => (e.response ? h('div', { class: 'stack' }, h('div', null, 'Status ', h('b', { class: statusClass(e.response.status) }, e.response.status ?? 'none'), e.response.rule ? h('span', { class: 'badge' }, e.response.rule) : null, ` · ${e.durationMs ?? '?'} ms`),
+          e.response.aborted ? h('div', { class: 'help-box' }, 'The connection closed before the response finished (chaos drop/timeout, or the client gave up). What was sent so far is shown below.') : null,
           h('h3', null, 'Headers'), kv(e.response.headers), showBody(e.response.body, 'Body'),
           e.forward ? h('div', null, h('h3', null, 'Forwarded'), codeBlock(pretty({ url: e.forward.url, status: e.forward.status, error: e.forward.error, durationMs: e.forward.durationMs }))) : null) : h('div', { class: 'muted' }, 'Pending…')),
         curl: () => h('div', { class: 'stack' }, codeBlock(e.curl), h('button', { onclick: () => copy(e.curl) }, 'Copy curl')),
@@ -417,15 +431,17 @@
 
     filterText.addEventListener('input', renderList);
     filterMethod.addEventListener('change', renderList);
+    filterSource.addEventListener('change', renderList);
 
     const fwdEnabled = h('input', { type: 'checkbox', checked: sval('inspectorForwardEnabled') });
     const fwdUrl = h('input', { type: 'url', value: sval('inspectorForwardUrl') || '', placeholder: 'https://example.com/webhooks' });
 
-    el.append(header('Inspector', 'Every request to a non-reserved path is captured with its actual path.',
+    el.append(header('Inspector', 'Every call to this server, live: webhooks to any unreserved path, plus mock API (/v1) and OAuth calls.',
       live, count,
+      h('label', { class: 'check', title: 'INSPECTOR_LOG_ALL' }, logAll, 'Record /v1 & /oauth'),
       h('a', { class: 'btn', href: '/admin/api/inspector/export' }, 'Export JSON'),
       h('button', { class: 'danger', onclick: guard(async () => { if (!confirm('Clear all captured requests?')) return; await api('DELETE', '/inspector'); }) }, 'Clear')));
-    el.append(h('div', { class: 'card' }, h('div', { class: 'row', style: { flexWrap: 'nowrap' } }, filterMethod, filterText),
+    el.append(h('div', { class: 'card' }, h('div', { class: 'row', style: { flexWrap: 'nowrap' } }, filterSource, filterMethod, filterText),
       h('details', { style: { marginTop: '10px' } }, h('summary', null, 'Default response, rules & forwarding'),
         h('div', { class: 'grid cols-2', style: { marginTop: '10px' } },
           h('div', null, h('h3', null, 'Default response'), settingsForm(['inspectorResponseStatus', 'inspectorResponseContentType', 'inspectorResponseBody', 'inspectorResponseHeaders', 'inspectorResponseDelayMs'])),
@@ -901,7 +917,7 @@
         h('span', null, 'No implementation yet? "Install mock & use as target" serves the spec\'s own examples from this server so you can rehearse the run.'))));
 
     el.append(section('urls', 'URLs and reserved paths',
-      h('p', null, 'These paths belong to the tool. ', h('b', null, 'Every other path is captured by the Inspector.')),
+      h('p', null, 'These paths belong to the tool. ', h('b', null, 'Every other path is captured by the Inspector'), ' and answered with its default response or a matching rule. Calls to /v1 and /oauth are recorded on the Inspector too (with their real responses) unless "Record /v1 & /oauth" is switched off; the dashboard, docs and health checks are never recorded.'),
       h('div', { class: 'table-wrap' }, h('table', null, h('tbody', null,
         [
           ['/v1/employees, /v1/products, /v1/departments, /v1/categories', 'Mock API with full CRUD (list, create, get, replace, patch, delete). Lists use offset pagination.'],
