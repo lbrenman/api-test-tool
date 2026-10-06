@@ -103,6 +103,7 @@ jobs:
       - name: npm test
         shell: bash
         run: |
+          set +e
           npm test 2>&1 | tee test-output.txt
           status=${PIPESTATUS[0]}
           if [ "$status" != "0" ]; then
