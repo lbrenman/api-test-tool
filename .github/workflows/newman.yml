@@ -55,6 +55,21 @@ jobs:
       - name: Server log
         if: failure()
         run: cat server.log
+      - name: Report Newman failures as annotations
+        if: failure()
+        run: |
+          node -e '
+            const fs = require("fs");
+            for (const f of fs.existsSync("newman-results") ? fs.readdirSync("newman-results") : []) {
+              const x = fs.readFileSync("newman-results/" + f, "utf8");
+              for (const m of x.matchAll(/<testcase name="([^"]*)"[^>]*classname="([^"]*)"[^>]*>([\s\S]*?)<\/testcase>/g)) {
+                const fail = /<failure[^>]*message="([^"]*)"/.exec(m[3]);
+                if (fail) console.log(`::error title=${m[2]}::${m[1]} - ${fail[1]}`.slice(0, 1000));
+              }
+            }
+            const log = fs.existsSync("server.log") ? fs.readFileSync("server.log", "utf8").split("\n").slice(-15).join(" | ") : "";
+            if (log) console.log(`::warning title=server.log tail::${log.slice(0, 1500)}`);
+          '
       - uses: actions/upload-artifact@v4
         if: always()
         with:

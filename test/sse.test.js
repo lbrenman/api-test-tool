@@ -79,7 +79,7 @@ test('stream list and ticks: count, ids, retry, end event, Last-Event-ID resume'
   assert.deepEqual(evs.map((e) => `${e.event}:${e.id ?? ''}`), ['tick:1', 'tick:2', 'tick:3', 'end:']);
   assert.equal(JSON.parse(evs[0].data).n, 1);
 
-  const resumed = parseSse((await api().get('/sse/ticks?interval=20&count=5').set('Last-Event-ID', '3').buffer(true).parse(asText).expect(200)).body);
+  const resumed = parseSse((await api().get('/sse/ticks?interval=50&count=5').set('Last-Event-ID', '3').buffer(true).parse(asText).expect(200)).body);
   assert.deepEqual(resumed.filter((e) => e.event === 'tick').map((e) => e.id), ['4', '5']);
 });
 
@@ -148,12 +148,12 @@ test('auth (header or ?access_token=), chaos before and during the stream, heart
   const forced = await api().get('/sse/ticks').set('X-Force-Error', '503').expect(503);
   assert.match(forced.get('Content-Type'), /problem\+json/);
 
-  const dropped = await stream('/sse/ticks?interval=30&dropAfter=2');
+  const dropped = await stream('/sse/ticks?interval=50&dropAfter=2');
   assert.equal(dropped.headers['x-chaos-injected'], 'dropAfter=2');
   await dropped.until((x) => x.ended, 3000);
   assert.equal(dropped.events().filter((e) => e.event === 'tick').length, 2);
 
-  const broken = await api().get('/sse/ticks?interval=10&count=2&malformedAt=1').buffer(true).parse(asText).expect(200);
+  const broken = await api().get('/sse/ticks?interval=50&count=2&malformedAt=1').buffer(true).parse(asText).expect(200);
   assert.match(broken.body, /data: \{"broken": \n/);
 
   await set('sseHeartbeatSeconds', 1);
