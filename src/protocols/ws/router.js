@@ -69,22 +69,25 @@ module.exports = function wsRouter(ctx) {
     hub.add(conn);
     res.emit('finish'); // lets the inspector record the upgrade (101) now rather than when the socket closes
 
-    // Keep-alive pings and the idle timeout.
-    let lastSeen = Date.now();
+    // Idle timeout (no messages from the client; pongs do not count) and keep-alive pings.
+    let lastMessage = Date.now();
+    let lastPing = Date.now();
     let awaitingPong = false;
-    conn.on('message', () => { lastSeen = Date.now(); });
-    conn.on('pong', () => { awaitingPong = false; lastSeen = Date.now(); });
+    conn.on('message', () => { lastMessage = Date.now(); });
+    conn.on('pong', () => { awaitingPong = false; });
     const pingEvery = settings.get('wsPingIntervalSeconds') * 1000;
     const idle = settings.get('wsIdleTimeoutSeconds') * 1000;
     const timer = setInterval(() => {
       if (!conn.open) return;
-      if (idle && Date.now() - lastSeen > idle) { conn.close(1001, `Idle for ${idle / 1000}s`); return; }
-      if (pingEvery) {
+      const now = Date.now();
+      if (idle && now - lastMessage >= idle) { conn.close(1001, `Idle for ${idle / 1000}s`); return; }
+      if (pingEvery && now - lastPing >= pingEvery) {
         if (awaitingPong) { conn.terminate(); return; }
         awaitingPong = true;
+        lastPing = now;
         conn.ping('keepalive');
       }
-    }, Math.max(1000, Math.min(pingEvery || 30000, idle || 30000)));
+    }, Math.max(500, Math.min(pingEvery || 30000, idle || 30000) / 2));
     timer.unref();
     conn.on('close', () => { clearInterval(timer); hub.delete(conn); });
 
