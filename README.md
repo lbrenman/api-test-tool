@@ -82,7 +82,7 @@ Fly.io, Render and Northflank are covered in [Deployment](#deployment).
 | **OAuth 2.0 server** | client_credentials, authorization_code + PKCE (login/consent page), refresh_token (rotating), introspection (RFC 7662), revocation (RFC 7009), RFC 8414 metadata, JWKS. |
 | **Files** | One shared pool (local disk or S3-compatible) behind multipart, raw, base64-in-JSON, tus resumable, presigned URLs, range downloads (206) and chunked downloads. Sample CSV, XLSX, JSON, PNG, JPG, PDF, TXT, ZIP and a 10 MB binary are generated on seed. |
 | **Inspector** | Catch-all capture with the actual path, live stream (SSE), detected auth (Basic user, decoded JWT, API keys), pretty bodies and multipart parts, copy as curl, replay, auto-forward, configurable responses and path rules. |
-| **Generated OpenAPI** | `/openapi.json` and `/openapi.yaml` (OAS 3.1) are regenerated from the live settings: server URL, date format, auth scheme, required headers, chaos headers, all pagination paths and the file endpoints. Swagger UI is at `/docs`. |
+| **Generated OpenAPI** | Two OAS 3.1 specs, regenerated from the live settings. **Mock Data API** (`/openapi.json`, `/openapi.yaml`) is for integrations: `/v1` resources, every pagination path, the file endpoints and the OAuth token endpoint, reflecting the server URL, date format, auth scheme, required headers and chaos headers. **Admin API** (`/admin/api/openapi.json`, `.yaml`, password protected) is for operators and scripts: settings, seeding, files, OAuth clients, inspector, tester, `/health` and `/ready`. Swagger UI at `/docs` shows both (`/docs?spec=admin` for the admin spec). |
 | **API tester** | Upload, paste or URL load for OAS 3.0, 3.1 and Swagger 2.0. Spec lint, per-operation "try it" with generated samples that honour `pattern`/`format`/`enum`/limits, auth profiles (none, API key, Basic, Bearer, OAuth2 client credentials), response validation, run-all contract mode with ID chaining and negative tests, run history, and JSON and HTML reports. "Mock from spec" serves a spec's examples from this tool. |
 | **Dashboard** | Overview, Settings (with source badges and resets), Data, Inspector, Files, Auth, Chaos, Headers, OpenAPI, API Tester, and About & Help (what each page does, quick starts, reserved paths, handy headers). Every page has a "? Help" link, and every main component has a **"?" guide** (hover, focus or tap) with numbered steps for using it in your integration or tests and copy-ready curl commands. The curls use the resolved base URL, the auth mode that is active right now (from `AUTH_MODE` or a dashboard override — the guides never change it), and any required request headers; in `jwt`/`oauth2` mode they fetch a token first, and in `hmac` mode they sign the request with `openssl`. The tester's **Try it → Request** tab adds "Copy as curl" for the exact call it sent. Responsive, with light and dark themes. |
 
@@ -156,8 +156,9 @@ These prefixes are reserved: `/v1`, `/oauth`, `/.well-known`, `/admin`, `/dashbo
 |---|---|
 | `GET /health` | Liveness, version, uptime, DB and file-store checks, settings summary (no secrets), data counts |
 | `GET /ready` | Readiness |
-| `GET /openapi.json`, `GET /openapi.yaml` | Live OpenAPI 3.1 for the current settings |
-| `GET /docs` | Swagger UI (OAuth2 + PKCE pre-configured for `demo-client`) |
+| `GET /openapi.json`, `GET /openapi.yaml` | Live OpenAPI 3.1 for the **mock data API** (`/v1`, `/oauth/token`). Import this into integrations. |
+| `GET /admin/api/openapi.json`, `GET /admin/api/openapi.yaml` | Live OpenAPI 3.1 for the **admin API** (`/admin/api/*`, `/health`, `/ready`). Password protected. |
+| `GET /docs` | Swagger UI with a tab per spec: mock data API (OAuth2 + PKCE pre-configured for `demo-client`) and admin API (`?spec=admin`, needs dashboard sign-in) |
 | `/v1/employees`, `/v1/products`, `/v1/departments`, `/v1/categories` | Full CRUD (`/{id}` for items); lists use offset pagination |
 | `GET /v1/departments/{id}/employees`, `GET /v1/categories/{id}/products` | Nested collections |
 | `GET /v1/p/{scheme}/{resource}` | Pagination variants: `offset`, `page`, `cursor`, `keyset`, `link`, `hal`, `token` |
@@ -165,7 +166,7 @@ These prefixes are reserved: `/v1`, `/oauth`, `/.well-known`, `/admin`, `/dashbo
 | `/oauth/token`, `/oauth/authorize`, `/oauth/introspect`, `/oauth/revoke` | OAuth 2.0 server |
 | `/.well-known/oauth-authorization-server`, `/.well-known/openid-configuration`, `/.well-known/jwks.json` | Discovery and JWKS |
 | `/samples/*` | Bundled specs (handy for the tester's URL loader) |
-| `/dashboard`, `/admin/api/*` | Dashboard and its API (password protected) |
+| `/dashboard`, `/admin/api/*` | Dashboard and its API (password protected; described by `/admin/api/openapi.json`) |
 | `/admin/api/tester/*` | API tester backend |
 | anything else | Inspector catch-all |
 
@@ -173,7 +174,7 @@ These prefixes are reserved: `/v1`, `/oauth`, `/.well-known`, `/admin`, `/dashbo
 
 ## Authentication
 
-Auth is global and applies to `/v1/*`. Health, docs, OpenAPI, OAuth and well-known endpoints are always open. Change the mode with `AUTH_MODE` or on the dashboard's **Auth** page. The change takes effect immediately, and `/openapi.json` updates its `securitySchemes` to match.
+Auth is global and applies to `/v1/*`. Health, docs, the mock data API spec (`/openapi.json`), OAuth and well-known endpoints are always open; the admin API and its spec use the dashboard password instead. Change the mode with `AUTH_MODE` or on the dashboard's **Auth** page. The change takes effect immediately, and `/openapi.json` updates its `securitySchemes` to match.
 
 Below, `B` is your base URL, for example `B=http://localhost:3000`.
 
@@ -522,7 +523,7 @@ src/
   middleware/          requestId, headers, cors, ratelimit, auth, chaos, idempotency, body, adminAuth, inspector
   routes/              platform, oauth, resources, files, admin, tester
   services/            seed, schemas, resources, query, paginate, dateFormat, files + fileStore/, sampleFiles,
-                       keys, oauth, inspector, openapiGen, tester/ (load, lint, sample, validate, runner, auth, mock, report)
+                       keys, oauth, inspector, openapiGen (data spec), openapiAdminGen (admin spec), tester/ (load, lint, sample, validate, runner, auth, mock, report)
   public/              dashboard (index.html, app.js, styles.css)
 samples/               Supplier_Order_Collaboration_OpenAPI_3_1.yaml, Inventory_Swagger_2_0.yaml
 postman/               collection, environment, fixtures

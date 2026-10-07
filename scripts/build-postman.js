@@ -107,8 +107,20 @@ const collectionTest = [
 const platform = folder('Platform', [
   req('Health', 'GET', '/health', { tests: [status(200), "pm.test('ok', () => pm.expect(pm.response.json().status).to.eql('ok'));", "pm.environment.set('totalEmployees', pm.response.json().data.employees); pm.environment.set('totalProducts', pm.response.json().data.products);"] }),
   req('Ready', 'GET', '/ready', { tests: [status(200)] }),
-  req('OpenAPI JSON', 'GET', '/openapi.json', { tests: [status(200), "pm.test('3.1', () => pm.expect(pm.response.json().openapi).to.eql('3.1.0'));", "pm.test('auth mode reflected', () => { const s = pm.response.json().components.securitySchemes; const m = pm.environment.get('authMode'); if (m === 'none') pm.expect(Object.keys(s)).to.have.length(0); else pm.expect(Object.keys(s)).to.have.length(1); });"] }),
+  req('OpenAPI JSON', 'GET', '/openapi.json', { tests: [status(200), "pm.test('3.1', () => pm.expect(pm.response.json().openapi).to.eql('3.1.0'));", "pm.test('auth mode reflected', () => { const s = pm.response.json().components.securitySchemes; const m = pm.environment.get('authMode'); if (m === 'none') pm.expect(Object.keys(s)).to.have.length(0); else pm.expect(Object.keys(s)).to.have.length(1); });", "pm.test('data API only (no admin or health paths)', () => pm.expect(Object.keys(pm.response.json().paths).filter((p) => !p.startsWith('/v1/') && !p.startsWith('/oauth/'))).to.have.length(0));"] }),
   req('OpenAPI YAML', 'GET', '/openapi.yaml', { tests: [status(200), "pm.test('yaml', () => pm.expect(pm.response.text()).to.include('openapi: 3.1.0'));"] }),
+  req('OpenAPI JSON (admin API)', 'GET', '/admin/api/openapi.json', {
+    description: 'The admin / control-plane spec. Needs the dashboard password when ADMIN_PASSWORD is set (401 otherwise).',
+    tests: [
+      "pm.test('200 or 401 (password set)', () => pm.expect([200, 401]).to.include(pm.response.code));",
+      "if (pm.response.code === 200) {",
+      "  const d = pm.response.json();",
+      "  pm.test('admin spec', () => pm.expect(d.info.title).to.include('Admin API'));",
+      "  pm.test('no /v1 paths', () => pm.expect(Object.keys(d.paths).filter((p) => p.startsWith('/v1'))).to.have.length(0));",
+      "  pm.test('health documented here', () => pm.expect(d.paths).to.have.property('/health'));",
+      "}",
+    ],
+  }),
   req('JWKS', 'GET', '/.well-known/jwks.json', { tests: [status(200), "pm.test('RSA key', () => pm.expect(pm.response.json().keys[0].kty).to.eql('RSA'));"] }),
   req('OAuth metadata (RFC 8414)', 'GET', '/.well-known/oauth-authorization-server', { tests: [status(200), "pm.test('token endpoint', () => pm.expect(pm.response.json().token_endpoint).to.include('/oauth/token'));"] }),
 ]);

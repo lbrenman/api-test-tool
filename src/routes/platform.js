@@ -1,5 +1,6 @@
 'use strict';
-// /health, /ready, /openapi.json|yaml, /docs (Swagger UI), /samples/* (bundled specs).
+// /health, /ready, /openapi.json|yaml (mock data API spec), /docs (Swagger UI for the data and admin specs),
+// /samples/* (bundled specs). The admin spec itself is served by the admin router at /admin/api/openapi.json|yaml.
 const express = require('express');
 const path = require('node:path');
 const yaml = require('js-yaml');
@@ -8,7 +9,7 @@ const pkg = require('../../package.json');
 
 const STARTED = Date.now();
 
-module.exports = function platformRouter(ctx) {
+module.exports = function platformRouter(ctx, { adminAuth } = {}) {
   const r = express.Router();
   const { settings, repo, files, resources } = ctx;
 
@@ -63,15 +64,33 @@ module.exports = function platformRouter(ctx) {
     res.type('application/yaml').send(yaml.dump(await generateOpenApi(ctx, req), { noRefs: true, lineWidth: 120 }));
   });
 
+  // Swagger UI for both documents. ?spec=admin shows the admin API (dashboard sign-in required when a password is set).
   r.get('/docs', (req, res) => {
-    res.type('html').send(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>API Test Tool · API docs</title>
-<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/swagger-ui/5.17.14/swagger-ui.min.css">
-<style>body{margin:0}.topbar{display:none}</style></head><body><div id="ui"></div>
+    const isAdmin = req.query.spec === 'admin';
+    const allowed = !isAdmin || !adminAuth || adminAuth.valid(req);
+    const tab = (key, label, hint) => `<a class="tab${(key === 'admin') === isAdmin ? ' on' : ''}" href="/docs${key === 'admin' ? '?spec=admin' : ''}">${label}<span>${hint}</span></a>`;
+    const intro = isAdmin
+      ? 'Control plane for the tool: settings, data seeding, files, OAuth clients, the inspector and the contract tester, plus /health and /ready. For operators and scripts. Requires the dashboard password.'
+      : 'The mock API your integrations call: /v1 resources, pagination schemes, files and the OAuth token endpoint. Import this spec into your integration platform or Postman.';
+    const specUrl = isAdmin ? '/admin/api/openapi.json' : '/openapi.json';
+    const ui = allowed
+      ? `<div id="ui"></div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/swagger-ui/5.17.14/swagger-ui-bundle.min.js"></script>
-<script>window.ui = SwaggerUIBundle({ url: '/openapi.json', dom_id: '#ui', deepLinking: true, persistAuthorization: true,
+<script>window.ui = SwaggerUIBundle({ url: '${specUrl}', dom_id: '#ui', deepLinking: true, persistAuthorization: true,
   oauth2RedirectUrl: location.origin + '/docs/oauth2-redirect' });
-window.ui.initOAuth({ clientId: 'demo-client', usePkceWithAuthorizationCodeGrant: true });</script></body></html>`);
+${isAdmin ? '' : "window.ui.initOAuth({ clientId: 'demo-client', usePkceWithAuthorizationCodeGrant: true });"}</script>`
+      : '<p class="gate">Sign in to the <a href="/dashboard">dashboard</a> first, then reload this page.</p>';
+    res.type('html').send(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>API Test Tool · ${isAdmin ? 'Admin API' : 'Mock Data API'} docs</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/swagger-ui/5.17.14/swagger-ui.min.css">
+<style>body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif}.topbar{display:none}
+.att{background:#1f2937;color:#e5e7eb;padding:12px 20px}.att .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.att b{margin-right:12px}.tab{color:#cbd5e1;text-decoration:none;padding:6px 12px;border-radius:6px;border:1px solid #374151;display:flex;flex-direction:column;font-size:14px}
+.tab span{font-size:11px;color:#94a3b8}.tab.on{background:#2563eb;border-color:#2563eb;color:#fff}.tab.on span{color:#dbeafe}
+.att p{margin:8px 0 0;font-size:13px;color:#cbd5e1;max-width:900px}.att a.dash{color:#93c5fd;margin-left:auto;font-size:13px}
+.gate{padding:24px;font-size:15px}</style></head><body>
+<div class="att"><div class="row"><b>API Test Tool</b>${tab('data', 'Mock Data API', 'for integrations · /openapi.json')}${tab('admin', 'Admin API', 'for operators · /admin/api/openapi.json')}<a class="dash" href="/dashboard">Dashboard →</a></div><p>${intro}</p></div>
+${ui}</body></html>`);
   });
 
   r.get('/docs/oauth2-redirect', (req, res) => {

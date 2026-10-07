@@ -112,7 +112,7 @@ async function createApp(opts = {}) {
   app.use(logAll(ctx)); // records /v1 and /oauth traffic when INSPECTOR_LOG_ALL is on
 
   // Platform + OAuth (always open)
-  app.use(platformRouter(ctx));
+  app.use(platformRouter(ctx, { adminAuth }));
   app.use(oauthRouter(ctx));
 
   // Dashboard + admin API

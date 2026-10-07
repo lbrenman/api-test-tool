@@ -88,7 +88,7 @@
   ],
   "item": [
     {
-      "id": "att-0007",
+      "id": "att-0008",
       "name": "Platform",
       "item": [
         {
@@ -173,7 +173,8 @@
                 "exec": [
                   "pm.test('status 200', () => pm.response.to.have.status(200));",
                   "pm.test('3.1', () => pm.expect(pm.response.json().openapi).to.eql('3.1.0'));",
-                  "pm.test('auth mode reflected', () => { const s = pm.response.json().components.securitySchemes; const m = pm.environment.get('authMode'); if (m === 'none') pm.expect(Object.keys(s)).to.have.length(0); else pm.expect(Object.keys(s)).to.have.length(1); });"
+                  "pm.test('auth mode reflected', () => { const s = pm.response.json().components.securitySchemes; const m = pm.environment.get('authMode'); if (m === 'none') pm.expect(Object.keys(s)).to.have.length(0); else pm.expect(Object.keys(s)).to.have.length(1); });",
+                  "pm.test('data API only (no admin or health paths)', () => pm.expect(Object.keys(pm.response.json().paths).filter((p) => !p.startsWith('/v1/') && !p.startsWith('/oauth/'))).to.have.length(0));"
                 ]
               }
             }
@@ -210,6 +211,43 @@
         },
         {
           "id": "att-0005",
+          "name": "OpenAPI JSON (admin API)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/admin/api/openapi.json",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "admin",
+                "api",
+                "openapi.json"
+              ]
+            },
+            "description": "The admin / control-plane spec. Needs the dashboard password when ADMIN_PASSWORD is set (401 otherwise)."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 or 401 (password set)', () => pm.expect([200, 401]).to.include(pm.response.code));",
+                  "if (pm.response.code === 200) {",
+                  "  const d = pm.response.json();",
+                  "  pm.test('admin spec', () => pm.expect(d.info.title).to.include('Admin API'));",
+                  "  pm.test('no /v1 paths', () => pm.expect(Object.keys(d.paths).filter((p) => p.startsWith('/v1'))).to.have.length(0));",
+                  "  pm.test('health documented here', () => pm.expect(d.paths).to.have.property('/health'));",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "att-0006",
           "name": "JWKS",
           "request": {
             "method": "GET",
@@ -239,7 +277,7 @@
           ]
         },
         {
-          "id": "att-0006",
+          "id": "att-0007",
           "name": "OAuth metadata (RFC 8414)",
           "request": {
             "method": "GET",
@@ -271,11 +309,11 @@
       ]
     },
     {
-      "id": "att-000e",
+      "id": "att-000f",
       "name": "OAuth server",
       "item": [
         {
-          "id": "att-0008",
+          "id": "att-0009",
           "name": "Token — client_credentials",
           "request": {
             "method": "POST",
@@ -332,7 +370,7 @@
           ]
         },
         {
-          "id": "att-0009",
+          "id": "att-000a",
           "name": "Introspect — active",
           "request": {
             "method": "POST",
@@ -385,7 +423,7 @@
           ]
         },
         {
-          "id": "att-000a",
+          "id": "att-000b",
           "name": "Revoke",
           "request": {
             "method": "POST",
@@ -436,7 +474,7 @@
           ]
         },
         {
-          "id": "att-000b",
+          "id": "att-000c",
           "name": "Introspect — revoked",
           "request": {
             "method": "POST",
@@ -488,7 +526,7 @@
           ]
         },
         {
-          "id": "att-000c",
+          "id": "att-000d",
           "name": "Token — bad secret → 401",
           "request": {
             "method": "POST",
@@ -544,7 +582,7 @@
           ]
         },
         {
-          "id": "att-000d",
+          "id": "att-000e",
           "name": "Token — invalid scope → 400",
           "request": {
             "method": "POST",
@@ -602,11 +640,11 @@
       ]
     },
     {
-      "id": "att-000h",
+      "id": "att-000i",
       "name": "Auth mode",
       "item": [
         {
-          "id": "att-000f",
+          "id": "att-000g",
           "name": "Without credentials",
           "request": {
             "method": "GET",
@@ -643,7 +681,7 @@
           ]
         },
         {
-          "id": "att-000g",
+          "id": "att-000h",
           "name": "With credentials",
           "request": {
             "method": "GET",
@@ -676,11 +714,11 @@
       "description": "The collection pre-request script authenticates /v1 calls according to {{authMode}}."
     },
     {
-      "id": "att-000y",
+      "id": "att-000z",
       "name": "Employees CRUD",
       "item": [
         {
-          "id": "att-000i",
+          "id": "att-000j",
           "name": "Create (201 + Location + ETag)",
           "request": {
             "method": "POST",
@@ -726,7 +764,7 @@
           ]
         },
         {
-          "id": "att-000j",
+          "id": "att-000k",
           "name": "Get (ETag)",
           "request": {
             "method": "GET",
@@ -759,7 +797,7 @@
           ]
         },
         {
-          "id": "att-000k",
+          "id": "att-000l",
           "name": "Get with If-None-Match → 304",
           "request": {
             "method": "GET",
@@ -794,7 +832,7 @@
           ]
         },
         {
-          "id": "att-000l",
+          "id": "att-000m",
           "name": "Patch with stale If-Match → 412",
           "request": {
             "method": "PATCH",
@@ -839,7 +877,7 @@
           ]
         },
         {
-          "id": "att-000m",
+          "id": "att-000n",
           "name": "Patch (merge patch, If-Match)",
           "request": {
             "method": "PATCH",
@@ -883,7 +921,7 @@
           ]
         },
         {
-          "id": "att-000n",
+          "id": "att-000o",
           "name": "Put (full replace)",
           "request": {
             "method": "PUT",
@@ -928,7 +966,7 @@
           ]
         },
         {
-          "id": "att-000o",
+          "id": "att-000p",
           "name": "Create with Idempotency-Key",
           "request": {
             "method": "POST",
@@ -985,7 +1023,7 @@
           ]
         },
         {
-          "id": "att-000p",
+          "id": "att-000q",
           "name": "Replay same key → original response",
           "request": {
             "method": "POST",
@@ -1034,7 +1072,7 @@
           ]
         },
         {
-          "id": "att-000q",
+          "id": "att-000r",
           "name": "Same key, different body → 409",
           "request": {
             "method": "POST",
@@ -1083,7 +1121,7 @@
           ]
         },
         {
-          "id": "att-000r",
+          "id": "att-000s",
           "name": "Validation → 422",
           "request": {
             "method": "POST",
@@ -1129,7 +1167,7 @@
           ]
         },
         {
-          "id": "att-000s",
+          "id": "att-000t",
           "name": "Malformed JSON → 400",
           "request": {
             "method": "POST",
@@ -1169,7 +1207,7 @@
           ]
         },
         {
-          "id": "att-000t",
+          "id": "att-000u",
           "name": "Delete → 204",
           "request": {
             "method": "DELETE",
@@ -1199,7 +1237,7 @@
           ]
         },
         {
-          "id": "att-000u",
+          "id": "att-000v",
           "name": "Get deleted → 404",
           "request": {
             "method": "GET",
@@ -1231,7 +1269,7 @@
           ]
         },
         {
-          "id": "att-000v",
+          "id": "att-000w",
           "name": "Delete department in use → 409",
           "request": {
             "method": "DELETE",
@@ -1263,7 +1301,7 @@
           ]
         },
         {
-          "id": "att-000w",
+          "id": "att-000x",
           "name": "Nested: department employees",
           "request": {
             "method": "GET",
@@ -1301,7 +1339,7 @@
           ]
         },
         {
-          "id": "att-000x",
+          "id": "att-000y",
           "name": "Nested: category products",
           "request": {
             "method": "GET",
@@ -1341,11 +1379,11 @@
       ]
     },
     {
-      "id": "att-0014",
+      "id": "att-0015",
       "name": "Query: fields / filter / sort",
       "item": [
         {
-          "id": "att-000z",
+          "id": "att-0010",
           "name": "Sparse fieldset",
           "request": {
             "method": "GET",
@@ -1385,7 +1423,7 @@
           ]
         },
         {
-          "id": "att-0010",
+          "id": "att-0011",
           "name": "Range filter + sort",
           "request": {
             "method": "GET",
@@ -1435,7 +1473,7 @@
           ]
         },
         {
-          "id": "att-0011",
+          "id": "att-0012",
           "name": "Equality / list filter",
           "request": {
             "method": "GET",
@@ -1479,7 +1517,7 @@
           ]
         },
         {
-          "id": "att-0012",
+          "id": "att-0013",
           "name": "Text search",
           "request": {
             "method": "GET",
@@ -1519,7 +1557,7 @@
           ]
         },
         {
-          "id": "att-0013",
+          "id": "att-0014",
           "name": "Unknown filter field → 400",
           "request": {
             "method": "GET",
@@ -1558,11 +1596,11 @@
       ]
     },
     {
-      "id": "att-001d",
+      "id": "att-001e",
       "name": "Pagination (follow to the end)",
       "item": [
         {
-          "id": "att-0015",
+          "id": "att-0016",
           "name": "Reset walkers",
           "request": {
             "method": "GET",
@@ -1595,7 +1633,7 @@
           ]
         },
         {
-          "id": "att-0016",
+          "id": "att-0017",
           "name": "offset",
           "request": {
             "method": "GET",
@@ -1646,7 +1684,7 @@
           ]
         },
         {
-          "id": "att-0017",
+          "id": "att-0018",
           "name": "page",
           "request": {
             "method": "GET",
@@ -1697,7 +1735,7 @@
           ]
         },
         {
-          "id": "att-0018",
+          "id": "att-0019",
           "name": "cursor",
           "request": {
             "method": "GET",
@@ -1748,7 +1786,7 @@
           ]
         },
         {
-          "id": "att-0019",
+          "id": "att-001a",
           "name": "keyset",
           "request": {
             "method": "GET",
@@ -1799,7 +1837,7 @@
           ]
         },
         {
-          "id": "att-001a",
+          "id": "att-001b",
           "name": "link (RFC 8288)",
           "request": {
             "method": "GET",
@@ -1836,7 +1874,7 @@
           ]
         },
         {
-          "id": "att-001b",
+          "id": "att-001c",
           "name": "HAL",
           "request": {
             "method": "GET",
@@ -1871,7 +1909,7 @@
           ]
         },
         {
-          "id": "att-001c",
+          "id": "att-001d",
           "name": "token (nextPageToken)",
           "request": {
             "method": "GET",
@@ -1924,11 +1962,11 @@
       ]
     },
     {
-      "id": "att-001m",
+      "id": "att-001n",
       "name": "Chaos forcing headers",
       "item": [
         {
-          "id": "att-001e",
+          "id": "att-001f",
           "name": "X-Force-Error: 503",
           "request": {
             "method": "GET",
@@ -1967,7 +2005,7 @@
           ]
         },
         {
-          "id": "att-001f",
+          "id": "att-001g",
           "name": "X-Force-Error: 429",
           "request": {
             "method": "GET",
@@ -2004,7 +2042,7 @@
           ]
         },
         {
-          "id": "att-001g",
+          "id": "att-001h",
           "name": "X-Force-Status: 202",
           "request": {
             "method": "GET",
@@ -2040,7 +2078,7 @@
           ]
         },
         {
-          "id": "att-001h",
+          "id": "att-001i",
           "name": "X-Force-Latency: 300",
           "request": {
             "method": "GET",
@@ -2076,7 +2114,7 @@
           ]
         },
         {
-          "id": "att-001i",
+          "id": "att-001j",
           "name": "X-Force-Error: malformed-json",
           "request": {
             "method": "GET",
@@ -2112,7 +2150,7 @@
           ]
         },
         {
-          "id": "att-001j",
+          "id": "att-001k",
           "name": "X-Force-Error: wrong-content-type",
           "request": {
             "method": "GET",
@@ -2147,7 +2185,7 @@
           ]
         },
         {
-          "id": "att-001k",
+          "id": "att-001l",
           "name": "X-Force-Error: empty-body",
           "request": {
             "method": "GET",
@@ -2182,7 +2220,7 @@
           ]
         },
         {
-          "id": "att-001l",
+          "id": "att-001m",
           "name": "Unknown chaos type → 400",
           "request": {
             "method": "GET",
@@ -2221,11 +2259,11 @@
       ]
     },
     {
-      "id": "att-0026",
+      "id": "att-0027",
       "name": "Files",
       "item": [
         {
-          "id": "att-001n",
+          "id": "att-001o",
           "name": "List",
           "request": {
             "method": "GET",
@@ -2261,7 +2299,7 @@
           ]
         },
         {
-          "id": "att-001o",
+          "id": "att-001p",
           "name": "Multipart upload",
           "request": {
             "method": "POST",
@@ -2309,7 +2347,7 @@
           ]
         },
         {
-          "id": "att-001p",
+          "id": "att-001q",
           "name": "Download multipart file",
           "request": {
             "method": "GET",
@@ -2342,7 +2380,7 @@
           ]
         },
         {
-          "id": "att-001q",
+          "id": "att-001r",
           "name": "Raw PUT",
           "request": {
             "method": "PUT",
@@ -2384,7 +2422,7 @@
           ]
         },
         {
-          "id": "att-001r",
+          "id": "att-001s",
           "name": "Base64 upload",
           "request": {
             "method": "POST",
@@ -2429,7 +2467,7 @@
           ]
         },
         {
-          "id": "att-001s",
+          "id": "att-001t",
           "name": "Base64 download",
           "request": {
             "method": "GET",
@@ -2461,7 +2499,7 @@
           ]
         },
         {
-          "id": "att-001t",
+          "id": "att-001u",
           "name": "Presign PUT",
           "request": {
             "method": "POST",
@@ -2506,7 +2544,7 @@
           ]
         },
         {
-          "id": "att-001u",
+          "id": "att-001v",
           "name": "Upload to presigned URL",
           "request": {
             "method": "PUT",
@@ -2540,7 +2578,7 @@
           ]
         },
         {
-          "id": "att-001v",
+          "id": "att-001w",
           "name": "Presign GET",
           "request": {
             "method": "POST",
@@ -2585,7 +2623,7 @@
           ]
         },
         {
-          "id": "att-001w",
+          "id": "att-001x",
           "name": "Download from presigned URL",
           "request": {
             "method": "GET",
@@ -2611,7 +2649,7 @@
           ]
         },
         {
-          "id": "att-001x",
+          "id": "att-001y",
           "name": "Range download → 206",
           "request": {
             "method": "GET",
@@ -2649,7 +2687,7 @@
           ]
         },
         {
-          "id": "att-001y",
+          "id": "att-001z",
           "name": "Range not satisfiable → 416",
           "request": {
             "method": "GET",
@@ -2687,7 +2725,7 @@
           ]
         },
         {
-          "id": "att-001z",
+          "id": "att-0020",
           "name": "Chunked download",
           "request": {
             "method": "GET",
@@ -2719,7 +2757,7 @@
           ]
         },
         {
-          "id": "att-0020",
+          "id": "att-0021",
           "name": "tus: create",
           "request": {
             "method": "POST",
@@ -2763,7 +2801,7 @@
           ]
         },
         {
-          "id": "att-0021",
+          "id": "att-0022",
           "name": "tus: patch chunk 1",
           "request": {
             "method": "PATCH",
@@ -2806,7 +2844,7 @@
           ]
         },
         {
-          "id": "att-0022",
+          "id": "att-0023",
           "name": "tus: head",
           "request": {
             "method": "HEAD",
@@ -2837,7 +2875,7 @@
           ]
         },
         {
-          "id": "att-0023",
+          "id": "att-0024",
           "name": "tus: patch chunk 2 (completes)",
           "request": {
             "method": "PATCH",
@@ -2881,7 +2919,7 @@
           ]
         },
         {
-          "id": "att-0024",
+          "id": "att-0025",
           "name": "tus file in the shared pool (range)",
           "request": {
             "method": "GET",
@@ -2918,7 +2956,7 @@
           ]
         },
         {
-          "id": "att-0025",
+          "id": "att-0026",
           "name": "Delete raw file",
           "request": {
             "method": "DELETE",
@@ -2950,11 +2988,11 @@
       ]
     },
     {
-      "id": "att-0029",
+      "id": "att-002a",
       "name": "Headers & inspector",
       "item": [
         {
-          "id": "att-0027",
+          "id": "att-0028",
           "name": "Request id echo",
           "request": {
             "method": "GET",
@@ -2994,7 +3032,7 @@
           ]
         },
         {
-          "id": "att-0028",
+          "id": "att-0029",
           "name": "Inspector catch-all",
           "request": {
             "method": "POST",
