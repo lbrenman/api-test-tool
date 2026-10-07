@@ -227,7 +227,7 @@
 
   // ---------------------------------------------------------------- shell & routing
   const PAGES = [
-    ['overview', 'Overview'], ['settings', 'Settings'], ['data', 'Data'], ['inspector', 'Inspector'], ['files', 'Files'],
+    ['overview', 'Overview'], ['settings', 'Settings'], ['data', 'Data'], ['inspector', 'Inspector'], ['webhooks', 'Webhooks'], ['files', 'Files'],
     ['auth', 'Auth'], ['chaos', 'Chaos'], ['headers', 'Headers'], ['protocols', 'Protocols'], ['openapi', 'OpenAPI'], ['tester', 'API Tester'],
     ['help', 'About & Help'],
   ];
@@ -237,11 +237,12 @@
     settings: { purpose: 'Every setting in one place. Environment variables set defaults; changes here override them and survive restarts. Badges show where each value comes from.' },
     data: { purpose: 'The seeded mock data (employees, products, departments, categories): counts, a preview, re-seed with different sizes, or clear it.' },
     inspector: { purpose: 'Every call made to this server shows up here live, with headers, auth, body and the response that was returned: webhooks and other calls to unreserved paths, plus mock API (/v1), SOAP (/soap) and OAuth (/oauth) calls. Filter by source, or switch API recording off with the checkbox at the top of the page.' },
+    webhooks: { purpose: 'Outgoing webhooks: when an employee, product, department or category is created, updated or deleted (through any protocol), POST its type and id to URLs you choose. Stored in the database, so they survive restarts; every delivery is logged with the response.' },
     files: { purpose: 'The shared file pool used by every file protocol (multipart, raw, base64, tus, presigned, range, chunked). Upload, download, delete or regenerate samples.' },
     auth: { purpose: 'Choose how /v1 calls must authenticate (none, API key, Basic, Bearer, JWT, OAuth2, HMAC), see the credentials, manage OAuth clients and get test tokens.' },
     chaos: { purpose: 'Make the mock API misbehave on purpose: random errors, latency, timeouts, broken JSON and rate limits, globally or per route, so you can test client error handling.' },
     headers: { purpose: 'Headers added to every response, and headers every /v1 request must carry (missing ones return 400).' },
-    protocols: { purpose: 'The same mock data over other protocols: SOAP 1.1/1.2 services with live WSDLs, WebSocket channels (echo, JSON-RPC, live change feed) with an AsyncAPI document and a live console, and Server-Sent Events streams (change feed with replay, ticks, LLM-style streaming) with a live viewer. Auth, chaos, rate limits and required headers apply as on /v1.' },
+    protocols: { purpose: 'The same mock data over other protocols: SOAP 1.1/1.2 services with live WSDLs, WebSocket channels (echo, JSON-RPC, live change feed) with an AsyncAPI document and a live console, Server-Sent Events streams (change feed with replay, ticks, LLM-style streaming) with a live viewer, GraphQL (queries, mutations, subscriptions) and OData v4, each with a console. Auth, chaos, rate limits and required headers apply as on /v1.' },
     openapi: { purpose: 'Two live OpenAPI 3.1 specs: the Mock Data API (/openapi.json) for integrations to import, and the Admin API (/admin/api/openapi.json) for scripting the tool itself.' },
     tester: { purpose: 'Test an API you built: load its OpenAPI spec (REST), WSDL (SOAP) or AsyncAPI document (WebSocket), call your implementation, and check every response or message against the contract.' },
     help: { purpose: 'What this tool does and how to use each page.' },
@@ -663,6 +664,152 @@
         clear(hmacOut).append(h('div', { class: 'stack' }, h('div', { class: 'small muted' }, 'Canonical string (valid for the skew window):'), codeBlock(r.canonical), kv(r.headers),
           h('button', { class: 'small', onclick: () => copy(`curl -s '${location.origin}${hmacPath.value}' -X ${hmacMethod.value} -H 'Authorization: ${r.headers.Authorization}' -H 'X-Timestamp: ${r.headers['X-Timestamp']}'${hmacBody.value ? ` -H 'Content-Type: application/json' --data-binary '${hmacBody.value.replace(/'/g, "'\\''")}'` : ''}`) }, 'Copy curl')));
       }) }, 'Sign'), hmacOut));
+  };
+
+  // ---------------------------------------------------------------- webhooks
+  VIEWS.webhooks = async (el) => {
+    await loadSettings();
+    const RES = ['employees', 'products', 'departments', 'categories'];
+    const EVS = ['created', 'updated', 'deleted'];
+    const data = await api('GET', '/webhooks');
+    const hooks = data.items;
+    el.append(header('Webhooks', 'POST to your URLs when mock data is created, updated or deleted, through any protocol.'));
+    if (!data.enabled) el.append(h('div', { class: 'card', style: { borderColor: 'var(--warn)' } }, h('b', null, 'Deliveries are paused'), ' — webhooksEnabled is off in the settings below. Definitions are kept.'));
+
+    // ---- form (add or edit)
+    let editing = null;
+    const name = h('input', { type: 'text', placeholder: 'e.g. New employees to my integration' });
+    const url = h('input', { type: 'text', class: 'mono', placeholder: 'https://your-integration.example.com/hooks/employees' });
+    const allRes = h('input', { type: 'checkbox', checked: true });
+    const resBoxes = Object.fromEntries(RES.map((r) => [r, h('input', { type: 'checkbox' })]));
+    const evBoxes = Object.fromEntries(EVS.map((e) => [e, h('input', { type: 'checkbox', checked: e !== 'deleted' })]));
+    const includeData = h('input', { type: 'checkbox' });
+    const enabled = h('input', { type: 'checkbox', checked: true });
+    const secret = h('input', { type: 'text', class: 'mono', placeholder: 'optional: signs each delivery (X-Webhook-Signature)' });
+    const headersIn = h('textarea', { rows: 3, class: 'mono', spellcheck: 'false', placeholder: 'optional, one per line:\nX-API-Key: your-integration-key' });
+    const formTitle = h('span', null, 'Add a webhook');
+    const saveBtn = h('button', { class: 'primary' }, 'Add webhook');
+    const cancelBtn = h('button', { style: { display: 'none' } }, 'Cancel edit');
+    const syncRes = () => { for (const b of Object.values(resBoxes)) b.disabled = allRes.checked; };
+    allRes.addEventListener('change', syncRes);
+    syncRes();
+    const check = (box, label) => h('label', { class: 'check' }, box, h('span', null, label));
+    const reset = () => {
+      editing = null;
+      name.value = ''; url.value = ''; secret.value = ''; headersIn.value = '';
+      allRes.checked = true; for (const b of Object.values(resBoxes)) b.checked = false;
+      for (const [e, b] of Object.entries(evBoxes)) b.checked = e !== 'deleted';
+      includeData.checked = false; enabled.checked = true;
+      secret.placeholder = 'optional: signs each delivery (X-Webhook-Signature)';
+      formTitle.textContent = 'Add a webhook'; saveBtn.textContent = 'Add webhook'; cancelBtn.style.display = 'none';
+      syncRes();
+    };
+    const edit = (hk) => {
+      editing = hk;
+      name.value = hk.name || ''; url.value = hk.url;
+      allRes.checked = hk.resources.includes('*');
+      for (const [r, b] of Object.entries(resBoxes)) b.checked = hk.resources.includes(r);
+      for (const [e, b] of Object.entries(evBoxes)) b.checked = hk.events.includes(e);
+      includeData.checked = hk.includeData; enabled.checked = hk.enabled;
+      secret.value = '';
+      secret.placeholder = hk.hasSecret ? 'a secret is set — leave blank to keep it, type a new one to replace it' : 'optional: signs each delivery (X-Webhook-Signature)';
+      headersIn.value = Object.entries(hk.headers || {}).map(([k, v]) => `${k}: ${v}`).join('\n');
+      formTitle.textContent = `Edit “${hk.name}”`; saveBtn.textContent = 'Save changes'; cancelBtn.style.display = '';
+      syncRes();
+      formCard.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    };
+    cancelBtn.addEventListener('click', reset);
+    saveBtn.addEventListener('click', guard(async () => {
+      const headers = {};
+      for (const line of headersIn.value.split('\n').map((l) => l.trim()).filter(Boolean)) {
+        const i = line.indexOf(':');
+        if (i < 1) throw new Error(`Header line "${line}" needs the form Name: value`);
+        headers[line.slice(0, i).trim()] = line.slice(i + 1).trim();
+      }
+      const body = {
+        name: name.value.trim() || undefined,
+        url: url.value.trim(),
+        resources: allRes.checked ? ['*'] : RES.filter((r) => resBoxes[r].checked),
+        events: EVS.filter((e) => evBoxes[e].checked),
+        includeData: includeData.checked,
+        enabled: enabled.checked,
+        headers,
+      };
+      if (secret.value) body.secret = secret.value;
+      if (editing) { await api('PATCH', `/webhooks/${editing.id}`, body); toast('Webhook saved', 'ok'); }
+      else { await api('POST', '/webhooks', body); toast('Webhook added', 'ok'); }
+      route();
+    }));
+    const formCard = h('div', { class: 'card stack' }, titled(formTitle, 'webhooks.form'),
+      h('div', { class: 'grid cols-2' }, field('Name', name), field('URL (receives a POST)', url)),
+      h('div', { class: 'row' }, h('button', { class: 'small', onclick: () => { url.value = `${location.origin}/hooks/webhook-test`; } }, 'Use this tool\'s inspector as the receiver'),
+        h('span', { class: 'small muted' }, 'Handy for a first look: deliveries then appear on the Inspector page.')),
+      h('div', { class: 'grid cols-2' },
+        h('div', null, h('div', { class: 'small muted' }, 'Resources'), h('div', { class: 'row' }, check(allRes, 'All'), RES.map((r) => check(resBoxes[r], r)))),
+        h('div', null, h('div', { class: 'small muted' }, 'Events'), h('div', { class: 'row' }, EVS.map((e) => check(evBoxes[e], e))))),
+      h('div', { class: 'row' }, check(includeData, 'Include the record as "data"'), check(enabled, 'Enabled')),
+      h('div', { class: 'grid cols-2' }, field('Signing secret', secret), field('Extra headers', headersIn)),
+      h('div', { class: 'row' }, saveBtn, cancelBtn));
+
+    // ---- list
+    const lastBadge = (d) => (!d ? h('span', { class: 'muted small' }, 'never')
+      : h('span', { title: `${d.event} · ${fmtDate(d.at)}${d.error ? ` · ${d.error}` : ''}` }, h('span', { class: d.ok ? 'badge pass' : 'badge fail' }, d.status ?? 'error'), h('span', { class: 'small muted' }, ` ${fmtDate(d.at)}`)));
+    const listCard = h('div', { class: 'card' }, titled('Webhooks', 'webhooks.list'),
+      !hooks.length ? h('p', { class: 'muted' }, 'No webhooks yet. Add one below.')
+        : h('div', { class: 'table-wrap' }, h('table', null,
+          h('thead', null, h('tr', null, ['Name', 'On', 'Resources', 'Events', 'URL', 'Last delivery', ''].map((x) => h('th', null, x)))),
+          h('tbody', null, hooks.map((hk) => h('tr', null,
+            h('td', null, h('b', null, hk.name), hk.hasSecret ? h('div', { class: 'small muted' }, 'signed') : null),
+            h('td', null, h('input', { type: 'checkbox', checked: hk.enabled, 'aria-label': 'Enabled', onchange: guard(async (e) => { await api('PATCH', `/webhooks/${hk.id}`, { enabled: e.target.checked }); toast(e.target.checked ? 'Enabled' : 'Disabled', 'ok'); }) })),
+            h('td', null, hk.resources.includes('*') ? 'all' : hk.resources.join(', ')),
+            h('td', null, hk.events.join(', '), hk.includeData ? h('div', { class: 'small muted' }, '+ data') : null),
+            h('td', { class: 'mono small', style: { wordBreak: 'break-all', minWidth: '180px' } }, hk.url),
+            h('td', null, lastBadge(hk.lastDelivery)),
+            h('td', null, h('div', { class: 'row', style: { flexWrap: 'nowrap' } },
+              h('button', { class: 'small', onclick: guard(async () => { const d = await api('POST', `/webhooks/${hk.id}/test`, {}); toast(d.ok ? `Test delivered: ${d.status}` : `Test failed: ${d.status ?? d.error}`, d.ok ? 'ok' : 'err'); route(); }) }, 'Test'),
+              h('button', { class: 'small', onclick: () => edit(hk) }, 'Edit'),
+              h('button', { class: 'small danger', onclick: guard(async () => { if (!window.confirm(`Delete webhook “${hk.name}”?`)) return; await api('DELETE', `/webhooks/${hk.id}`); route(); }) }, 'Delete')))))))));
+
+    el.append(listCard);
+    el.append(h('div', { class: 'grid cols-2' }, formCard,
+      h('div', { class: 'card' }, titled('Webhook settings', 'webhooks.settings'), settingsForm(['webhooksEnabled', 'webhookTimeoutMs', 'webhookDeliveryRetention'], { onSaved: () => route() }),
+        h('h3', null, 'What your URL receives'),
+        codeBlock(`POST <your URL>\nContent-Type: application/json\nX-Webhook-Event: employees.created\nX-Webhook-Delivery: dlv_…\nX-Webhook-Timestamp: 1767225600\nX-Webhook-Signature: sha256=…   (with a secret)\n\n${JSON.stringify({ id: 'dlv_…', event: 'employees.created', type: 'created', resource: 'employees', resourceId: 42, href: `${location.origin}/v1/employees/42`, occurredAt: '2026-01-01T00:00:00.000Z', webhookId: 'wh_…' }, null, 2)}`))));
+
+    // ---- deliveries
+    const filter = h('select', { 'aria-label': 'Webhook' }, h('option', { value: '' }, 'All webhooks'), hooks.map((hk) => h('option', { value: hk.id }, hk.name)));
+    const tbody = h('tbody');
+    const detail = h('div', { class: 'stack' });
+    const loadDeliveries = async () => {
+      const q = filter.value ? `?webhookId=${encodeURIComponent(filter.value)}` : '';
+      const { items } = await api('GET', `/webhooks/deliveries${q}`);
+      clear(tbody).append(...(items.length ? items : [null]).map((d) => (!d ? h('tr', null, h('td', { colspan: 7, class: 'muted' }, 'No deliveries yet. Change a record, or press Test on a webhook.'))
+        : h('tr', null,
+          h('td', { class: 'small' }, fmtDate(d.at)),
+          h('td', null, d.webhookName, d.test ? h('span', { class: 'badge' }, 'test') : null, d.redeliveryOf ? h('span', { class: 'badge' }, 'resent') : null),
+          h('td', { class: 'mono small' }, d.event),
+          h('td', null, String(d.resourceId)),
+          h('td', null, h('span', { class: d.ok ? 'badge pass' : 'badge fail', title: d.error || '' }, d.status ?? 'error')),
+          h('td', { class: 'small muted' }, `${d.durationMs} ms`),
+          h('td', null, h('div', { class: 'row', style: { flexWrap: 'nowrap' } },
+            h('button', { class: 'small', onclick: () => clear(detail).append(
+              h('div', { class: 'row between' }, h('b', null, `${d.event} → ${d.url}`), h('button', { class: 'small', onclick: () => clear(detail) }, 'Close')),
+              d.error ? h('div', { style: { color: 'var(--err)' } }, d.error) : null,
+              h('h3', null, 'Request headers'), kv(d.request.headers),
+              h('h3', null, 'Request body'), codeBlock(JSON.stringify(d.request.body, null, 2)),
+              d.response ? h('div', null, h('h3', null, `Response ${d.status}`), kv(d.response.headers), codeBlock(d.response.body || '(empty)', { maxHeight: '240px' })) : null) }, 'Details'),
+            h('button', { class: 'small', onclick: guard(async () => { const r = await api('POST', `/webhooks/deliveries/${d.id}/redeliver`); toast(r.ok ? `Resent: ${r.status}` : `Resend failed: ${r.status ?? r.error}`, r.ok ? 'ok' : 'err'); loadDeliveries(); }) }, 'Resend')))))));
+    };
+    filter.addEventListener('change', guard(loadDeliveries));
+    el.append(h('div', { class: 'card stack' }, titled('Deliveries', 'webhooks.deliveries'),
+      h('div', { class: 'row' }, field('Show', filter), h('button', { class: 'small', onclick: guard(loadDeliveries) }, 'Refresh'),
+        h('button', { class: 'small danger', onclick: guard(async () => { await api('DELETE', '/webhooks/deliveries'); loadDeliveries(); }) }, 'Clear log'),
+        h('span', { class: 'small muted' }, 'Refreshes every 5 seconds while this page is open. One attempt per event; failed deliveries are not retried automatically.')),
+      h('div', { class: 'table-wrap' }, h('table', null, h('thead', null, h('tr', null, ['Time', 'Webhook', 'Event', 'Id', 'Status', 'Time taken', ''].map((x) => h('th', null, x)))), tbody)),
+      detail));
+    await loadDeliveries();
+    const timer = setInterval(() => { loadDeliveries().catch(() => {}); }, 5000);
+    return () => clearInterval(timer);
   };
 
   // ---------------------------------------------------------------- chaos

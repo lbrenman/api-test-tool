@@ -50,7 +50,10 @@ Ues Cases:
   - [SOAP services](#soap-services)
   - [WebSocket channels](#websocket-channels)
   - [Server-Sent Events](#server-sent-events)
+  - [OData v4](#odata-v4)
+  - [GraphQL](#graphql)
   - [Inspector](#inspector)
+  - [Outgoing webhooks](#outgoing-webhooks)
   - [API tester walkthrough](#api-tester-walkthrough)
     - [SOAP services (WSDL)](#soap-services-wsdl)
     - [WebSocket APIs (AsyncAPI or a scenario)](#websocket-apis-asyncapi-or-a-scenario)
@@ -121,6 +124,7 @@ Fly.io, Render and Northflank are covered in [Deployment](#deployment).
 | **Server-Sent Events** | `/sse/changes` (live change feed from any protocol, Last-Event-ID replay, `event: reset` on gaps), `/sse/ticks` (numbered, resumable) and `POST /sse/stream` (LLM-style token streaming, plain events or OpenAI chunk format with `[DONE]`). Heartbeats, `retry:`, stream chaos (`dropAfter`, `malformedAt`, `skipIds`), documented in `/openapi.json`, with a live viewer in the dashboard. The tester reads SSE responses for a time window. |
 | **OData v4** | `/odata/v4` over the same data: service document, CSDL `$metadata`, `$filter` (comparison, logical, arithmetic, `in`, string/date/math functions, `any`/`all` lambdas, navigation paths), `$select`, `$expand` with nested options, `$orderby`, `$top`, `$skip`, `$count`, `$search`, server-driven paging with `@odata.nextLink` and `Prefer: odata.maxpagesize`, key/property/`$value`/navigation addressing, and create/update/delete with `@odata.bind`, `Prefer: return=…` and If-Match ETags. OData error format, `odata.metadata=none/minimal/full`, a query console in the dashboard. |
 | **GraphQL** | `/graphql` over the same data: queries with offset pages and Relay connections (filters, sort, search), nested department/category/manager resolvers, CRUD mutations with merge-patch updates, and a live `changes` subscription over WebSocket (graphql-transport-ws). Field errors come back as HTTP 200 with partial data and `extensions.code`; auth, rate-limit and chaos errors keep their HTTP status. GraphQL-over-HTTP media types, introspection on/off, depth limit, injected field errors (`X-Force-GraphQL-Error`), SDL at `/graphql/schema.graphql`, GraphiQL in the browser and a query console in the dashboard. |
+| **Outgoing webhooks** | Any number of webhooks that POST `{event, resource, resourceId, href, …}` to your URL when an employee, product, department or category is created, updated or deleted, through any protocol. Per webhook: resources, events, optional record data, HMAC signing secret and extra headers. Stored in the database (they survive restarts); every delivery is logged with the response, with Test and Resend buttons. |
 | **Inspector** | Catch-all capture with the actual path, live stream (SSE), detected auth (Basic user, decoded JWT, API keys), pretty bodies and multipart parts, copy as curl, replay, auto-forward, configurable responses and path rules. |
 | **Generated OpenAPI** | Two OAS 3.1 specs, regenerated from the live settings. **Mock Data API** (`/openapi.json`, `/openapi.yaml`) is for integrations: `/v1` resources, every pagination path, the file endpoints, the SSE streams and the OAuth token endpoint, reflecting the server URL, date format, auth scheme, required headers and chaos headers. **Admin API** (`/admin/api/openapi.json`, `.yaml`, password protected) is for operators and scripts: settings, seeding, files, OAuth clients, inspector, tester, `/health` and `/ready`. Swagger UI at `/docs` shows both (`/docs?spec=admin` for the admin spec). |
 | **API tester** | Upload, paste or URL load for OAS 3.0, 3.1 and Swagger 2.0 (REST), WSDL 1.1 (SOAP 1.1/1.2, with XSD validation and WS-Security) and AsyncAPI 2.x/3.0 (WebSocket, with message validation, correlation and scripted scenarios). Spec lint, per-operation "try it" with generated samples that honour `pattern`/`format`/`enum`/limits, auth profiles (none, API key, Basic, Bearer, OAuth2 client credentials), response validation, run-all contract mode with ID chaining and negative tests, run history, and JSON and HTML reports. "Mock from spec" serves a spec's examples from this tool. |
@@ -196,6 +200,9 @@ Settings marked **restart** can only be set through the environment.
 | `SSE_RETRY_MS` | `3000` | `retry:` sent at the start of every stream |
 | `SSE_REPLAY_BUFFER` | `500` | Change events kept for Last-Event-ID resume |
 | `SSE_TICK_INTERVAL_MS` | `1000` | Default `/sse/ticks` interval |
+| `WEBHOOKS_ENABLED` | `true` | Send the outgoing webhooks (off pauses them all; definitions are kept) |
+| `WEBHOOK_TIMEOUT_MS` | `10000` | How long a delivery waits for the receiver (100–60000) |
+| `WEBHOOK_DELIVERY_RETENTION` | `200` | Deliveries kept in the log, all webhooks together (10–10000) |
 | `INSPECTOR_RETENTION` | `500` | Captures kept |
 | `INSPECTOR_LOG_ALL` | `true` | Also record `/v1/*`, `/soap/*`, `/ws/*` (upgrades), `/sse/*`, `/graphql`, `/odata/*` and `/oauth/*` calls (with their real responses). Toggle on the Inspector page. |
 | `INSPECTOR_RESPONSE_STATUS`, `…_CONTENT_TYPE`, `…_BODY`, `…_HEADERS`, `…_DELAY_MS` | `200`, `application/json`, receipt, —, `0` | Default catch-all response |
@@ -626,6 +633,50 @@ curl -s -X POST "$B/hooks/order-created?env=dev" -H 'Content-Type: application/j
 - **Detail pane:** copy as curl, replay (to this server or any URL), and auto-forward every capture to a target URL (the original path is appended).
 - **Housekeeping:** export JSON, delete a single capture (× on its row, or `DELETE /admin/api/inspector/{id}`), or clear all. The last `INSPECTOR_RETENTION` captures are kept.
 - **API traffic:** `/v1/*`, `/soap/*`, `/ws/*` upgrades (recorded as 101 when accepted), `/sse/*` streams (recorded when they end) and `/oauth/*` calls are recorded with their real responses, including requests rejected early (bad JSON, missing headers, auth, rate limit) and connections dropped by chaos (shown as *dropped*). Filter by source (webhooks / mock API / SOAP / WebSocket / SSE / OAuth) or switch it off with **Record /v1 & /oauth** (`INSPECTOR_LOG_ALL`). Streamed file uploads show their size only.
+
+---
+
+## Outgoing webhooks
+
+The **Webhooks** page sends a POST to your integration whenever mock data changes, so you can test flows that start from an event. Add as many webhooks as you like; each one has:
+
+| Field | Meaning |
+|---|---|
+| URL | The http(s) endpoint that receives the POST. "Use this tool's inspector" points it at this server so the delivery shows up on the Inspector page. |
+| Resources | All, or any of `employees`, `products`, `departments`, `categories` |
+| Events | Any of `created`, `updated`, `deleted` (default: created and updated) |
+| Include the record | Adds the record as `data` (never on deletes) |
+| Signing secret | Adds `X-Webhook-Signature: sha256=<hex HMAC-SHA256(secret, "<X-Webhook-Timestamp>.<raw body>")>` |
+| Extra headers | Credentials your receiver expects, e.g. `X-API-Key` (`X-Webhook-*`, `Content-Type` and `Host` are reserved) |
+| Enabled | Pause one webhook without deleting it |
+
+Changes through every protocol fire them: `/v1`, SOAP, GraphQL, OData and the back office. Seeding does not. Webhooks are stored in the database, so they survive restarts and re-seeding.
+
+```http
+POST https://your-integration.example.com/hooks/employees
+Content-Type: application/json
+X-Webhook-Id: wh_3f9c…
+X-Webhook-Event: employees.created
+X-Webhook-Delivery: dlv_8a21…
+X-Webhook-Timestamp: 1767225600
+X-Webhook-Signature: sha256=…
+
+{"id": "dlv_8a21…", "event": "employees.created", "type": "created", "resource": "employees", "resourceId": 42,
+ "href": "https://your-app.fly.dev/v1/employees/42", "occurredAt": "2026-01-01T00:00:00.000Z", "webhookId": "wh_3f9c…"}
+```
+
+- `href` is the record on `/v1`; fetch it for the full record (with your `/v1` credentials), or turn on *Include the record*.
+- There is one attempt per event, with no automatic retries. A delivery is OK when the receiver answers 2xx within `WEBHOOK_TIMEOUT_MS`. Every delivery is logged (request headers and body, response status, headers and body, time taken); custom header values are logged as `(set)`. **Test** sends a delivery for the first record of the webhook's resource (marked `"test": true`); **Resend** repeats a logged delivery with a new delivery id and a fresh signature.
+- `WEBHOOKS_ENABLED=false` pauses every webhook. The log keeps the last `WEBHOOK_DELIVERY_RETENTION` deliveries.
+- Admin API: `GET|POST /admin/api/webhooks`, `GET|PATCH|DELETE /admin/api/webhooks/{id}`, `POST /admin/api/webhooks/{id}/test`, `GET|DELETE /admin/api/webhooks/deliveries`, `GET /admin/api/webhooks/deliveries/{id}`, `POST /admin/api/webhooks/deliveries/{id}/redeliver` (documented in the admin spec). Secrets are write-only: the API returns `hasSecret` and, for secrets of 12+ characters, the last 4 characters.
+
+```bash
+# Webhook for new employees (add -u "admin:$ADMIN_PASSWORD" when a dashboard password is set)
+curl -s -X POST "$B/admin/api/webhooks" -H 'Content-Type: application/json' \
+  -d '{"name":"New employees","url":"https://example.com/hooks/employees","resources":["employees"],"events":["created"],"secret":"change-me"}'
+# Check a signature on the receiving side
+printf '%s.%s' "$TIMESTAMP" "$RAW_BODY" | openssl dgst -sha256 -hmac 'change-me' | sed 's/^.* /sha256=/'
+```
 
 ---
 

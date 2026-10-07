@@ -185,6 +185,29 @@ module.exports = function adminRouter(ctx, { adminAuth, filesApi }) {
     res.json(await inspector.exportAll());
   });
   r.delete('/inspector', async (req, res) => { await inspector.clear(); res.status(204).end(); });
+
+  // ---- outgoing webhooks
+  const hooks = ctx.webhooks;
+  r.get('/webhooks', (req, res) => res.json({ enabled: settings.get('webhooksEnabled'), items: hooks.list() }));
+  r.post('/webhooks', async (req, res) => {
+    const hook = await hooks.create(req.body, baseUrl(req));
+    res.status(201).location(`${baseUrl(req)}/admin/api/webhooks/${hook.id}`).json(hook);
+  });
+  r.get('/webhooks/deliveries', async (req, res) => {
+    const limit = req.query.limit === undefined ? 50 : Number(req.query.limit);
+    if (!Number.isInteger(limit) || limit < 1) throw new HttpError(400, 'limit must be a positive integer');
+    res.json({ items: await hooks.deliveries({ webhookId: req.query.webhookId ? String(req.query.webhookId) : undefined, limit }) });
+  });
+  r.delete('/webhooks/deliveries', async (req, res) => { await hooks.clearDeliveries(); res.status(204).end(); });
+  r.get('/webhooks/deliveries/:id', async (req, res) => res.json(await hooks.delivery(req.params.id)));
+  r.post('/webhooks/deliveries/:id/redeliver', async (req, res) => res.json(await hooks.redeliver(req.params.id)));
+  r.get('/webhooks/:id', (req, res) => {
+    hooks.get(req.params.id);
+    res.json(hooks.list().find((h) => h.id === req.params.id));
+  });
+  r.patch('/webhooks/:id', async (req, res) => res.json(await hooks.update(req.params.id, req.body, baseUrl(req))));
+  r.delete('/webhooks/:id', async (req, res) => { await hooks.remove(req.params.id); res.status(204).end(); });
+  r.post('/webhooks/:id/test', async (req, res) => res.json(await hooks.test(req.params.id, { type: req.body?.type })));
   r.get('/inspector/:id', async (req, res) => {
     const e = await inspector.get(req.params.id);
     if (!e) throw new HttpError(404, 'Capture not found');

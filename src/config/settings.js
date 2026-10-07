@@ -105,6 +105,11 @@ const DEFS = [
   { key: 'sseReplayBuffer', env: 'SSE_REPLAY_BUFFER', def: 500, type: 'int', section: 'sse', min: 1, max: 100000, desc: 'Change events kept for Last-Event-ID resume on /sse/changes' },
   { key: 'sseTickIntervalMs', env: 'SSE_TICK_INTERVAL_MS', def: 1000, type: 'int', section: 'sse', min: 50, max: 60000, desc: 'Default interval of /sse/ticks (override with ?interval=)' },
 
+  // ---- webhooks ----
+  { key: 'webhooksEnabled', env: 'WEBHOOKS_ENABLED', def: true, type: 'bool', section: 'webhooks', desc: 'send the outgoing webhooks defined on the Webhooks page (off = pause all deliveries; the definitions are kept)' },
+  { key: 'webhookTimeoutMs', env: 'WEBHOOK_TIMEOUT_MS', def: 10000, type: 'int', section: 'webhooks', min: 100, max: 60000, desc: 'How long a delivery waits for the receiver before it is logged as failed' },
+  { key: 'webhookDeliveryRetention', env: 'WEBHOOK_DELIVERY_RETENTION', def: 200, type: 'int', section: 'webhooks', min: 10, max: 10000, desc: 'Webhook deliveries kept in the log (all webhooks together)' },
+
   // ---- inspector ----
   { key: 'inspectorRetention', env: 'INSPECTOR_RETENTION', def: 500, type: 'int', section: 'inspector', min: 1 },
   { key: 'inspectorLogAll', env: 'INSPECTOR_LOG_ALL', def: true, type: 'bool', section: 'inspector', desc: 'also record /v1/*, /soap/*, /ws/* (upgrades), /sse/*, /graphql, /odata/* and /oauth/* calls (the dashboard, docs and health probes are never recorded)' },

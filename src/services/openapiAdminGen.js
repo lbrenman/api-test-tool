@@ -158,6 +158,39 @@ async function generateAdminOpenApi(ctx, req) {
     requestBody: body(obj({ targetUrl: { type: 'string', format: 'uri' } }), { targetUrl: 'https://example.com/hook' }, false),
     responses: { ...ok('Replay result', anyObj('status, headers, body and timing of the replayed call')), ...AUTHED, ...NF },
   }));
+  // ---- Webhooks (outgoing)
+  const whId = pathParam('id', 'Webhook id', 'wh_0123456789abcdef');
+  const dlvId = pathParam('id', 'Delivery id', 'dlv_0123456789abcdef');
+  const hookExample = { name: 'New employees to my integration', url: 'https://example.com/hooks/employees', resources: ['employees'], events: ['created', 'updated'], includeData: false, secret: 'shared-secret', headers: { 'X-API-Key': 'integration-key' } };
+  add(`${A}/webhooks`, 'get', op('Webhooks', 'listWebhooks', 'Every webhook (secrets are not returned)', {
+    responses: { ...ok('Webhooks', obj({ enabled: { type: 'boolean', description: 'WEBHOOKS_ENABLED' }, items: { type: 'array', items: S('Webhook') } }, ['enabled', 'items'])), ...AUTHED },
+  }));
+  add(`${A}/webhooks`, 'post', op('Webhooks', 'createWebhook', 'Add a webhook (stored in the database; survives restarts)', {
+    requestBody: body(S('WebhookInput'), hookExample),
+    responses: { ...created('Webhook created (Location header points at it)', S('Webhook')), ...BAD, ...AUTHED },
+  }));
+  add(`${A}/webhooks/{id}`, 'get', op('Webhooks', 'getWebhook', 'One webhook', { parameters: [whId], responses: { ...ok('Webhook', S('Webhook')), ...AUTHED, ...NF } }));
+  add(`${A}/webhooks/{id}`, 'patch', op('Webhooks', 'updateWebhook', 'Change a webhook (only the fields sent; "secret": null removes the secret)', {
+    parameters: [whId], requestBody: body(S('WebhookInput'), { enabled: false }),
+    responses: { ...ok('Webhook', S('Webhook')), ...BAD, ...AUTHED, ...NF },
+  }));
+  add(`${A}/webhooks/{id}`, 'delete', op('Webhooks', 'deleteWebhook', 'Delete a webhook (its logged deliveries stay until trimmed)', { parameters: [whId], responses: { ...noContent('Deleted'), ...AUTHED, ...NF } }));
+  add(`${A}/webhooks/{id}/test`, 'post', op('Webhooks', 'testWebhook', 'Send a test delivery now (the first record of the webhook\'s first resource, marked "test": true) and return the result', {
+    parameters: [whId], requestBody: body(obj({ type: { type: 'string', enum: ['created', 'updated', 'deleted'] } }), { type: 'created' }, false),
+    responses: { ...ok('Delivery', S('WebhookDelivery')), ...BAD, ...AUTHED, ...NF },
+  }));
+  add(`${A}/webhooks/deliveries`, 'get', op('Webhooks', 'listWebhookDeliveries', 'Logged deliveries, newest first', {
+    parameters: [{ name: 'webhookId', in: 'query', schema: { type: 'string' } }, { name: 'limit', in: 'query', schema: { type: 'integer', minimum: 1, maximum: 500, default: 50 } }],
+    responses: { ...ok('Deliveries', obj({ items: { type: 'array', items: S('WebhookDelivery') } }, ['items'])), ...BAD, ...AUTHED },
+  }));
+  add(`${A}/webhooks/deliveries`, 'delete', op('Webhooks', 'clearWebhookDeliveries', 'Clear the delivery log', { responses: { ...noContent('Cleared'), ...AUTHED } }));
+  add(`${A}/webhooks/deliveries/{id}`, 'get', op('Webhooks', 'getWebhookDelivery', 'One delivery: request headers and body, response status, headers and body', {
+    parameters: [dlvId], responses: { ...ok('Delivery', S('WebhookDelivery')), ...AUTHED, ...NF },
+  }));
+  add(`${A}/webhooks/deliveries/{id}/redeliver`, 'post', op('Webhooks', 'redeliverWebhook', 'Send a logged delivery again (same payload, new delivery id, fresh timestamp and signature)', {
+    parameters: [dlvId], responses: { ...ok('New delivery', S('WebhookDelivery')), ...AUTHED, ...NF },
+  }));
+
   add(`${A}/inspector/{id}/curl`, 'get', op('Inspector', 'getCaptureCurl', 'The capture as a curl command', {
     parameters: [capId, { name: 'target', in: 'query', description: 'Base URL to send to instead', schema: { type: 'string' } }],
     responses: { 200: { description: 'curl command', content: { 'text/plain': { schema: { type: 'string' } } } }, ...AUTHED, ...NF },
@@ -295,6 +328,7 @@ async function generateAdminOpenApi(ctx, req) {
       { name: 'Files', description: 'Manage the shared file pool' },
       { name: 'Auth', description: '/v1 auth configuration and OAuth clients' },
       { name: 'Inspector', description: 'Captured requests (webhook-style catch-all)' },
+      { name: 'Webhooks', description: 'Outgoing webhooks: POST to your URL when mock data is created, updated or deleted through any protocol' },
       { name: 'Tester', description: 'Contract tester for APIs you implemented (OpenAPI, WSDL/SOAP, AsyncAPI/WebSocket)' },
       { name: 'App', description: 'Backend for the back-office app at /app (bypasses /v1 auth, chaos and rate limits)' },
     ],
@@ -326,6 +360,37 @@ async function generateAdminOpenApi(ctx, req) {
           source: { type: 'string', enum: ['generated', 'uploaded'] }, createdAt: {}, updatedAt: {}, links: { type: 'object', additionalProperties: { type: 'string' } },
         }, ['id', 'name']),
         OAuthClient: obj({ clientId: { type: 'string' }, secret: { type: 'string' }, scopes: {}, redirectUris: { type: 'array', items: { type: 'string' } }, source: { type: 'string' } }, ['clientId'], { additionalProperties: true }),
+        WebhookInput: obj({
+          name: { type: 'string', maxLength: 120 },
+          url: { type: 'string', format: 'uri', description: 'http(s) URL that receives the POST' },
+          resources: { type: 'array', items: { type: 'string', enum: ['*', 'employees', 'products', 'departments', 'categories'] }, default: ['*'] },
+          events: { type: 'array', items: { type: 'string', enum: ['created', 'updated', 'deleted'] }, default: ['created', 'updated'] },
+          enabled: { type: 'boolean', default: true },
+          includeData: { type: 'boolean', default: false, description: 'Add the record as "data" (never for deletes)' },
+          secret: { type: ['string', 'null'], maxLength: 256, description: 'Signs each delivery: X-Webhook-Signature: sha256=hex(HMAC-SHA256(secret, "<X-Webhook-Timestamp>.<raw body>"))' },
+          headers: { type: 'object', additionalProperties: { type: 'string' }, description: 'Extra request headers, e.g. credentials for the receiver (X-Webhook-*, Content-Type and Host are reserved)' },
+        }, undefined, { description: 'url is required on create; on PATCH send only what changes' }),
+        Webhook: obj({
+          id: { type: 'string' }, name: { type: 'string' }, url: { type: 'string' }, resources: { type: 'array', items: { type: 'string' } },
+          events: { type: 'array', items: { type: 'string' } }, enabled: { type: 'boolean' }, includeData: { type: 'boolean' },
+          headers: { type: 'object', additionalProperties: { type: 'string' } }, hasSecret: { type: 'boolean' }, secretHint: { type: ['string', 'null'] },
+          baseUrl: { type: 'string', description: 'Used for "href" when no public URL is configured' },
+          createdAt: { type: 'string', format: 'date-time' }, updatedAt: { type: 'string', format: 'date-time' },
+          lastDelivery: { type: ['object', 'null'], properties: { at: { type: 'string' }, status: { type: ['integer', 'null'] }, ok: { type: 'boolean' }, error: { type: ['string', 'null'] }, durationMs: { type: 'integer' }, event: { type: 'string' } } },
+        }, ['id', 'url', 'resources', 'events', 'enabled']),
+        WebhookPayload: obj({
+          id: { type: 'string', description: 'Delivery id (also X-Webhook-Delivery)' }, event: { type: 'string', examples: ['employees.created'] },
+          type: { type: 'string', enum: ['created', 'updated', 'deleted'] }, resource: { type: 'string' }, resourceId: { type: 'integer' },
+          href: { type: 'string', format: 'uri', description: 'GET it from /v1 for the full record' }, occurredAt: { type: 'string', format: 'date-time' },
+          webhookId: { type: 'string' }, test: { type: 'boolean' }, data: anyObj('The record (includeData only)'),
+        }, ['id', 'event', 'type', 'resource', 'resourceId', 'href', 'occurredAt', 'webhookId'], { description: 'The JSON body POSTed to the webhook URL' }),
+        WebhookDelivery: obj({
+          id: { type: 'string' }, webhookId: { type: 'string' }, webhookName: { type: 'string' }, event: { type: 'string' }, resource: { type: 'string' }, resourceId: { type: 'integer' },
+          url: { type: 'string' }, at: { type: 'string', format: 'date-time' }, test: { type: 'boolean' }, redeliveryOf: { type: ['string', 'null'] },
+          request: obj({ headers: { type: 'object', additionalProperties: { type: 'string' }, description: 'Custom header values are shown as "(set)"' }, body: S('WebhookPayload') }),
+          status: { type: ['integer', 'null'] }, ok: { type: 'boolean' }, error: { type: 'string' }, durationMs: { type: 'integer' },
+          response: obj({ headers: { type: 'object' }, body: { type: 'string' } }),
+        }, ['id', 'webhookId', 'event', 'at', 'ok']),
         Capture: anyObj('Captured request: id, timestamp, method, url, path, query, headers, detected auth, client IP, body, size, duration and the response returned'),
         Target: obj({
           baseUrl: { type: 'string', description: 'Base URL (OpenAPI) or endpoint URL (WSDL)' }, headers: { type: 'object', additionalProperties: { type: 'string' } }, timeoutMs: { type: 'integer' },

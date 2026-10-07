@@ -344,6 +344,67 @@
       },
 
       // ------------------------------------------------------------ files
+      // ------------------------------------------------------------ webhooks (outgoing)
+      'webhooks.list': {
+        title: 'Webhooks',
+        purpose: 'Every outgoing webhook: which resources and events it watches, where it posts, and how its last delivery went. Changes made through any protocol (/v1, SOAP, GraphQL, OData, the back office) trigger them.',
+        steps: [
+          'Untick On to pause one webhook; turn off webhooksEnabled (settings card) to pause them all. Definitions are kept either way.',
+          'Test sends a delivery now for the first record of the webhook\'s first resource, marked `"test": true`, so you can check your receiver without changing data.',
+          'Webhooks are stored in the database and survive restarts and re-seeding. Seeding itself does not fire them.',
+          ...pw,
+        ],
+        curls: [
+          ['List webhooks', admin('GET', '/webhooks')],
+          ['Send a test delivery', admin('POST', '/webhooks/WEBHOOK_ID/test', { json: { type: 'created' } })],
+          ['Pause one', admin('PATCH', '/webhooks/WEBHOOK_ID', { json: { enabled: false } })],
+          ['Delete one', admin('DELETE', '/webhooks/WEBHOOK_ID')],
+        ],
+      },
+      'webhooks.form': {
+        title: 'Add or edit a webhook',
+        purpose: 'Choose the resources and events to watch and the URL that receives a JSON POST with the event, the resource type and the record id.',
+        steps: [
+          'URL: your integration\'s endpoint. "Use this tool\'s inspector" points it at this server so you can see a delivery first.',
+          'Resources: all, or any of employees, products, departments, categories. Events: created, updated, deleted.',
+          `The body is \`{"id", "event": "employees.created", "type", "resource", "resourceId", "href", "occurredAt", "webhookId"}\`; \`href\` is the record on \`${B}/v1\`. Tick "Include the record" to add it as \`data\`.`,
+          'Signing secret: each delivery gets `X-Webhook-Signature: sha256=` + hex HMAC-SHA256(secret, `<X-Webhook-Timestamp>.<raw body>`). Extra headers carry credentials your receiver needs (e.g. an API key).',
+        ],
+        curls: [
+          ['Webhook for new employees', admin('POST', '/webhooks', { json: { name: 'New employees', url: 'https://example.com/hooks/employees', resources: ['employees'], events: ['created'] } })],
+          ['Signed, with a header and the record', admin('POST', '/webhooks', { json: { name: 'Products to integration', url: 'https://example.com/hooks/products', resources: ['products'], events: ['created', 'updated'], includeData: true, secret: 'change-me', headers: { 'X-API-Key': 'integration-key' } } })],
+          ['Check a signature on the receiving side', "BODY='<raw request body>'; TS='<X-Webhook-Timestamp>'\nprintf '%s.%s' \"$TS\" \"$BODY\" | openssl dgst -sha256 -hmac 'change-me' | sed 's/^.* /sha256=/'"],
+        ],
+      },
+      'webhooks.settings': {
+        title: 'Webhook settings',
+        purpose: 'Pause all deliveries, set how long a delivery waits for your receiver, and how many deliveries the log keeps.',
+        steps: [
+          '`webhooksEnabled`: off pauses every webhook without deleting any.',
+          '`webhookTimeoutMs`: a receiver slower than this is logged as failed.',
+          '`webhookDeliveryRetention`: deliveries kept in the log, across all webhooks.',
+          ...pw,
+        ],
+        curls: [
+          ['Pause all webhooks', admin('PUT', '/settings', { json: { webhooksEnabled: false } })],
+          ['Back to the defaults', admin('POST', '/settings/reset', { json: { section: 'webhooks' } })],
+        ],
+      },
+      'webhooks.deliveries': {
+        title: 'Deliveries',
+        purpose: 'Every delivery with its request (headers and body) and your receiver\'s response, newest first.',
+        steps: [
+          'A delivery is OK when the receiver answers 2xx within the timeout. There is one attempt per event; nothing is retried automatically.',
+          'Details shows what was sent and what came back. Custom header values are hidden as "(set)".',
+          'Resend sends the same payload again with a new delivery id and a fresh timestamp and signature.',
+        ],
+        curls: [
+          ['Last 20 deliveries', admin('GET', '/webhooks/deliveries?limit=20')],
+          ['Resend one', admin('POST', '/webhooks/deliveries/DELIVERY_ID/redeliver')],
+          ['Make a change that fires webhooks', curl('POST', '/v1/departments', { json: { name: 'Webhook test', code: 'WH-1' } })],
+        ],
+      },
+
       'files.upload': {
         title: 'Uploading files',
         purpose: 'Every upload protocol writes into one shared file pool, so you can upload one way and download another.',

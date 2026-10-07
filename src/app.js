@@ -14,6 +14,7 @@ const { KeyService } = require('./services/keys');
 const { OAuthService } = require('./services/oauth');
 const { InspectorService } = require('./services/inspector');
 const { TesterService } = require('./services/tester');
+const { WebhookService } = require('./services/webhooks');
 const { seedAll } = require('./services/seed');
 const { generateSamples } = require('./services/sampleFiles');
 const { HttpError, sendProblem } = require('./util/problem');
@@ -61,6 +62,8 @@ async function createContext({ env = process.env, overrides = {} } = {}) {
   await ctx.oauth.init();
   ctx.inspector = new InspectorService(ctx);
   ctx.tester = new TesterService(ctx);
+  ctx.webhooks = new WebhookService(ctx); // outgoing webhooks on data changes (stored in the database)
+  await ctx.webhooks.init();
   return ctx;
 }
 
@@ -186,7 +189,7 @@ async function createApp(opts = {}) {
   app.handleUpgrade = handleUpgrade;
 
   ctx.ready = true;
-  return { app, ctx, close: () => ctx.repo.close() };
+  return { app, ctx, close: async () => { await ctx.webhooks.drain(); await ctx.repo.close(); } };
 }
 
 module.exports = { createApp, createContext, seedOnStart };
