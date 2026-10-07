@@ -51,6 +51,7 @@ const MAX_RESPONSE_CAPTURE = 65536;
 function apiKind(path) {
   if (path === '/v1' || path.startsWith('/v1/')) return 'v1';
   if (path === '/soap' || path.startsWith('/soap/')) return 'soap';
+  if (path === '/ws' || path.startsWith('/ws/')) return 'ws';
   if (path.startsWith('/oauth/') || path.startsWith('/.well-known/')) return 'oauth';
   return null;
 }
@@ -81,11 +82,12 @@ function logAll(ctx) {
     const finish = () => {
       if (done) return;
       done = true;
-      const aborted = !res.writableFinished;
+      const upgraded = !!req.ws?.accepted; // WebSocket handshake completed on the raw socket
+      const aborted = upgraded ? false : !res.writableFinished;
       inspector.record(req, Buffer.isBuffer(req.rawBody) ? req.rawBody : Buffer.alloc(0), kind, {
         startedAt: started,
         ip,
-        status: res.headersSent || !aborted ? res.statusCode : null,
+        status: upgraded ? 101 : res.headersSent || !aborted ? res.statusCode : null,
         headers: { ...res.getHeaders() },
         body: Buffer.concat(chunks).subarray(0, MAX_RESPONSE_CAPTURE),
         contentType: res.get('Content-Type'),

@@ -118,7 +118,47 @@
       hmac: `an HMAC signature (key id "${ctx.hmac.keyId}", computed with openssl on the first lines)`,
     }[ctx.mode] || ctx.mode;
 
-    return { curl, admin, plain, tokenLine, ctx, authLabel, base: ctx.base, mode: ctx.mode };
+    /**
+     * Connect to a WebSocket path of this server with Node's built-in WebSocket client (Node 22+),
+     * send one message and print what comes back. Credentials follow the active auth mode.
+     */
+    function ws(path, message, { listenMs = 2000 } = {}) {
+      const pre = [];
+      const envs = [];
+      const hdrs = [];
+      let p = path;
+      switch (ctx.mode) {
+        case 'apikey':
+          if (ctx.apiKey.in === 'query') p += `${p.includes('?') ? '&' : '?'}${encodeURIComponent(ctx.apiKey.name)}=${encodeURIComponent(ctx.apiKey.value)}`;
+          else hdrs.push([ctx.apiKey.name, JSON.stringify(ctx.apiKey.value)]);
+          break;
+        case 'basic': hdrs.push(['Authorization', `'Basic '+Buffer.from(${JSON.stringify(`${ctx.basic.user}:${ctx.basic.pass}`)}).toString('base64')`]); break;
+        case 'bearer': hdrs.push(['Authorization', JSON.stringify(`Bearer ${ctx.bearer}`)]); break;
+        case 'jwt':
+        case 'oauth2':
+          pre.push(tokenLine());
+          envs.push('TOKEN="$TOKEN"');
+          hdrs.push(['Authorization', "'Bearer '+process.env.TOKEN"]);
+          break;
+        case 'hmac':
+          pre.push('TS=$(date +%s)');
+          pre.push(`SIG=$(printf '%s\\n%s\\n%s\\n%s' GET ${q(p)} "$TS" "${EMPTY_SHA256}" | openssl dgst -sha256 -hmac ${q(ctx.hmac.secret)} -binary | openssl base64 -A)`);
+          envs.push('TS="$TS"', 'SIG="$SIG"');
+          hdrs.push(['Authorization', `'HMAC ${ctx.hmac.keyId}:'+process.env.SIG`], ['X-Timestamp', 'process.env.TS']);
+          break;
+        default: break;
+      }
+      for (const r of ctx.required || []) hdrs.push([r.name, JSON.stringify(r.value ?? 'test')]);
+      const url = `${ctx.base}${p}`.replace(/^http/, 'ws');
+      const headerSrc = hdrs.map(([k, v]) => `${JSON.stringify(k)}:${v}`).join(',');
+      const js = `const ws=new WebSocket(${JSON.stringify(url)}${headerSrc ? `,{headers:{${headerSrc}}}` : ''});`
+        + `ws.onopen=()=>{console.log('open',ws.protocol||'');${message === undefined ? '' : `ws.send(${JSON.stringify(message)});`}};`
+        + 'ws.onmessage=(e)=>console.log(e.data);ws.onerror=()=>console.log(\'handshake or connection failed\');'
+        + `ws.onclose=(e)=>console.log('closed',e.code);setTimeout(()=>ws.close(),${listenMs})`;
+      return [...pre, `${envs.length ? `${envs.join(' ')} ` : ''}node -e ${q(js)}`].join('\n');
+    }
+
+    return { curl, admin, plain, ws, tokenLine, ctx, authLabel, base: ctx.base, mode: ctx.mode };
   }
 
   /**
@@ -127,7 +167,7 @@
    */
   function build(C, extra = {}) {
     const B = C.base;
-    const { curl, admin, plain } = C;
+    const { curl, admin, plain, ws } = C;
     const c = C.ctx.client || { clientId: 'demo-client', secret: 'demo-secret' };
     const fileId = extra.fileId || 'FILE_ID';
     const specId = extra.specId || 'SPEC_ID';
@@ -564,6 +604,54 @@
         ],
       },
 
+      // ------------------------------------------------------------ protocols: WebSocket
+      'protocols.ws': {
+        title: 'WebSocket channels',
+        purpose: 'Mock WebSocket endpoints over the same data: echo, a JSON-RPC style request/response channel, and a live change feed. The upgrade request uses the active auth mode, rate limit, required headers and chaos, so a rejected upgrade returns the usual HTTP status.',
+        steps: [
+          `Connect your client to \`${B.replace(/^http/, 'ws')}/ws/echo\`, \`/ws/rpc\` or \`/ws/changes\` (add \`?resource=employees\` to filter the feed).`,
+          `Credentials: ${C.authLabel}. Browsers cannot set headers, so for Bearer, JWT and OAuth2 a \`?access_token=\` query parameter is accepted on the upgrade too.`,
+          'On /ws/rpc send `{"jsonrpc":"2.0","id":1,"method":"getEmployee","params":{"id":1}}`; the reply has the same id. Methods: ping, time, echo, getEmployee/Product/Department/Category, listEmployees/Products/Departments/Categories.',
+          'Change any record (in /v1, /soap or the back office) and /ws/changes pushes a created/updated/deleted event.',
+          `Import \`${B}/ws/asyncapi.json\` (AsyncAPI 3.0) into a client or into this tool\'s API Tester.`,
+        ],
+        curls: [
+          ['List the channels', plain('GET', '/ws')],
+          ['Download the AsyncAPI document', plain('GET', '/ws/asyncapi.json', { output: 'api-test-tool.asyncapi.json' })],
+          ['Call getEmployee over /ws/rpc (Node 22+)', ws('/ws/rpc', JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'getEmployee', params: { id: 1 } }))],
+          ['Echo a message', ws('/ws/echo', 'hello')],
+          ['Watch the change feed for 30 seconds', ws('/ws/changes?resource=employees', undefined, { listenMs: 30000 })],
+          ['Check the upgrade handshake with curl', curl('GET', '/ws/echo', { include: true, headers: { Connection: 'Upgrade', Upgrade: 'websocket', 'Sec-WebSocket-Version': '13', 'Sec-WebSocket-Key': 'dGhlIHNhbXBsZSBub25jZQ==' }, extra: ['--http1.1', '--max-time 2'] })],
+        ],
+      },
+      'protocols.ws-settings': {
+        title: 'WebSocket settings',
+        purpose: 'Turn the WebSocket mock on or off, and set its message size limit, idle timeout and keep-alive pings.',
+        steps: [
+          '`wsMaxMessageKb`: larger messages close the connection with 1009 (message too big).',
+          '`wsIdleTimeoutSeconds`: close connections that send nothing for that long (1001); 0 keeps them open.',
+          '`wsPingIntervalSeconds`: the server pings; a connection that misses a pong is dropped. 0 turns pings off.',
+          'Use X-Force-Error on the upgrade request (e.g. 503) or a chaos rate to test reconnect logic.',
+          ...pw,
+        ],
+        curls: [
+          ['Close idle connections after 30 s', admin('PUT', '/settings', { json: { wsIdleTimeoutSeconds: 30 } })],
+          ['Back to the defaults', admin('POST', '/settings/reset', { json: { section: 'websocket' } })],
+        ],
+      },
+      'protocols.ws-try': {
+        title: 'Live WebSocket console',
+        purpose: 'Connect from this page to one of the mock channels, send messages and watch everything that comes back.',
+        steps: [
+          'Pick a channel and press Connect. The browser sends the active credentials where it can: query-string API keys, and ?access_token= for Bearer, JWT and OAuth2.',
+          'HTTP Basic, header API keys, HMAC and required headers cannot be set by a browser: use the Node command from the channel guide, or switch the auth mode while you experiment.',
+          'Every connection also shows up on the Inspector page as a 101 upgrade.',
+        ],
+        curls: [
+          ['The same from a terminal (Node 22+)', ws('/ws/rpc', JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'listDepartments', params: { limit: 3 } }))],
+        ],
+      },
+
       // ------------------------------------------------------------ openapi
       openapi: {
         title: 'Live OpenAPI (two specs)',
@@ -584,7 +672,7 @@
       // ------------------------------------------------------------ tester (spec list)
       'tester.add': {
         title: 'Add a spec',
-        purpose: 'Load the contract your implementation is supposed to follow: OpenAPI 3.0, 3.1 or Swagger 2.0 (converted) for REST, or a WSDL 1.1 for SOAP. The kind is detected from the content.',
+        purpose: 'Load the contract your implementation is supposed to follow: OpenAPI 3.0, 3.1 or Swagger 2.0 (converted) for REST, a WSDL 1.1 for SOAP, or AsyncAPI 2.x / 3.0 for WebSocket. The kind is detected from the content. A WebSocket API without a contract can be tested with a hand-written scenario.',
         steps: [
           'Upload a file, load it from a URL, or paste YAML/JSON (OpenAPI) or XML (WSDL).',
           'For a WSDL with imported schemas, load it by URL (e.g. `https://host/Service?wsdl`) so relative imports resolve.',
@@ -596,6 +684,8 @@
           ['Load a spec from a URL', admin('POST', '/tester/specs', { json: { name: 'my-api', url: 'https://example.com/openapi.yaml' } })],
           ['Upload a local file (needs jq)', `jq -Rs '{name: "my-api", content: .}' ./openapi.yaml | ${admin('POST', '/tester/specs', { extra: ["-H 'Content-Type: application/json'", '--data-binary @-'] })}`],
           ['Load a WSDL from a URL', admin('POST', '/tester/specs', { json: { name: 'my-soap-service', url: 'https://example.com/OrderService?wsdl' } })],
+          ['Load an AsyncAPI document from a URL', admin('POST', '/tester/specs', { json: { name: 'my-ws-api', url: 'https://example.com/asyncapi.yaml' } })],
+          ['A WebSocket scenario without a contract', admin('POST', '/tester/specs', { json: { name: 'my-socket', kind: 'websocket', url: 'wss://example.com/socket' } })],
         ],
       },
       'tester.samples': {
@@ -605,6 +695,7 @@
           'Press Load on a sample.',
           'For "This tool (live /openapi.json)", the target is already this server: run all operations against the mock API.',
           'For "This tool (live SOAP WSDL)", the endpoint is this server\'s /soap/EmployeeService: try the WSDL tester end to end.',
+          'For "This tool (live AsyncAPI)", the server URL is this server\'s /ws: try the WebSocket tester end to end.',
           'The Supplier Order sample has a deliberate allOf problem: see it on the Spec lint tab.',
           ...pw,
         ],
@@ -612,6 +703,7 @@
           ['Load the Supplier Order sample', admin('POST', '/tester/specs', { json: { sample: 'Supplier_Order_Collaboration_OpenAPI_3_1.yaml' } })],
           ['Load this tool\'s own spec', admin('POST', '/tester/specs', { json: { sample: 'self' } })],
           ['Load this tool\'s own SOAP WSDL', admin('POST', '/tester/specs', { json: { sample: 'self-soap' } })],
+          ['Load this tool\'s own AsyncAPI (WebSocket)', admin('POST', '/tester/specs', { json: { sample: 'self-ws' } })],
         ],
       },
       'tester.specs': {
@@ -632,7 +724,7 @@
         title: 'Target',
         purpose: 'Where and how the tester calls your implementation. Spec servers, WSDL addresses and token URLs are often placeholders, so set the real ones here.',
         steps: [
-          'OpenAPI: set the base URL of your implementation (or "use this tool" to call the mock API). WSDL: set the endpoint URL every operation is posted to, and the SOAP version (Auto uses SOAP 1.1 when the WSDL has it).',
+          'OpenAPI: set the base URL of your implementation (or "use this tool" to call the mock API). WSDL: set the endpoint URL every operation is posted to, and the SOAP version (Auto uses SOAP 1.1 when the WSDL has it). WebSocket: set the ws:// or wss:// server URL (channel addresses are appended) and any subprotocols to offer.',
           'Choose an auth profile that matches the spec\'s security schemes: API key, OAuth2 client credentials (with your token URL), Basic or Bearer. "Test token request" shows the full exchange. For SOAP there is also WS-Security UsernameToken (text or digest password), added to every envelope.',
           'Add default headers sent on every call; `{{uuid}}` and `{{now}}` are expanded.',
           'Tick "Lenient allOf" only if the spec combines allOf with additionalProperties: false. Save target.',
@@ -642,6 +734,7 @@
           ['Set the target with an API key', admin('PUT', `/tester/specs/${specId}`, { json: { target: { baseUrl: 'https://my-api.example.com/v1', auth: { type: 'apikey', name: 'X-API-Key', in: 'header', value: 'MY_KEY' }, headers: {}, timeoutMs: 30000 } } })],
           ['Set the target with OAuth2 client credentials', admin('PUT', `/tester/specs/${specId}`, { json: { target: { baseUrl: 'https://my-api.example.com/v1', auth: { type: 'oauth2cc', tokenUrl: 'https://idp.example.com/oauth2/token', clientId: 'CLIENT_ID', clientSecret: 'CLIENT_SECRET', scopes: 'read write', clientAuth: 'basic' }, headers: {}, timeoutMs: 30000 } } })],
           ['SOAP: endpoint, SOAP 1.2 and WS-Security', admin('PUT', `/tester/specs/${specId}`, { json: { target: { baseUrl: 'https://my-soap.example.com/services/OrderService', soapVersion: '1.2', auth: { type: 'wsse', username: 'USER', password: 'PASSWORD', passwordType: 'digest' } } } })],
+          ['WebSocket: server URL, subprotocol and a token in the query string', admin('PUT', `/tester/specs/${specId}`, { json: { target: { baseUrl: 'wss://my-ws.example.com', subprotocols: ['v1.json'], auth: { type: 'apikey', in: 'query', name: 'access_token', value: 'TOKEN' } } } })],
         ],
       },
       'tester.mock': {
@@ -692,7 +785,8 @@
         steps: [
           'Order: collection POSTs → collection GETs → item operations → DELETEs. Ids are taken from Location headers and response bodies.',
           'Add variables (JSON) to supply ids the run cannot discover, e.g. `{"purchaseOrderId":"PO-4500123456"}`.',
-          'Tick "Negative tests" to also check 401 without auth, 400/422 for invalid bodies and 404 for unknown ids. For WSDL contracts: no credentials, a missing required element, an unknown id and malformed XML must each be rejected with the right SOAP fault.',
+          'Tick "Negative tests" to also check 401 without auth, 400/422 for invalid bodies and 404 for unknown ids. For WSDL contracts: no credentials, a missing required element, an unknown id and malformed XML must each be rejected with the right SOAP fault. For WebSocket: no credentials (upgrade rejected with 401), a malformed message, an oversized message (close 1009) and invalid UTF-8 (close 1007).',
+          'WebSocket specs run a scenario (connect, send, expect, listen, ping, close…): the automatic one comes from the AsyncAPI channels; edit and save your own on this tab.',
           'Open the HTML report or export JSON to share the result. Automate it from CI with the commands below.',
           ...pw,
         ],

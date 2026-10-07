@@ -241,9 +241,9 @@
     auth: { purpose: 'Choose how /v1 calls must authenticate (none, API key, Basic, Bearer, JWT, OAuth2, HMAC), see the credentials, manage OAuth clients and get test tokens.' },
     chaos: { purpose: 'Make the mock API misbehave on purpose: random errors, latency, timeouts, broken JSON and rate limits, globally or per route, so you can test client error handling.' },
     headers: { purpose: 'Headers added to every response, and headers every /v1 request must carry (missing ones return 400).' },
-    protocols: { purpose: 'The same mock data over other protocols. SOAP 1.1/1.2 services with live WSDLs today; auth, chaos, rate limits and required headers apply as on /v1, with errors returned as SOAP faults.' },
+    protocols: { purpose: 'The same mock data over other protocols: SOAP 1.1/1.2 services with live WSDLs, and WebSocket channels (echo, JSON-RPC, live change feed) with an AsyncAPI document and a live console. Auth, chaos, rate limits and required headers apply as on /v1.' },
     openapi: { purpose: 'Two live OpenAPI 3.1 specs: the Mock Data API (/openapi.json) for integrations to import, and the Admin API (/admin/api/openapi.json) for scripting the tool itself.' },
-    tester: { purpose: 'Test an API you built: load its OpenAPI spec (REST) or WSDL (SOAP), call your implementation, and check every response against the contract.' },
+    tester: { purpose: 'Test an API you built: load its OpenAPI spec (REST), WSDL (SOAP) or AsyncAPI document (WebSocket), call your implementation, and check every response or message against the contract.' },
     help: { purpose: 'What this tool does and how to use each page.' },
   };
   let currentPage = 'overview';
@@ -452,7 +452,7 @@
     const filterText = h('input', { type: 'text', placeholder: 'Filter path, header, body…', 'aria-label': 'Filter' });
     const filterMethod = h('select', { 'aria-label': 'Method' }, ['', 'GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'].map((m) => h('option', { value: m }, m || 'All methods')));
     const filterSource = h('select', { 'aria-label': 'Source' },
-      [['', 'All sources'], ['catch-all', 'Webhooks / other paths'], ['v1', 'Mock API (/v1)'], ['soap', 'SOAP (/soap)'], ['oauth', 'OAuth (/oauth)']].map(([v, l]) => h('option', { value: v }, l)));
+      [['', 'All sources'], ['catch-all', 'Webhooks / other paths'], ['v1', 'Mock API (/v1)'], ['soap', 'SOAP (/soap)'], ['ws', 'WebSocket (/ws)'], ['oauth', 'OAuth (/oauth)']].map(([v, l]) => h('option', { value: v }, l)));
     const live = h('span', { class: 'live-dot' });
     const count = h('span', { class: 'muted small' });
     const logAll = h('input', { type: 'checkbox', checked: !!sval('inspectorLogAll') });
@@ -765,7 +765,11 @@
       settingsForm(['soapEnabled', 'soapWsse', 'soapActionCheck'], { onSaved: () => route() }));
     el.append(h('div', { class: 'grid cols-2' }, servicesCard, settingsCard));
 
-    if (!services.length) return;
+    if (services.length) soapTry(el, services);
+    return wsSection(el); // cleanup: closes the console's socket when leaving the page
+  };
+
+  function soapTry(el, services) {
 
     // ---- try a request
     const svcSel = h('select', { 'aria-label': 'Service' }, services.map((sv) => h('option', { value: sv.name }, sv.name)));
@@ -824,7 +828,83 @@
       h('div', { class: 'row' }, h('button', { class: 'primary', onclick: send }, 'Send'), h('button', { onclick: buildEnvelope }, 'Reset envelope'),
         h('span', { class: 'small muted' }, `Sent from your browser with the active auth mode (${CURL?.mode || 'none'}). The call also appears on the Inspector page.`)),
       out));
-  };
+  }
+
+  // WebSocket channels, settings and a live console (the browser's own WebSocket).
+  async function wsSection(el) {
+    const on = !!sval('wsEnabled');
+    const listing = on ? await fetch('/ws', { headers: { Accept: 'application/json' } }).then((r) => (r.ok ? r.json() : null)).catch(() => null) : null;
+    const channels = listing?.channels || [];
+    el.append(h('div', { class: 'grid cols-2' },
+      h('div', { class: 'card' }, titled('WebSocket channels', 'protocols.ws'),
+        !on ? h('p', { class: 'muted' }, 'The WebSocket mock is off. Turn on wsEnabled in the settings next to this card.')
+          : h('div', { class: 'table-wrap' }, h('table', null,
+            h('thead', null, h('tr', null, h('th', null, 'Channel'), h('th', null, 'URL'))),
+            h('tbody', null, channels.map((c) => h('tr', null,
+              h('td', null, h('b', null, c.name), h('div', { class: 'small muted' }, c.description)),
+              h('td', null, h('code', null, c.url), ' ', h('button', { class: 'small', onclick: () => copy(c.url) }, 'copy'))))))),
+        on && listing ? h('div', { class: 'small muted', style: { marginTop: '8px' } }, 'AsyncAPI: ', h('a', { href: listing.asyncapi, target: '_blank', rel: 'noopener' }, '/ws/asyncapi.json ↗'), ` · ${listing.open} open connection${listing.open === 1 ? '' : 's'}`) : null),
+      h('div', { class: 'card' }, titled('WebSocket settings', 'protocols.ws-settings'),
+        settingsForm(['wsEnabled', 'wsMaxMessageKb', 'wsIdleTimeoutSeconds', 'wsPingIntervalSeconds'], { onSaved: () => route() }))));
+    if (!channels.length) return;
+
+    const chSel = h('select', { 'aria-label': 'Channel' }, channels.map((c) => h('option', { value: c.name }, c.name)));
+    const query = h('input', { type: 'text', placeholder: 'query, e.g. resource=employees', style: { maxWidth: '260px' } });
+    const msg = h('textarea', { rows: 4, class: 'mono', spellcheck: 'false' }, JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'getEmployee', params: { id: 1 } }));
+    const log = h('pre', { style: { maxHeight: '360px', minHeight: '120px' } });
+    const status = h('span', { class: 'badge' }, 'closed');
+    let sock = null;
+    const started = { t: 0 };
+    const line = (dir, text) => {
+      log.textContent += `${dir} ${String(Math.round(performance.now() - started.t)).padStart(6)} ms  ${text}\n`;
+      log.scrollTop = log.scrollHeight;
+    };
+    const setState = (st) => { status.textContent = st; status.className = `badge ${st === 'open' ? 'pass' : st === 'connecting' ? 'warn' : ''}`; };
+    chSel.addEventListener('change', () => {
+      const n = chSel.value;
+      msg.value = n === 'rpc' ? JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'getEmployee', params: { id: 1 } }) : n === 'echo' ? 'hello' : '';
+    });
+    const browserAuth = () => {
+      const c = CURL?.ctx;
+      const params = new URLSearchParams(query.value.trim());
+      let note = '';
+      if (!c || c.mode === 'none') return { params, note };
+      if (c.mode === 'apikey' && c.apiKey.in === 'query') params.set(c.apiKey.name, c.apiKey.value);
+      else if (c.mode === 'bearer') params.set('access_token', c.bearer);
+      else note = c.mode === 'jwt' || c.mode === 'oauth2' ? 'token' : `Auth mode "${c.mode}" needs request headers, which a browser cannot set; the upgrade will be rejected. Use the Node command from the guide.`;
+      return { params, note };
+    };
+    const connectBtn = h('button', { class: 'primary', onclick: guard(async () => {
+      if (sock) { sock.close(1000, 'bye'); return; }
+      const { params, note } = browserAuth();
+      if (note === 'token') {
+        const cl = CURL.ctx.client || { clientId: 'demo-client', secret: 'demo-secret' };
+        const r = await fetch('/oauth/token', { method: 'POST', headers: { Authorization: `Basic ${btoa(`${cl.clientId}:${cl.secret}`)}`, 'Content-Type': 'application/x-www-form-urlencoded' }, body: 'grant_type=client_credentials&scope=read%20write' });
+        const tok = await r.json().catch(() => ({}));
+        if (!tok.access_token) throw new Error(`Token request failed (${r.status})`);
+        params.set('access_token', tok.access_token);
+      } else if (note) toast(note, 'err');
+      const qs = params.toString();
+      const url = `${location.origin.replace(/^http/, 'ws')}/ws/${chSel.value}${qs ? `?${qs}` : ''}`;
+      log.textContent = '';
+      started.t = performance.now();
+      setState('connecting');
+      line('·', `connecting to ${url.replace(/access_token=[^&]+/, 'access_token=…')}`);
+      sock = new WebSocket(url);
+      sock.onopen = () => { setState('open'); connectBtn.textContent = 'Disconnect'; line('·', `open${sock.protocol ? ` (subprotocol ${sock.protocol})` : ''}`); };
+      sock.onmessage = (e) => line('←', typeof e.data === 'string' ? e.data : '[binary]');
+      sock.onerror = () => line('!', 'error (a rejected upgrade shows as an error in browsers: check the Inspector for its status)');
+      sock.onclose = (e) => { line('·', `closed ${e.code}${e.reason ? ` "${e.reason}"` : ''}`); setState('closed'); connectBtn.textContent = 'Connect'; sock = null; };
+    }) }, 'Connect');
+    const sendBtn = h('button', { onclick: () => { if (!sock || sock.readyState !== 1) { toast('Connect first', 'err'); return; } sock.send(msg.value); line('→', msg.value); } }, 'Send');
+    el.append(h('div', { class: 'card stack' }, titled('Live WebSocket console', 'protocols.ws-try'),
+      h('div', { class: 'row' }, field('Channel', chSel), field('Query (optional)', query), status),
+      msg,
+      h('div', { class: 'row' }, connectBtn, sendBtn, h('button', { class: 'small', onclick: () => { log.textContent = ''; } }, 'Clear log'),
+        h('span', { class: 'small muted' }, `Credentials for the active auth mode (${CURL?.mode || 'none'}) go in the query string where a browser allows it.`)),
+      log));
+    return () => { if (sock) sock.close(1001, 'page left'); };
+  }
 
   // ---------------------------------------------------------------- openapi
   VIEWS.openapi = async (el) => {
@@ -878,24 +958,28 @@
   };
 
   // ---------------------------------------------------------------- tester
+  const KIND_LABEL = { openapi: 'OpenAPI', wsdl: 'WSDL', asyncapi: 'AsyncAPI', websocket: 'WebSocket' };
+
   VIEWS.tester = async (el, params) => {
     if (params[0]) return testerSpec(el, params[0], params[1]);
     const [specs, samples] = await Promise.all([api('GET', '/tester/specs'), api('GET', '/tester/samples')]);
     const name = h('input', { type: 'text', placeholder: 'Name (optional)' });
-    const paste = h('textarea', { rows: 8, placeholder: 'Paste OpenAPI 3.0 / 3.1 or Swagger 2.0 (YAML or JSON), or a WSDL 1.1 (XML)…' });
-    const url = h('input', { type: 'url', placeholder: 'https://…/openapi.yaml or https://…/Service?wsdl' });
+    const paste = h('textarea', { rows: 8, placeholder: 'Paste OpenAPI 3.0 / 3.1, Swagger 2.0 or AsyncAPI 2.x / 3.0 (YAML or JSON), or a WSDL 1.1 (XML)…' });
+    const url = h('input', { type: 'url', placeholder: 'https://…/openapi.yaml, …/Service?wsdl or …/asyncapi.json' });
+    const wsUrl = h('input', { type: 'url', placeholder: 'wss://… (WebSocket without a contract)' });
     const file = h('input', { type: 'file', accept: '.yaml,.yml,.json,.wsdl,.xml' });
     const create = async (body) => {
       const r = await api('POST', '/tester/specs', body);
-      toast(`Loaded ${r.name} (${r.kind === 'wsdl' ? 'WSDL' : `${r.originalVersion}${r.originalVersion === '2.0' ? ' → 3.0' : ''}`}) — lint: ${r.lint.error} errors, ${r.lint.warning} warnings`, r.lint.error ? 'err' : 'ok');
+      toast(`Loaded ${r.name} (${KIND_LABEL[r.kind] && r.kind !== 'openapi' ? KIND_LABEL[r.kind] : `${r.originalVersion}${r.originalVersion === '2.0' ? ' → 3.0' : ''}`}) — lint: ${r.lint.error} errors, ${r.lint.warning} warnings`, r.lint.error ? 'err' : 'ok');
       location.hash = `#/tester/${r.id}`;
     };
-    el.append(header('API Tester', 'Test an implementation against its contract (OpenAPI for REST, WSDL for SOAP): try operations, validate responses, run the whole contract.'));
+    el.append(header('API Tester', 'Test an implementation against its contract (OpenAPI for REST, WSDL for SOAP, AsyncAPI for WebSocket): try operations, validate responses, run the whole contract.'));
     el.append(h('div', { class: 'grid cols-2' },
       h('div', { class: 'card stack' }, titled('Add a spec', 'tester.add'), field('Name', name),
         h('div', { class: 'row' }, file, h('button', { onclick: guard(async () => { if (!file.files[0]) return toast('Choose a file', 'err'); await create({ name: name.value || file.files[0].name.replace(/\.(ya?ml|json|wsdl|xml)$/i, ''), content: await file.files[0].text() }); }) }, 'Upload')),
         h('div', { class: 'row', style: { flexWrap: 'nowrap' } }, url, h('button', { onclick: guard(() => create({ name: name.value || undefined, url: url.value })) }, 'Load URL')),
-        paste, h('button', { class: 'primary', onclick: guard(() => create({ name: name.value || undefined, content: paste.value })) }, 'Load pasted spec')),
+        paste, h('button', { class: 'primary', onclick: guard(() => create({ name: name.value || undefined, content: paste.value })) }, 'Load pasted spec'),
+        h('div', { class: 'row', style: { flexWrap: 'nowrap' } }, wsUrl, h('button', { title: 'Test a WebSocket API that has no AsyncAPI document: write the scenario yourself', onclick: guard(() => create({ name: name.value || undefined, kind: 'websocket', url: wsUrl.value })) }, 'New WebSocket scenario'))),
       h('div', { class: 'card stack' }, titled('Bundled samples', 'tester.samples'),
         samples.map((s) => h('div', { class: 'row between' }, h('div', null, h('div', null, s.name), h('div', { class: 'small muted mono' }, s.url)),
           h('div', { class: 'row' },
@@ -905,10 +989,10 @@
       specs.length ? h('table', null, h('thead', null, h('tr', null, ['Name', 'Version', 'Ops', 'Target', 'Last run', ''].map((x) => h('th', null, x)))),
         h('tbody', null, specs.map((s) => h('tr', { class: 'clickable', onclick: () => { location.hash = `#/tester/${s.id}`; } },
           h('td', null, h('div', null, s.name), h('div', { class: 'small muted' }, `${s.source?.type || ''}${s.converted ? ' · converted from 2.0' : ''}`)),
-          h('td', null, s.kind === 'wsdl' ? h('span', { class: 'badge' }, 'WSDL') : s.version), h('td', null, s.operations), h('td', { class: 'small mono' }, s.baseUrl || '—'),
+          h('td', null, s.kind !== 'openapi' ? h('span', { class: 'badge' }, KIND_LABEL[s.kind] || s.kind) : s.version), h('td', null, s.operations), h('td', { class: 'small mono' }, s.baseUrl || '—'),
           h('td', null, s.lastRun ? h('span', null, h('span', { class: `badge ${s.lastRun.summary.failed ? 'fail' : 'pass'}` }, `${s.lastRun.summary.passed}/${s.lastRun.summary.total}`), ' ', h('span', { class: 'small muted' }, fmtDate(s.lastRun.at))) : '—'),
           h('td', null, h('button', { class: 'small danger', onclick: guard(async (e) => { e.stopPropagation(); if (!confirm(`Delete ${s.name} and its runs?`)) return; await api('DELETE', `/tester/specs/${s.id}`); route(); }) }, 'Delete'))))))
-        : h('div', { class: 'empty' }, 'No specs yet — load the bundled Supplier Order sample (REST) or the live SOAP WSDL to try it.')));
+        : h('div', { class: 'empty' }, 'No specs yet — load the bundled Supplier Order sample (REST), the live SOAP WSDL or the live AsyncAPI (WebSocket) to try it.')));
   };
 
   function checksView(checks) {
@@ -942,13 +1026,16 @@
     let spec = await api('GET', `/tester/specs/${specId}`);
     const body = h('div');
     const isWsdl = spec.kind === 'wsdl';
+    const isWs = spec.kind === 'asyncapi' || spec.kind === 'websocket';
     const soapVersions = isWsdl ? [...new Set(spec.operations.flatMap((o) => o.soap?.versions || []))].sort() : [];
-    el.append(header(spec.name, isWsdl
-      ? `${spec.title} · WSDL 1.1 · SOAP ${soapVersions.join(' and ') || '?'} · ${spec.operations.length} operations`
-      : `${spec.title} ${spec.apiVersion} · OpenAPI ${spec.version}${spec.converted ? ' (converted from Swagger 2.0)' : ''} · ${spec.operations.length} operations`,
+    const subtitle = isWsdl ? `${spec.title} · WSDL 1.1 · SOAP ${soapVersions.join(' and ') || '?'} · ${spec.operations.length} operations`
+      : spec.kind === 'asyncapi' ? `${spec.title} ${spec.apiVersion} · ${spec.version} · ${spec.operations.length} channel${spec.operations.length === 1 ? '' : 's'}`
+        : spec.kind === 'websocket' ? `WebSocket scenario · ${spec.doc.url}`
+          : `${spec.title} ${spec.apiVersion} · OpenAPI ${spec.version}${spec.converted ? ' (converted from Swagger 2.0)' : ''} · ${spec.operations.length} operations`;
+    el.append(header(spec.name, subtitle,
       h('a', { class: 'btn', href: '#/tester' }, '← Specs'),
       spec.source?.type === 'url' || spec.source?.type === 'sample' ? h('button', { onclick: guard(async () => { await api('POST', `/tester/specs/${spec.id}/reload`); toast('Reloaded', 'ok'); route(); }) }, 'Reload') : null,
-      h('a', { class: 'btn', href: `/admin/api/tester/specs/${spec.id}/document`, target: '_blank' }, isWsdl ? 'View WSDL' : 'View JSON')));
+      h('a', { class: 'btn', href: `/admin/api/tester/specs/${spec.id}/document`, target: '_blank' }, isWsdl ? 'View WSDL' : spec.kind === 'websocket' ? 'View scenario' : 'View JSON')));
     const t = tabs([
       { id: 'target', label: 'Target' },
       { id: 'lint', label: `Spec lint${spec.lint.error ? ` (${spec.lint.error} errors)` : spec.lint.warning ? ` (${spec.lint.warning})` : ''}` },
@@ -973,10 +1060,10 @@
     function authEditor(current, profiles) {
       const wrap = h('div', { class: 'stack' });
       const sel = h('select', null, profiles.map((p, i) => h('option', { value: String(i) }, p.label)),
-        isWsdl ? null : h('option', { value: 'basic' }, 'HTTP Basic (manual)'), isWsdl ? null : h('option', { value: 'bearer' }, 'Bearer token (manual)'));
+        spec.kind !== 'openapi' ? null : h('option', { value: 'basic' }, 'HTTP Basic (manual)'), spec.kind !== 'openapi' ? null : h('option', { value: 'bearer' }, 'Bearer token (manual)'));
       const fieldsEl = h('div', { class: 'stack' });
       let profile = { ...current };
-      const idx = profiles.findIndex((p) => p.type === current.type && (p.scheme === current.scheme || !p.scheme));
+      const idx = profiles.findIndex((p) => p.type === current.type && (p.scheme === current.scheme || !p.scheme) && (p.type !== 'apikey' || !p.in || !current.in || p.in === current.in));
       if (idx >= 0) sel.value = String(idx); else if (current.type === 'basic' || current.type === 'bearer') sel.value = current.type;
       const input = (key, label, type = 'text', hint) => {
         const i = h('input', { type, value: profile[key] ?? '', autocomplete: 'off', oninput: () => { profile[key] = i.value; } });
@@ -1028,7 +1115,11 @@
       const auth = authEditor(spec.target.auth || { type: 'none' }, spec.profiles);
       const servers = isWsdl
         ? [...new Set((spec.doc.services || []).flatMap((sv) => sv.ports.map((p) => p.address)).filter(Boolean))]
-        : (spec.doc.servers || []).map((s) => s.url);
+        : spec.kind === 'asyncapi' ? ((spec.doc['x-tester-model'] || {}).servers || []).map((s) => s.url).filter((u) => /^wss?:/.test(u))
+          : spec.kind === 'websocket' ? [spec.doc.url]
+            : (spec.doc.servers || []).map((s) => s.url);
+      const subprotocols = h('input', { type: 'text', value: (spec.target.subprotocols || []).join(', '), placeholder: 'e.g. graphql-transport-ws, v1.json' });
+      const oversize = h('input', { type: 'number', value: spec.target.oversizeKb || 2048, min: 1 });
       const soapVer = h('select', null, h('option', { value: 'auto' }, 'Auto (SOAP 1.1 when the WSDL has it)'), h('option', { value: '1.1' }, 'SOAP 1.1'), h('option', { value: '1.2' }, 'SOAP 1.2'));
       soapVer.value = spec.target.soapVersion || 'auto';
       const mockOut = h('div');
@@ -1036,25 +1127,31 @@
         h('div', { class: 'card stack' }, titled('Target', 'tester.target', specExtra), field('Name', nameIn),
           isWsdl
             ? field('Endpoint URL', base, servers.length ? `WSDL addresses: ${servers.join(', ')}. Every operation is sent here.` : 'The WSDL declares no address.')
-            : field('Base URL override', base, servers.length ? `Spec servers: ${servers.join(', ')}` : 'The spec declares no servers.'),
+            : isWs ? field('Server URL (ws:// or wss://)', base, spec.kind === 'asyncapi' ? `Channel addresses are appended. Spec servers: ${servers.join(', ') || 'none'}` : 'The scenario connects here (a connect step can add an address).')
+              : field('Base URL override', base, servers.length ? `Spec servers: ${servers.join(', ')}` : 'The spec declares no servers.'),
           h('div', { class: 'row' }, servers.map((s) => h('button', { class: 'small', onclick: () => { base.value = s; } }, `use ${s}`)),
-            isWsdl ? null : h('button', { class: 'small', onclick: () => { base.value = location.origin; } }, 'use this tool')),
+            isWsdl || isWs ? null : h('button', { class: 'small', onclick: () => { base.value = location.origin; } }, 'use this tool')),
+          isWs ? field('Subprotocols to offer (comma separated)', subprotocols, 'Sent as Sec-WebSocket-Protocol; the server must select one of them.') : null,
+          isWs ? field('Oversized-message size for negative tests (KB)', oversize) : null,
           isWsdl ? field('SOAP version', soapVer, `Bindings in this WSDL: SOAP ${soapVersions.join(' and ')}.`) : null,
           auth,
           field('Default headers (JSON object)', headers, 'Sent with every request; {{uuid}} and {{now}} templates are expanded.'),
           field('Timeout (ms)', timeout),
-          isWsdl ? null : h('label', { class: 'check' }, lenient, 'Lenient allOf (flatten allOf before validating)'),
+          isWsdl || isWs ? null : h('label', { class: 'check' }, lenient, 'Lenient allOf (flatten allOf before validating)'),
           h('button', { class: 'primary', onclick: guard(async () => {
             let hdrs;
             try { hdrs = JSON.parse(headers.value || '{}'); } catch { throw new Error('Default headers must be a JSON object'); }
-            await api('PUT', `/tester/specs/${spec.id}`, { name: nameIn.value, target: { baseUrl: base.value, auth: auth.get(), headers: hdrs, timeoutMs: Number(timeout.value) || 30000, ...(isWsdl ? { soapVersion: soapVer.value } : {}) }, options: isWsdl ? {} : { lenientAllOf: lenient.checked } });
+            const extra = isWsdl ? { soapVersion: soapVer.value } : isWs ? { subprotocols: subprotocols.value.split(',').map((x) => x.trim()).filter(Boolean), oversizeKb: Number(oversize.value) || 2048 } : {};
+            await api('PUT', `/tester/specs/${spec.id}`, { name: nameIn.value, target: { baseUrl: base.value, auth: auth.get(), headers: hdrs, timeoutMs: Number(timeout.value) || 30000, ...extra }, options: isWsdl || isWs ? {} : { lenientAllOf: lenient.checked } });
             await refresh();
             toast('Target saved', 'ok');
           }) }, 'Save target')),
         h('div', null,
-          isWsdl ? h('div', { class: 'card stack' }, h('h2', null, 'Rehearse without a service'),
-            h('p', { class: 'muted small' }, 'Mock from spec is for OpenAPI. To rehearse a SOAP run, load "This tool (live SOAP WSDL)" from the bundled samples: it targets this server\'s own /soap services.')) : null,
-          isWsdl ? null : h('div', { class: 'card stack' }, titled('Mock from spec', 'tester.mock', specExtra),
+          isWsdl || isWs ? h('div', { class: 'card stack' }, h('h2', null, 'Rehearse without a service'),
+            h('p', { class: 'muted small' }, isWsdl
+              ? 'Mock from spec is for OpenAPI. To rehearse a SOAP run, load "This tool (live SOAP WSDL)" from the bundled samples: it targets this server\'s own /soap services.'
+              : 'Mock from spec is for OpenAPI. To rehearse a WebSocket run, load "This tool (live AsyncAPI)" from the bundled samples: it targets this server\'s own /ws channels.')) : null,
+          isWsdl || isWs ? null : h('div', { class: 'card stack' }, titled('Mock from spec', 'tester.mock', specExtra),
             h('p', { class: 'muted small' }, 'Serve this spec\'s documented 2xx responses (examples first) from this tool under /mock/<name>, then run the contract against it. Useful before an implementation exists — and it shows how the spec\'s own examples fare against its schemas.'),
             h('div', { class: 'row' },
               h('button', { onclick: guard(async () => { const m = await api('POST', `/tester/specs/${spec.id}/mock`, { useAsTarget: true }); clear(mockOut).append(h('div', { class: 'small' }, `${m.count} rules installed; target set to `, h('code', null, m.url))); await refresh(); base.value = spec.target.baseUrl; }) }, 'Install mock & use as target'),
@@ -1075,8 +1172,10 @@
       let current = null;
       for (const op of spec.operations) {
         const item = h('div', { class: 'list-item', onclick: () => { for (const x of listEl.children) x.classList.remove('active'); item.classList.add('active'); current = op; showOp(op); } },
-          isWsdl ? h('span', { class: 'method post' }, 'SOAP') : method(op.method),
-          isWsdl
+          isWsdl ? h('span', { class: 'method post' }, 'SOAP') : isWs ? h('span', { class: 'method get' }, 'WS') : method(op.method),
+          isWs
+            ? h('div', { style: { minWidth: 0 } }, h('div', { class: 'path' }, op.id), h('div', { class: 'small muted' }, `${op.path || spec.target.baseUrl || ''}${op.ws.toServer.length ? ` · sends ${op.ws.toServer.join(', ')}` : ''}${op.ws.fromServer.length ? ` · receives ${op.ws.fromServer.join(', ')}` : ''}`))
+          : isWsdl
             ? h('div', { style: { minWidth: 0 } }, h('div', { class: 'path' }, op.operationId), h('div', { class: 'small muted' }, `${op.path} · ${op.soap.versions.map((v) => `SOAP ${v}`).join(', ')}`))
             : h('div', { style: { minWidth: 0 } }, h('div', { class: 'path' }, op.path), h('div', { class: 'small muted' }, op.operationId || op.summary || '')),
           op.secured ? h('span', { class: 'small muted', title: 'secured' }, '🔒') : h('span'));
@@ -1115,7 +1214,7 @@
           if (exSel && req.exampleName) exSel.value = req.exampleName;
           const verSel = isWsdl && op.soap.versions.length > 1 ? h('select', { onchange: () => showOp(op, undefined, verSel.value) }, op.soap.versions.map((v) => h('option', { value: v }, `SOAP ${v}`))) : null;
           if (verSel) verSel.value = req.soapVersion;
-          bodySection.append(h('div', { class: 'row between' }, h('h3', null, isWsdl ? `Envelope · SOAP ${req.soapVersion}` : `Body · ${req.contentType}`),
+          bodySection.append(h('div', { class: 'row between' }, h('h3', null, isWsdl ? `Envelope · SOAP ${req.soapVersion}` : isWs ? `Message to send · ${req.contentType}` : `Body · ${req.contentType}`),
             verSel ? h('div', { class: 'row' }, h('span', { class: 'small muted' }, 'Version'), verSel)
               : exSel ? h('div', { class: 'row' }, h('span', { class: 'small muted' }, 'Example'), exSel) : h('span', { class: 'small muted' }, `source: ${req.exampleName || 'generated'}`)),
           isWsdl ? h('div', { class: 'small muted mono' }, `Content-Type: ${req.contentType}`) : null, bodyEditor);
@@ -1133,11 +1232,13 @@
           } finally { send.disabled = false; }
         }) }, 'Send');
         detail.append(h('div', { class: 'card stack' },
-          isWsdl
+          isWs
+            ? h('div', { class: 'row' }, h('span', { class: 'method get' }, 'WS'), h('code', null, `${(spec.target.baseUrl || '').replace(/\/$/, '')}${op.path}`), h('span', { class: 'muted small' }, 'connect → send → listen → close'))
+          : isWsdl
             ? h('div', { class: 'row' }, h('span', { class: 'method post' }, 'SOAP'), h('code', null, op.operationId), h('span', { class: 'muted small' }, `${op.path} · ${op.soap.style}${op.soap.faults.length ? ` · faults: ${op.soap.faults.join(', ')}` : ''}`))
             : h('div', { class: 'row' }, method(op.method), h('code', null, op.path), op.operationId ? h('span', { class: 'muted small' }, op.operationId) : null),
           op.summary ? h('div', { class: 'muted' }, op.summary) : null,
-          req.params.length ? h('div', null, h('h3', null, 'Parameters'), h('table', null, h('tbody', null, paramRows)), h('div', { class: 'small muted' }, 'Templates: {{uuid}} (fresh per send), {{now}}, {{timestamp}}.')) : null,
+          req.params.length ? h('div', null, h('h3', null, isWs ? 'Options' : 'Parameters'), h('table', null, h('tbody', null, paramRows)), h('div', { class: 'small muted' }, 'Templates: {{uuid}} (fresh per send), {{now}}, {{timestamp}}.')) : null,
           bodySection,
           h('div', { class: 'row' }, send, h('span', { class: 'small muted' }, `→ ${spec.target.baseUrl || (isWsdl ? req.endpoint : '') || '(no base URL)'} · auth: ${spec.target.auth?.type || 'none'}`))),
         h('div', { class: 'card' }, out));
@@ -1147,7 +1248,8 @@
     function drawRun() {
       const negative = h('input', { type: 'checkbox' });
       const lenient = h('input', { type: 'checkbox', checked: spec.options?.lenientAllOf });
-      const vars = h('textarea', { rows: 4, placeholder: isWsdl ? '{"employee.id": "5", "departmentId": "2"}' : '{"purchaseOrderId": "PO-4500123456"}' });
+      const vars = h('textarea', { rows: 4, placeholder: isWsdl ? '{"employee.id": "5", "departmentId": "2"}' : isWs ? '{"orderId": "42"}  (use as {{orderId}} in the scenario)' : '{"purchaseOrderId": "PO-4500123456"}' });
+      const scenarioIn = isWs ? h('textarea', { rows: 14, class: 'mono', spellcheck: 'false' }, JSON.stringify(spec.scenario || spec.autoScenario || [], null, 2)) : null;
       const opsSel = h('select', { multiple: true, size: Math.min(8, spec.operations.length) }, spec.operations.map((o) => h('option', { value: o.id }, isWsdl ? o.id : `${o.method.toUpperCase()} ${o.path}`)));
       const out = h('div');
       const runBtn = h('button', { class: 'primary', onclick: guard(async () => {
@@ -1161,13 +1263,21 @@
         } finally { runBtn.disabled = false; }
       }) }, 'Run all');
       body.append(h('div', { class: 'card stack' }, titled('Contract run', 'tester.run', specExtra),
-        h('div', { class: 'small muted' }, isWsdl
+        h('div', { class: 'small muted' }, isWs
+          ? 'The scenario runs top to bottom. Steps: {"connect": {"channel"?, "address"?, "protocols"?}}, {"send": <message or {"message": "Name"}>}, {"expect": {"timeoutMs", "match": {"/json/pointer": value}, "contains", "capture": {"var": "/pointer"}, "correlate"}}, {"listen": ms}, {"wait": ms}, {"ping": {}}, {"close": 1000}, {"expectClose": 1008}. {{var}} templates use captured and supplied variables. Every received message is checked against the channel\'s schemas.'
+          : isWsdl
           ? 'Order by operation name: Create/Add → List/Search → Get → Update and others → Delete. Requests contain the required elements only; id-like values (id, *Id, *Number, *Code) from responses fill later requests. Variables can also be keyed as "noun.field", e.g. "employee.id".'
           : 'Order: collection POSTs (creates) → collection GETs (lists) → item operations → DELETEs. IDs are captured from Location headers and response bodies and fed into later path parameters.'),
-        h('div', { class: 'row' }, h('label', { class: 'check' }, negative, isWsdl
+        h('div', { class: 'row' }, h('label', { class: 'check' }, negative, isWs
+          ? 'Negative tests (no credentials → upgrade rejected with 401, malformed message → error reply or close 1003/1007/1008, oversized message → close 1009, invalid UTF-8 → close 1007)'
+          : isWsdl
           ? 'Negative tests (no credentials → 401 or fault, missing required element → client fault, unknown id → fault, malformed XML → client fault)'
-          : 'Negative tests (no auth → 401, missing required field → 400/422, unknown id → 404)'), isWsdl ? null : h('label', { class: 'check' }, lenient, 'Lenient allOf')),
-        h('div', { class: 'grid cols-2' }, field('Variables (override captured values)', vars), field('Only these operations (none selected = all)', opsSel)),
+          : 'Negative tests (no auth → 401, missing required field → 400/422, unknown id → 404)'), isWsdl || isWs ? null : h('label', { class: 'check' }, lenient, 'Lenient allOf')),
+        isWs ? field(spec.scenario ? 'Scenario (saved)' : 'Scenario (automatic from the contract; edit and save to customise)', scenarioIn) : null,
+        isWs ? h('div', { class: 'row' },
+          h('button', { onclick: guard(async () => { let sc; try { sc = JSON.parse(scenarioIn.value); } catch (e) { throw new Error(`Scenario is not valid JSON: ${e.message}`); } await api('PUT', `/tester/specs/${spec.id}`, { scenario: sc }); await refresh(); toast('Scenario saved', 'ok'); }) }, 'Save scenario'),
+          spec.kind === 'asyncapi' ? h('button', { onclick: guard(async () => { await api('PUT', `/tester/specs/${spec.id}`, { scenario: null }); await refresh(); scenarioIn.value = JSON.stringify(spec.autoScenario || [], null, 2); toast('Back to the automatic scenario', 'ok'); }) }, 'Use automatic scenario') : null) : null,
+        h('div', { class: 'grid cols-2' }, field('Variables (override captured values)', vars), isWs ? h('div') : field('Only these operations (none selected = all)', opsSel)),
         h('div', { class: 'row' }, runBtn, h('span', { class: 'small muted' }, `→ ${spec.target.baseUrl || '(no base URL)'} · auth: ${spec.target.auth?.type || 'none'}`))), out);
     }
 
@@ -1181,7 +1291,8 @@
           h('a', { class: 'btn small', href: `/admin/api/tester/runs/${run.id}/export.json` }, 'Export JSON')),
         run.steps.map((st, i) => h('details', { class: 'card', open: st.outcome === 'fail' && i < 6 ? true : null },
           h('summary', { class: 'row' }, h('span', { class: `badge ${st.outcome}` }, st.outcome), h('span', { class: 'muted' }, `#${i + 1}`),
-            st.opId.includes(' ') ? [method(st.opId.split(' ')[0]), h('code', null, st.opId.split(' ').slice(1).join(' '))] : [h('span', { class: 'method post' }, 'SOAP'), h('code', null, st.opId)],
+            !run.kind || run.kind === 'openapi' ? [method(st.opId.split(' ')[0]), h('code', null, st.opId.split(' ').slice(1).join(' '))]
+              : [h('span', { class: `method ${run.kind === 'wsdl' ? 'post' : 'get'}` }, run.kind === 'wsdl' ? 'SOAP' : 'WS'), h('code', null, st.opId)],
             st.kind === 'negative' ? h('span', { class: 'badge' }, `negative: ${st.test}`) : null,
             st.response ? h('span', { class: statusClass(st.response.status) }, st.response.status) : h('span', { style: { color: 'var(--err)' } }, st.error)),
           h('div', { style: { marginTop: '10px' } }, resultView(st)))),
@@ -1256,7 +1367,7 @@
 
     el.append(section('quick-incoming', 'Quick start: incoming testing',
       steps(
-        h('span', null, 'Open ', link('#/tester', 'API Tester'), ' and load your contract: upload, paste, or a URL. OpenAPI 3.0, 3.1, Swagger 2.0 and WSDL 1.1 (SOAP 1.1/1.2) all work. To try it first, load the bundled Supplier Order sample or this tool\'s live SOAP WSDL.'),
+        h('span', null, 'Open ', link('#/tester', 'API Tester'), ' and load your contract: upload, paste, or a URL. OpenAPI 3.0, 3.1, Swagger 2.0, WSDL 1.1 (SOAP 1.1/1.2) and AsyncAPI 2.x/3.0 (WebSocket) all work; a WebSocket API without a contract gets a hand-written scenario. To try it first, load the bundled Supplier Order sample or this tool\'s live SOAP WSDL or AsyncAPI.'),
         h('span', null, 'Read the ', h('b', null, 'Spec lint'), ' tab. It flags problems that make valid responses fail validation, such as allOf combined with additionalProperties: false, and placeholder server or token URLs.'),
         h('span', null, 'On the ', h('b', null, 'Target'), ' tab, set the base URL of your implementation and an auth profile (API key, OAuth2 client credentials with your token URL, Basic or Bearer). "Test token request" shows the full token exchange.'),
         h('span', null, 'Use ', h('b', null, 'Try it'), ' to send one operation at a time. The form is pre-filled from the spec; every response gets a list of pass/fail checks.'),
@@ -1272,6 +1383,7 @@
           ['/v1/departments/{id}/employees, /v1/categories/{id}/products', 'Nested collections.'],
           ['/v1/files/…', 'File protocols: multipart, raw, base64, tus, presign, download (range), chunked.'],
           ['/soap, /soap/{EmployeeService|ProductService}', 'Mock SOAP 1.1/1.2 services over the same data. ?wsdl returns the WSDL (always open); POST requests use the active auth mode.'],
+          ['/ws, /ws/{echo|rpc|changes}, /ws/asyncapi.json', 'Mock WebSocket channels over the same data (the upgrade uses the active auth mode) and their AsyncAPI 3.0 document.'],
           ['/oauth/token, /oauth/authorize, /oauth/introspect, /oauth/revoke', 'Built-in OAuth 2.0 server.'],
           ['/.well-known/jwks.json, /.well-known/oauth-authorization-server', 'Signing keys and OAuth discovery.'],
           ['/openapi.json, /openapi.yaml', 'Live OpenAPI for the mock data API (for integrations).'],

@@ -41,10 +41,20 @@ function mergePatch(target, patch) {
 const READONLY = ['id', 'uuid', 'createdAt', 'updatedAt', 'department', 'category'];
 
 class ResourceService {
-  constructor(repo, dates) {
+  // events (optional EventEmitter): emits 'change' { type: created|updated|deleted, resource, id, at, data? }
+  // for the live change feeds (/ws/changes, /sse/changes).
+  constructor(repo, dates, events = null) {
     this.repo = repo;
     this.dates = dates;
+    this.events = events;
     this.cache = new Map();
+  }
+
+  changed(type, name, doc) {
+    if (!this.events) return;
+    try {
+      this.events.emit('change', { type, resource: name, id: doc.id, at: new Date().toISOString(), ...(type === 'deleted' ? {} : { data: doc }) });
+    } catch { /* a listener must never break a write */ }
   }
 
   invalidate(name) {
@@ -149,6 +159,7 @@ class ResourceService {
     await this.checkRefs(name, doc);
     await this.repo.put(name, id, doc);
     this.invalidate(name);
+    this.changed('created', name, doc);
     return doc;
   }
 
@@ -163,6 +174,7 @@ class ResourceService {
     await this.checkRefs(name, doc);
     await this.repo.put(name, doc.id, doc);
     this.invalidate(name);
+    this.changed('updated', name, doc);
     return doc;
   }
 
@@ -194,6 +206,7 @@ class ResourceService {
     }
     await this.repo.del(name, existing.id);
     this.invalidate(name);
+    this.changed('deleted', name, existing);
   }
 }
 

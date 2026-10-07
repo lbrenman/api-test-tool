@@ -48,9 +48,11 @@ Ues Cases:
   - [Chaos: errors and latency](#chaos-errors-and-latency)
   - [Files](#files)
   - [SOAP services](#soap-services)
+  - [WebSocket channels](#websocket-channels)
   - [Inspector](#inspector)
   - [API tester walkthrough](#api-tester-walkthrough)
     - [SOAP services (WSDL)](#soap-services-wsdl)
+    - [WebSocket APIs (AsyncAPI or a scenario)](#websocket-apis-asyncapi-or-a-scenario)
   - [Postman and Newman](#postman-and-newman)
   - [Deployment](#deployment)
     - [Fly.io](#flyio)
@@ -114,11 +116,12 @@ Fly.io, Render and Northflank are covered in [Deployment](#deployment).
 | **OAuth 2.0 server** | client_credentials, authorization_code + PKCE (login/consent page), refresh_token (rotating), introspection (RFC 7662), revocation (RFC 7009), RFC 8414 metadata, JWKS. |
 | **Files** | One shared pool (local disk or S3-compatible) behind multipart, raw, base64-in-JSON, tus resumable, presigned URLs, range downloads (206) and chunked downloads. Sample CSV, XLSX, JSON, PNG, JPG, PDF, TXT, ZIP and a 10 MB binary are generated on seed. |
 | **SOAP** | Mock SOAP 1.1 and 1.2 services (`EmployeeService`, `ProductService`) over the same data, with live WSDLs (document/literal, a SOAP 1.1 and a 1.2 binding). Get, List (paging, filters, text search, sort), Create, Update, Delete. Auth mode, chaos, rate limits and required headers apply as on `/v1`; errors are SOAP faults with field-level detail. Optional WS-Security UsernameToken (PasswordText and PasswordDigest) and SOAPAction checking. |
+| **WebSocket** | Mock channels over the same data: `/ws/echo`, `/ws/rpc` (JSON-RPC 2.0: get/list employees, products, departments, categories) and `/ws/changes` (live created/updated/deleted events from any protocol), with an AsyncAPI 3.0 document. The upgrade goes through auth, rate limiting, required headers and chaos. Size limit (1009), idle timeout, keep-alive pings, and a live console in the dashboard. In-house RFC 6455 implementation, no dependency. |
 | **Inspector** | Catch-all capture with the actual path, live stream (SSE), detected auth (Basic user, decoded JWT, API keys), pretty bodies and multipart parts, copy as curl, replay, auto-forward, configurable responses and path rules. |
 | **Generated OpenAPI** | Two OAS 3.1 specs, regenerated from the live settings. **Mock Data API** (`/openapi.json`, `/openapi.yaml`) is for integrations: `/v1` resources, every pagination path, the file endpoints and the OAuth token endpoint, reflecting the server URL, date format, auth scheme, required headers and chaos headers. **Admin API** (`/admin/api/openapi.json`, `.yaml`, password protected) is for operators and scripts: settings, seeding, files, OAuth clients, inspector, tester, `/health` and `/ready`. Swagger UI at `/docs` shows both (`/docs?spec=admin` for the admin spec). |
-| **API tester** | Upload, paste or URL load for OAS 3.0, 3.1 and Swagger 2.0 (REST) and WSDL 1.1 (SOAP 1.1/1.2, with XSD validation and WS-Security). Spec lint, per-operation "try it" with generated samples that honour `pattern`/`format`/`enum`/limits, auth profiles (none, API key, Basic, Bearer, OAuth2 client credentials), response validation, run-all contract mode with ID chaining and negative tests, run history, and JSON and HTML reports. "Mock from spec" serves a spec's examples from this tool. |
+| **API tester** | Upload, paste or URL load for OAS 3.0, 3.1 and Swagger 2.0 (REST), WSDL 1.1 (SOAP 1.1/1.2, with XSD validation and WS-Security) and AsyncAPI 2.x/3.0 (WebSocket, with message validation, correlation and scripted scenarios). Spec lint, per-operation "try it" with generated samples that honour `pattern`/`format`/`enum`/limits, auth profiles (none, API key, Basic, Bearer, OAuth2 client credentials), response validation, run-all contract mode with ID chaining and negative tests, run history, and JSON and HTML reports. "Mock from spec" serves a spec's examples from this tool. |
 | **Back office app** | `/app` is a business-style app over the mock data, for demos and non-technical viewers: KPIs (headcount, payroll, stock value, stock health), charts, searchable and sortable lists, record pages with related records, and forms to create, edit and delete employees, products, departments and categories. It reads and writes the same data as `/v1` but through its own backend (`/admin/api/app/*`), so the `/v1` auth mode, chaos, rate limits and required headers never break it. Uses the dashboard password. |
-| **Dashboard** | Overview, Settings (with source badges and resets), Data, Inspector, Files, Auth, Chaos, Headers, Protocols (SOAP services, settings and a try-it panel), OpenAPI, API Tester, and About & Help (what each page does, quick starts, reserved paths, handy headers). Every page has a "? Help" link, and every main component has a **"?" guide** (hover, focus or tap) with numbered steps for using it in your integration or tests and copy-ready curl commands. The curls use the resolved base URL, the auth mode that is active right now (from `AUTH_MODE` or a dashboard override — the guides never change it), and any required request headers; in `jwt`/`oauth2` mode they fetch a token first, and in `hmac` mode they sign the request with `openssl`. The tester's **Try it → Request** tab adds "Copy as curl" for the exact call it sent. Responsive, with light and dark themes. |
+| **Dashboard** | Overview, Settings (with source badges and resets), Data, Inspector, Files, Auth, Chaos, Headers, Protocols (SOAP services and WebSocket channels: endpoints, settings, a SOAP try-it panel and a live WebSocket console), OpenAPI, API Tester, and About & Help (what each page does, quick starts, reserved paths, handy headers). Every page has a "? Help" link, and every main component has a **"?" guide** (hover, focus or tap) with numbered steps for using it in your integration or tests and copy-ready curl commands. The curls use the resolved base URL, the auth mode that is active right now (from `AUTH_MODE` or a dashboard override — the guides never change it), and any required request headers; in `jwt`/`oauth2` mode they fetch a token first, and in `hmac` mode they sign the request with `openssl`. The tester's **Try it → Request** tab adds "Copy as curl" for the exact call it sent. Responsive, with light and dark themes. |
 
 ---
 
@@ -175,8 +178,12 @@ Settings marked **restart** can only be set through the environment.
 | `SOAP_ENABLED` | `true` | Serve the mock SOAP services under `/soap` |
 | `SOAP_WSSE` | `off` | WS-Security UsernameToken: `off`, `optional` (checked when present) or `required`. Uses `BASIC_USER` / `BASIC_PASS`; independent of `AUTH_MODE` |
 | `SOAP_ACTION_CHECK` | `lenient` | `lenient` (a wrong SOAPAction is a fault, a missing one is fine), `strict` (must be present and right) or `off` |
+| `WS_ENABLED` | `true` | Serve the mock WebSocket channels under `/ws` |
+| `WS_MAX_MESSAGE_KB` | `1024` | Larger messages close the connection with 1009 |
+| `WS_IDLE_TIMEOUT_SECONDS` | `0` | Close connections that send nothing for this long (1001); 0 = never |
+| `WS_PING_INTERVAL_SECONDS` | `30` | Server keep-alive pings; a connection that misses a pong is dropped; 0 = off |
 | `INSPECTOR_RETENTION` | `500` | Captures kept |
-| `INSPECTOR_LOG_ALL` | `true` | Also record `/v1/*`, `/soap/*` and `/oauth/*` calls (with their real responses). Toggle on the Inspector page. |
+| `INSPECTOR_LOG_ALL` | `true` | Also record `/v1/*`, `/soap/*`, `/ws/*` (upgrades) and `/oauth/*` calls (with their real responses). Toggle on the Inspector page. |
 | `INSPECTOR_RESPONSE_STATUS`, `…_CONTENT_TYPE`, `…_BODY`, `…_HEADERS`, `…_DELAY_MS` | `200`, `application/json`, receipt, —, `0` | Default catch-all response |
 | `INSPECTOR_RULES` | — | JSON path rules (first match wins) |
 | `INSPECTOR_FORWARD_ENABLED` / `INSPECTOR_FORWARD_URL` | `false` / — | Auto-forward captures |
@@ -187,7 +194,7 @@ Settings marked **restart** can only be set through the environment.
 
 ## Route map
 
-These prefixes are reserved: `/v1`, `/soap`, `/oauth`, `/.well-known`, `/admin`, `/dashboard`, `/app`, `/docs`, `/openapi.json`, `/openapi.yaml`, `/samples`, `/health`, `/ready`, and `GET /` (which redirects to the dashboard). **Every other path, and every method, is captured by the inspector.** Calls to `/v1`, `/soap` and `/oauth` are recorded there too (unless `INSPECTOR_LOG_ALL=false`); the dashboard, admin API, docs and health probes never are.
+These prefixes are reserved: `/v1`, `/soap`, `/ws`, `/oauth`, `/.well-known`, `/admin`, `/dashboard`, `/app`, `/docs`, `/openapi.json`, `/openapi.yaml`, `/samples`, `/health`, `/ready`, and `GET /` (which redirects to the dashboard). **Every other path, and every method, is captured by the inspector.** Calls to `/v1`, `/soap`, `/ws` (the upgrade) and `/oauth` are recorded there too (unless `INSPECTOR_LOG_ALL=false`); the dashboard, admin API, docs and health probes never are.
 
 | Path | Purpose |
 |---|---|
@@ -203,6 +210,8 @@ These prefixes are reserved: `/v1`, `/soap`, `/oauth`, `/.well-known`, `/admin`,
 | `GET /soap` | SOAP service list (JSON) |
 | `GET /soap/{Service}?wsdl` (or `/soap/{Service}.wsdl`) | WSDL for `EmployeeService` or `ProductService`; always open |
 | `POST /soap/{Service}` | SOAP 1.1 / 1.2 requests (see [SOAP services](#soap-services)) |
+| `GET /ws`, `GET /ws/asyncapi.json` | WebSocket channel list and AsyncAPI 3.0 document (open) |
+| `GET /ws/{echo\|rpc\|changes}` (upgrade) | Mock WebSocket channels (see [WebSocket channels](#websocket-channels)) |
 | `/oauth/token`, `/oauth/authorize`, `/oauth/introspect`, `/oauth/revoke` | OAuth 2.0 server |
 | `/.well-known/oauth-authorization-server`, `/.well-known/openid-configuration`, `/.well-known/jwks.json` | Discovery and JWKS |
 | `/samples/*` | Bundled specs (handy for the tester's URL loader) |
@@ -468,6 +477,29 @@ The dashboard's **Protocols** page lists the services and WSDLs, holds the SOAP 
 
 ---
 
+## WebSocket channels
+
+Mock WebSocket endpoints over the same data, for integrations that consume WebSocket APIs.
+
+| Channel | Behaviour |
+|---|---|
+| `/ws/echo` | Sends every message back unchanged (text or binary). |
+| `/ws/rpc` | JSON-RPC 2.0: `{"jsonrpc":"2.0","id":1,"method":"getEmployee","params":{"id":1}}` → `{"jsonrpc":"2.0","id":1,"result":{…}}`. Methods: `ping`, `time`, `echo`, `getEmployee`, `getProduct`, `getDepartment`, `getCategory`, `listEmployees`, `listProducts`, `listDepartments`, `listCategories` (`limit` 1–100, `offset`). Errors use JSON-RPC codes (-32700 parse error, -32601 unknown method, -32602 bad params, -32004 not found); batches work. |
+| `/ws/changes` | Sends `{"type":"subscribed",…}`, then an event for every create, update or delete of an employee, product, department or category, whichever protocol made it (`/v1`, `/soap`, the back office). `?resource=employees,products` filters. |
+
+- **Contract:** `GET /ws/asyncapi.json` is an AsyncAPI 3.0 document for these channels, generated for the current base URL and auth mode.
+- **Upgrade request:** goes through the same middleware as `/v1`: `AUTH_MODE` (browsers cannot set headers, so for `bearer`, `jwt` and `oauth2` a `?access_token=` query parameter is accepted on upgrades), `RATE_LIMIT_RPM`, `REQUIRED_HEADERS` and chaos. A rejected upgrade returns the usual problem+json status (401, 429, 503…), and `X-Force-Error: 503` on the upgrade tests reconnect logic. The first offered subprotocol is accepted.
+- **Connection behaviour:** messages over `WS_MAX_MESSAGE_KB` close with 1009; invalid UTF-8 closes with 1007; protocol errors with 1002; `WS_IDLE_TIMEOUT_SECONDS` closes idle connections with 1001; the server pings every `WS_PING_INTERVAL_SECONDS` and drops a connection that misses a pong. On shutdown open connections get 1001.
+
+```bash
+# Node 22+ has a WebSocket client built in
+node -e 'const ws=new WebSocket("ws://localhost:3000/ws/rpc");ws.onopen=()=>ws.send(JSON.stringify({jsonrpc:"2.0",id:1,method:"getEmployee",params:{id:1}}));ws.onmessage=(e)=>{console.log(e.data);ws.close()}'
+```
+
+The dashboard's **Protocols** page lists the channels, holds the WebSocket settings, and has a live console (connect, send, watch the log). Each guide gives the Node command for the active auth mode.
+
+---
+
 ## Inspector
 
 Send anything to any non-reserved path and it shows up live on the dashboard's **Inspector** page with:
@@ -494,7 +526,7 @@ curl -s -X POST "$B/hooks/order-created?env=dev" -H 'Content-Type: application/j
   Available templates: `{{uuid}}`, `{{now}}`, `{{nowEpoch}}`, `{{id}}`, `{{path}}`, `{{method}}`, `{{params.x}}`, `{{query.x}}`, `{{body.x}}`, `{{baseUrl}}`.
 - **Detail pane:** copy as curl, replay (to this server or any URL), and auto-forward every capture to a target URL (the original path is appended).
 - **Housekeeping:** export JSON, delete a single capture (× on its row, or `DELETE /admin/api/inspector/{id}`), or clear all. The last `INSPECTOR_RETENTION` captures are kept.
-- **API traffic:** `/v1/*`, `/soap/*` and `/oauth/*` calls are recorded with their real responses, including requests rejected early (bad JSON, missing headers, auth, rate limit) and connections dropped by chaos (shown as *dropped*). Filter by source (webhooks / mock API / SOAP / OAuth) or switch it off with **Record /v1 & /oauth** (`INSPECTOR_LOG_ALL`). Streamed file uploads show their size only.
+- **API traffic:** `/v1/*`, `/soap/*`, `/ws/*` upgrades (recorded as 101 when accepted) and `/oauth/*` calls are recorded with their real responses, including requests rejected early (bad JSON, missing headers, auth, rate limit) and connections dropped by chaos (shown as *dropped*). Filter by source (webhooks / mock API / SOAP / WebSocket / OAuth) or switch it off with **Record /v1 & /oauth** (`INSPECTOR_LOG_ALL`). Streamed file uploads show their size only.
 
 ---
 
@@ -533,11 +565,38 @@ The same tester takes a **WSDL 1.1** for SOAP services you expose. Upload or pas
 
 **Load "This tool (live SOAP WSDL: EmployeeService)"** to run the whole flow against this server's own `/soap` mock: a full run with negative tests passes on SOAP 1.1 and 1.2. "Mock from spec" is OpenAPI-only.
 
+### WebSocket APIs (AsyncAPI or a scenario)
+
+For WebSocket APIs you expose, load an **AsyncAPI 2.x or 3.0** document (upload, paste or URL), or press **New WebSocket scenario** with just a `ws://`/`wss://` URL when there is no contract.
+
+- **Directions:** the document describes your server. In AsyncAPI 3.0, `receive` operations are messages clients send and `send` operations (and replies) are messages the server sends; in 2.x, `publish` is client → server and `subscribe` is server → client. Channels without operations accept their messages in both directions.
+- **Spec lint:** no `ws`/`wss` server, placeholder hosts, channels without messages, messages without a payload schema, operations pointing at missing channels, channel parameters.
+- **Target:** the server URL (channel addresses are appended), subprotocols to offer, default headers, and an auth profile: Bearer header, API key or token in the query string, API key header, HTTP Basic, or OAuth2 client credentials.
+- **Try it:** pick a channel and a message (examples first, then generated from the payload schema); the tester connects, sends, listens for `waitMs`, and closes. Checks: the 101 upgrade, the selected subprotocol, every received message against the channel's server → client schemas, that a reply arrived, the correlated reply (AsyncAPI `correlationId`, or an `id`/`requestId`/`correlationId` field), and a clean close handshake. The Response tab shows the 101 headers and a timed transcript.
+- **Run all:** runs a scenario. The automatic one sends each client → server message on its channel and expects a (correlated) reply, and listens on server-only channels. Edit and save your own on the Run all tab, for example:
+
+  ```json
+  [
+    { "connect": { "channel": "rpc" } },
+    { "send": { "jsonrpc": "2.0", "id": 1, "method": "getEmployee", "params": { "id": 1 } } },
+    { "expect": { "match": { "/result/id": 1 }, "capture": { "dept": "/result/departmentId" } } },
+    { "send": { "jsonrpc": "2.0", "id": 2, "method": "getDepartment", "params": { "id": "{{dept}}" } } },
+    { "expect": { "timeoutMs": 3000 } },
+    { "ping": {} },
+    { "close": 1000 }
+  ]
+  ```
+
+  Steps: `connect` (`channel`, `address`, `protocols`), `send` (a message, or `{"message": "Name"}` for the contract's sample), `expect` (`timeoutMs`, `match` by JSON pointer, `contains`, `capture`, `correlate`), `listen` (ms), `wait` (ms), `ping`, `close` (code), `expectClose` (code).
+- **Negative tests:** no credentials (the upgrade should be rejected with 401; accepting and closing with 1008 is a warning), a malformed message (an error reply or close 1003/1007/1008), an oversized message (close 1009; size on the Target tab), and invalid UTF-8 in a text frame (close 1007).
+
+**Load "This tool (live AsyncAPI: WebSocket channels)"** to run it all against this server's own `/ws` channels.
+
 ---
 
 ## Postman and Newman
 
-- `postman/API-Test-Tool.postman_collection.json` has 71 requests with test scripts, covering:
+- `postman/API-Test-Tool.postman_collection.json` has 85 requests with test scripts, covering:
   - health, OpenAPI and discovery;
   - OAuth: token, introspect, revoke, error cases;
   - each auth mode (with and without credentials);
@@ -546,8 +605,10 @@ The same tester takes a **WSDL 1.1** for SOAP services you expose. Upload or pas
   - every pagination scheme, each request looping on itself to **follow the next link to the end** and assert that every item was seen exactly once;
   - every chaos forcing header;
   - every file protocol (multipart, raw, base64, presign round trip, range, chunked, tus);
+  - SOAP: WSDL, SOAP 1.1 and 1.2 calls, create/update/delete, faults (Client/Sender, validation detail, SOAPAction mismatch, injected 503);
   - headers and the inspector.
-- `postman/API-Test-Tool.postman_environment.json` holds `baseUrl`, `authMode` and credentials. Set `authMode` to the server's `AUTH_MODE`; the collection-level pre-request script then authenticates every `/v1` call, fetching and caching an OAuth token for `jwt` and `oauth2` and signing requests for `hmac`.
+  - WebSocket channels are not covered (Postman collections cannot drive WebSockets); `npm test` covers them.
+- `postman/API-Test-Tool.postman_environment.json` holds `baseUrl`, `authMode` and credentials. Set `authMode` to the server's `AUTH_MODE`; the collection-level pre-request script then authenticates every `/v1` call and SOAP request, fetching and caching an OAuth token for `jwt` and `oauth2` and signing requests for `hmac`.
 - `npm run postman` boots a fresh server for each auth mode and runs Newman against it. `npm run postman -- --mode hmac` runs one mode, and `npm run postman -- --url https://your-app.fly.dev --mode none` runs against a deployed instance.
 - `.github/workflows/newman.yml` runs `npm test` and then a Newman matrix over all seven auth modes (SQLite + local files) on every push.
 - The collection is generated by `scripts/build-postman.js`. Edit that file and run `npm run postman:build`.

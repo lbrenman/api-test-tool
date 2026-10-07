@@ -1,6 +1,8 @@
 'use strict';
 // Application factory: builds the context (settings, DB, stores, services) and the Express app.
 const path = require('node:path');
+const http = require('node:http');
+const { EventEmitter } = require('node:events');
 const express = require('express');
 const { Settings } = require('./config/settings');
 const { makeBaseUrl } = require('./config/baseUrl');
@@ -31,6 +33,7 @@ const resourcesRouter = require('./routes/resources');
 const filesRouter = require('./routes/files');
 const adminRouter = require('./routes/admin');
 const soapRouter = require('./protocols/soap/router');
+const wsRouter = require('./protocols/ws/router');
 
 const LEVELS = { debug: 10, info: 20, warn: 30, error: 40 };
 
@@ -44,7 +47,10 @@ async function createContext({ env = process.env, overrides = {} } = {}) {
   const ctx = { settings, repo, log, ready: false };
   ctx.baseUrl = makeBaseUrl(settings, env);
   ctx.dates = makeDateFormatter(settings);
-  ctx.resources = new ResourceService(repo, ctx.dates);
+  ctx.events = new EventEmitter(); // 'change' events from ResourceService feed /ws/changes (and /sse/changes)
+  ctx.events.setMaxListeners(0);
+  ctx.wsHub = new Set(); // open mock WebSocket connections
+  ctx.resources = new ResourceService(repo, ctx.dates, ctx.events);
   ctx.files = new FileService(repo, await createStore(settings), settings);
   ctx.keys = new KeyService(repo, settings);
   await ctx.keys.init();
@@ -140,10 +146,35 @@ async function createApp(opts = {}) {
 
   // Mock SOAP 1.1/1.2 services over the same data (WSDL open; requests go through the same protocol stack).
   app.use('/soap', soapRouter(ctx));
+  // Mock WebSocket channels; upgrades arrive through handleUpgrade() below.
+  app.use('/ws', wsRouter(ctx));
 
   // Everything else: the inspector
   app.use(catchAll(ctx));
   app.use(errorHandler(ctx));
+
+  // WebSocket upgrades are not seen by Express on their own. Every server created with app.listen()
+  // (src/server.js, the tests) passes them through the normal middleware chain with a response object
+  // bound to the raw socket, so a rejected upgrade gets an ordinary HTTP error (401, 429, 503, 404…).
+  function handleUpgrade(req, socket, head) {
+    socket.on('error', () => {});
+    const res = new http.ServerResponse(req);
+    res.shouldKeepAlive = false;
+    res.assignSocket(socket);
+    res.on('finish', () => { if (!req.ws?.accepted) socket.end(); });
+    req.ws = { socket, head, accepted: false };
+    app.handle(req, res, () => sendProblem(req, res, 404, { detail: `No WebSocket endpoint at ${req.url}` }));
+  }
+  const listen = app.listen.bind(app);
+  app.listen = (...args) => {
+    const server = listen(...args);
+    server.on('upgrade', handleUpgrade);
+    const close = server.close.bind(server);
+    // Open WebSockets would keep server.close() waiting forever.
+    server.close = (cb) => { for (const c of ctx.wsHub) c.close(1001, 'Server shutting down'); setTimeout(() => { for (const c of ctx.wsHub) c.terminate(); }, 500).unref(); return close(cb); };
+    return server;
+  };
+  app.handleUpgrade = handleUpgrade;
 
   ctx.ready = true;
   return { app, ctx, close: () => ctx.repo.close() };

@@ -34,15 +34,16 @@ module.exports = function testerRouter(ctx) {
   r.post('/specs', async (req, res) => {
     let body = req.body || {};
     if (/multipart\/form-data/i.test(req.get('content-type') || '')) body = await readUpload(req);
-    if (!body.content && !body.url && !body.sample) throw new HttpError(400, 'Provide content (pasted/uploaded OpenAPI YAML/JSON or WSDL XML), url, or sample');
-    const spec = await tester.create({ name: body.name || (body.filename ? body.filename.replace(/\.(ya?ml|json|wsdl|xml)$/i, '') : undefined), content: body.content, url: body.url, sample: body.sample, source: body.filename ? { type: 'upload', filename: body.filename } : undefined }, req);
+    if (!body.content && !body.url && !body.sample) throw new HttpError(400, 'Provide content (pasted/uploaded OpenAPI or AsyncAPI YAML/JSON, or WSDL XML), url, or sample; or kind "websocket" with a ws:// url');
+    const spec = await tester.create({ name: body.name || (body.filename ? body.filename.replace(/\.(ya?ml|json|wsdl|xml)$/i, '') : undefined), content: body.content, url: body.url, sample: body.sample, kind: body.kind, source: body.filename ? { type: 'upload', filename: body.filename } : undefined }, req);
     res.status(201).json({ id: spec.id, kind: spec.kind, name: spec.name, version: spec.version, originalVersion: spec.originalVersion, notes: spec.notes, lint: tester.lint(spec).counts });
   });
 
   r.get('/specs/:id', async (req, res) => {
     const s = await tester.get(req.params.id);
     const { raw, ...rest } = s; // the raw WSDL is served by /document
-    res.json({ ...rest, operations: tester.operations(s), profiles: tester.profiles(s), lint: tester.lint(s).counts });
+    const ws = s.kind === 'asyncapi' || s.kind === 'websocket';
+    res.json({ ...rest, operations: tester.operations(s), profiles: tester.profiles(s), lint: tester.lint(s).counts, ...(ws ? { autoScenario: tester.adapter(s).autoScenario(s) } : {}) });
   });
 
   // The contract itself: OpenAPI as JSON, WSDL as the original XML.

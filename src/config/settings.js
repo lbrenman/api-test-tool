@@ -83,9 +83,15 @@ const DEFS = [
   { key: 'soapWsse', env: 'SOAP_WSSE', def: 'off', type: 'enum', options: ['off', 'optional', 'required'], section: 'soap', desc: 'WS-Security UsernameToken (BASIC_USER / BASIC_PASS; PasswordText or PasswordDigest). Independent of AUTH_MODE' },
   { key: 'soapActionCheck', env: 'SOAP_ACTION_CHECK', def: 'lenient', type: 'enum', options: ['lenient', 'strict', 'off'], section: 'soap', desc: 'lenient: a wrong SOAPAction is a fault, a missing one is accepted; strict: it must be present and right; off: not checked' },
 
+  // ---- websocket ----
+  { key: 'wsEnabled', env: 'WS_ENABLED', def: true, type: 'bool', section: 'websocket', desc: 'serve the mock WebSocket channels under /ws (echo, rpc, changes)' },
+  { key: 'wsMaxMessageKb', env: 'WS_MAX_MESSAGE_KB', def: 1024, type: 'int', section: 'websocket', min: 1, desc: 'Larger messages close the connection with 1009' },
+  { key: 'wsIdleTimeoutSeconds', env: 'WS_IDLE_TIMEOUT_SECONDS', def: 0, type: 'int', section: 'websocket', min: 0, desc: 'Close connections that send nothing for this long (1001); 0 = never' },
+  { key: 'wsPingIntervalSeconds', env: 'WS_PING_INTERVAL_SECONDS', def: 30, type: 'int', section: 'websocket', min: 0, desc: 'Server ping interval; a connection that misses a pong is dropped. 0 = no pings' },
+
   // ---- inspector ----
   { key: 'inspectorRetention', env: 'INSPECTOR_RETENTION', def: 500, type: 'int', section: 'inspector', min: 1 },
-  { key: 'inspectorLogAll', env: 'INSPECTOR_LOG_ALL', def: true, type: 'bool', section: 'inspector', desc: 'also record /v1/*, /soap/* and /oauth/* calls (the dashboard, docs and health probes are never recorded)' },
+  { key: 'inspectorLogAll', env: 'INSPECTOR_LOG_ALL', def: true, type: 'bool', section: 'inspector', desc: 'also record /v1/*, /soap/*, /ws/* (upgrades) and /oauth/* calls (the dashboard, docs and health probes are never recorded)' },
   { key: 'inspectorResponseStatus', env: 'INSPECTOR_RESPONSE_STATUS', def: 200, type: 'int', section: 'inspector', min: 100, max: 599 },
   { key: 'inspectorResponseContentType', env: 'INSPECTOR_RESPONSE_CONTENT_TYPE', def: 'application/json', type: 'string', section: 'inspector' },
   { key: 'inspectorResponseBody', env: 'INSPECTOR_RESPONSE_BODY', def: '', type: 'string', section: 'inspector', desc: 'blank = JSON receipt with the capture id' },

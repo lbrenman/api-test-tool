@@ -3,6 +3,7 @@
 // auth handling, run history. Everything that depends on the contract language lives in an adapter:
 //   adapters/openapi.js  OpenAPI 3.0 / 3.1 and Swagger 2.0 (REST)
 //   adapters/wsdl/       WSDL 1.1 (SOAP 1.1 / 1.2)
+//   adapters/websocket/  AsyncAPI 2.x / 3.0 over WebSocket ("asyncapi"), or a URL + scenario with no contract ("websocket")
 // A spec's adapter is chosen by spec.kind (older records without a kind are OpenAPI).
 const crypto = require('node:crypto');
 const fs = require('node:fs/promises');
@@ -11,10 +12,12 @@ const { mask } = require('./auth');
 const { HttpError } = require('../../util/problem');
 const { OpenApiAdapter } = require('./adapters/openapi');
 const { WsdlAdapter } = require('./adapters/wsdl');
+const { WebSocketAdapter } = require('./adapters/websocket');
 
 const SAMPLES_DIR = path.resolve(__dirname, '../../../samples');
 const MAX_STEP_BODY = 64 * 1024;
 const SAMPLE_FILES = /\.(ya?ml|json|wsdl)$/i;
+const SELF_SAMPLES = ['self', 'self-soap', 'self-ws'];
 
 function maskAuth(auth) {
   if (!auth) return auth;
@@ -51,7 +54,12 @@ async function fetchContract(url) {
 class TesterService {
   constructor(ctx) {
     this.ctx = ctx;
-    this.adapters = { openapi: new OpenApiAdapter(ctx), wsdl: new WsdlAdapter(ctx) };
+    this.adapters = {
+      openapi: new OpenApiAdapter(ctx),
+      wsdl: new WsdlAdapter(ctx),
+      asyncapi: new WebSocketAdapter(ctx, 'asyncapi'),
+      websocket: new WebSocketAdapter(ctx, 'websocket'),
+    };
     this.lints = new Map();
   }
 
@@ -63,16 +71,18 @@ class TesterService {
 
   detect(text, url) {
     if (url && /([?&]wsdl\b|\.wsdl$)/i.test(url)) return 'wsdl';
-    return this.adapters.wsdl.detect(text) ? 'wsdl' : 'openapi';
+    if (this.adapters.wsdl.detect(text)) return 'wsdl';
+    return this.adapters.asyncapi.detect(text) ? 'asyncapi' : 'openapi';
   }
 
   async samples() {
     const files = (await fs.readdir(SAMPLES_DIR).catch(() => [])).filter((f) => SAMPLE_FILES.test(f))
       .sort((a, b) => Number(/\.wsdl$/i.test(a)) - Number(/\.wsdl$/i.test(b)) || Number(/swagger_?2/i.test(a)) - Number(/swagger_?2/i.test(b)) || a.localeCompare(b));
     return [
-      ...files.map((f) => ({ id: f, name: f.replace(/[_-]/g, ' ').replace(SAMPLE_FILES, ''), file: f, url: `/samples/${f}`, kind: /\.wsdl$/i.test(f) ? 'wsdl' : 'openapi' })),
+      ...files.map((f) => ({ id: f, name: f.replace(/[_-]/g, ' ').replace(SAMPLE_FILES, ''), file: f, url: `/samples/${f}`, kind: /\.wsdl$/i.test(f) ? 'wsdl' : /asyncapi/i.test(f) ? 'asyncapi' : 'openapi' })),
       { id: 'self', name: 'This tool (live /openapi.json)', url: '/openapi.json', kind: 'openapi' },
       { id: 'self-soap', name: 'This tool (live SOAP WSDL: EmployeeService)', url: '/soap/EmployeeService?wsdl', kind: 'wsdl' },
+      { id: 'self-ws', name: 'This tool (live AsyncAPI: WebSocket channels)', url: '/ws/asyncapi.json', kind: 'asyncapi' },
     ];
   }
 
@@ -87,28 +97,34 @@ class TesterService {
       const endpoint = `${this.ctx.baseUrl(req)}/soap/EmployeeService`;
       return { text: generateWsdl(SERVICES.EmployeeService, endpoint), kind: 'wsdl', target: { baseUrl: endpoint } };
     }
+    if (sample === 'self-ws') {
+      const { generateAsyncApi } = require('../../protocols/ws/asyncapi');
+      return { text: JSON.stringify(generateAsyncApi(this.ctx, req)), kind: 'asyncapi', target: { baseUrl: `${this.ctx.baseUrl(req).replace(/^http/, 'ws')}/ws` } };
+    }
     const file = path.join(SAMPLES_DIR, path.basename(sample));
     const text = await fs.readFile(file, 'utf8').catch(() => { throw new HttpError(404, `Unknown sample ${sample}`); });
     return { text, kind: this.detect(text, file) };
   }
 
-  async create({ name, content, url, sample, source }, req) {
+  async create({ name, content, url, sample, source, kind: kindIn }, req) {
     let src = source || (url ? { type: 'url', url } : { type: 'paste' });
     let text = content;
-    let kind;
+    let kind = kindIn === 'websocket' ? 'websocket' : undefined;
     let targetOverride = null;
-    if (sample) {
+    if (kind === 'websocket') {
+      src = { type: 'websocket' }; // no contract to fetch: the URL is the target
+    } else if (sample) {
       const s = await this.sampleContent(sample, req);
       ({ text, kind } = s);
       targetOverride = s.target || null;
-      src = { type: 'sample', sample: sample === 'self' || sample === 'self-soap' ? sample : path.basename(sample) };
+      src = { type: 'sample', sample: SELF_SAMPLES.includes(sample) ? sample : path.basename(sample) };
     } else if (!text && url) {
       text = await fetchContract(url);
     }
     kind = kind || this.detect(text, url);
     let loaded;
     try {
-      loaded = await this.adapters[kind].load({ content: text, url: src.type === 'url' ? url : undefined });
+      loaded = await this.adapters[kind].load({ content: text, url: src.type === 'url' || kind === 'websocket' ? url : undefined });
     } catch (e) {
       throw new HttpError(e.status || 422, e.message, { code: 'spec-load-failed' });
     }
@@ -163,6 +179,12 @@ class TesterService {
     if (patch.name !== undefined) s.name = String(patch.name).slice(0, 200) || s.name;
     if (patch.target) s.target = { ...s.target, ...patch.target };
     if (patch.options) s.options = { ...s.options, ...patch.options };
+    if (patch.scenario !== undefined) {
+      if (patch.scenario !== null && (!Array.isArray(patch.scenario) || patch.scenario.some((x) => !x || typeof x !== 'object' || Array.isArray(x)))) {
+        throw new HttpError(400, 'scenario must be an array of step objects (or null for the automatic scenario)');
+      }
+      s.scenario = patch.scenario && patch.scenario.length ? patch.scenario : null;
+    }
     if (patch.content) {
       const loaded = await this.adapter(s).load({ content: patch.content, url: patch.url }).catch((e) => { throw new HttpError(422, e.message); });
       Object.assign(s, { doc: loaded.doc, version: loaded.version, originalVersion: loaded.originalVersion, converted: loaded.converted, notes: loaded.notes, structural: loaded.structural, title: loaded.title, apiVersion: loaded.apiVersion });
