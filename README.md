@@ -8,27 +8,53 @@ One deployable app for testing an API platform or integration in both directions
 1. **Outgoing testing — a realistic mock target.** Your integration calls this tool. It serves seeded employees and products with every JSON type you need to parse, seven pagination styles side by side, error and latency injection, a shared file pool exposed over every common HTTP file protocol, seven auth modes with a built-in OAuth 2.0 server, custom and required headers, and a **webhook.site-style inspector** that captures anything sent to any other path.
 2. **Incoming testing — a contract tester.** Load the OpenAPI spec you implemented (3.0, 3.1 or Swagger 2.0). The tool generates sample requests, calls your implementation through a server-side proxy, validates every response against the spec, and runs the whole contract with ID chaining and negative tests.
 
+Contains:
+
+* Admin web dashboard for configuring the server, re-seeding data, managing files, retrieving OpenAPI specs, inspecting incoming API calls and getting help with the system
+* Operation web console to emulate a back office app for the business represted by the data, including full CRUD support of data via web forms
+* OpenAPI Spec for use in your client application
+* Postman collection for making calls to the server
+
 Everything runs in one Node.js process on one port, with a vanilla-JS dashboard (no build step). It is host-agnostic: Codespaces, Docker, Fly.io, Render and Northflank are configured with environment variables.
+
+Ues Cases:
+
+* You need a reliable, free data source for an api demo
+* You are trying to learn how to implement some API feature such as pagination or header introspection
+* You need a free http file upload/download endpoint for a file based flow
+* You need to experiment with advanced orchestration/aggregation functions such as data aggregation/join/deduplication and you need a data source
+* You are debugging an http client call and need a web catcher to see what your platform is actually sending
 
 ---
 
 ## Contents
 
-- [Quick start](#quick-start)
-- [Features](#features)
-- [Configuration](#configuration)
-- [Route map](#route-map)
-- [Authentication](#authentication)
-- [Mock API conventions](#mock-api-conventions)
-- [Pagination](#pagination)
-- [Chaos: errors and latency](#chaos-errors-and-latency)
-- [Files](#files)
-- [Inspector](#inspector)
-- [API tester walkthrough](#api-tester-walkthrough)
-- [Postman and Newman](#postman-and-newman)
-- [Deployment](#deployment)
-- [Development](#development)
-- [Troubleshooting](#troubleshooting)
+- [API Test Tool](#api-test-tool)
+  - [Contents](#contents)
+  - [Quick start](#quick-start)
+    - [GitHub Codespaces (fastest)](#github-codespaces-fastest)
+    - [Local](#local)
+    - [Docker](#docker)
+  - [Features](#features)
+  - [Configuration](#configuration)
+  - [Route map](#route-map)
+  - [Authentication](#authentication)
+  - [Mock API conventions](#mock-api-conventions)
+  - [Pagination](#pagination)
+  - [Chaos: errors and latency](#chaos-errors-and-latency)
+  - [Files](#files)
+  - [Inspector](#inspector)
+  - [API tester walkthrough](#api-tester-walkthrough)
+  - [Postman and Newman](#postman-and-newman)
+  - [Deployment](#deployment)
+    - [Fly.io](#flyio)
+    - [Render](#render)
+    - [Northflank](#northflank)
+    - [Docker / any container host](#docker--any-container-host)
+    - [Codespaces](#codespaces)
+  - [Development](#development)
+  - [Troubleshooting](#troubleshooting)
+  - [License](#license)
 
 ---
 
