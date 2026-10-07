@@ -25,6 +25,10 @@ Ues Cases:
 * You need to experiment with advanced orchestration/aggregation functions such as data aggregation/join/deduplication and you need a data source
 * You are debugging an http client call and need a web catcher to see what your platform is actually sending
 
+![image](images/codespace.png)
+![image](images/admin-web-dashboard.png)
+![image](images/back-office.png)
+
 ---
 
 ## Contents
