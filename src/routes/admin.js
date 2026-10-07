@@ -6,7 +6,10 @@ const { generateSamples } = require('../services/sampleFiles');
 const { NAMES } = require('../services/resources');
 const { HttpError } = require('../util/problem');
 const { hmacCanonical } = require('../middleware/auth');
+const yaml = require('js-yaml');
 const testerRouter = require('./tester');
+const appApiRouter = require('./appApi');
+const { generateAdminOpenApi } = require('../services/openapiAdminGen');
 const pkg = require('../../package.json');
 
 module.exports = function adminRouter(ctx, { adminAuth, filesApi }) {
@@ -24,6 +27,12 @@ module.exports = function adminRouter(ctx, { adminAuth, filesApi }) {
   r.post('/logout', (req, res) => { adminAuth.logout(req, res); res.json({ ok: true }); });
 
   r.use(adminAuth.requireApi);
+
+  // ---- admin OpenAPI (the mock data API's spec is the public /openapi.json)
+  r.get('/openapi.json', async (req, res) => res.json(await generateAdminOpenApi(ctx, req)));
+  r.get('/openapi.yaml', async (req, res) => {
+    res.type('application/yaml').send(yaml.dump(await generateAdminOpenApi(ctx, req), { noRefs: true, lineWidth: 120 }));
+  });
 
   // ---- overview
   r.get('/overview', async (req, res) => {
@@ -52,7 +61,7 @@ module.exports = function adminRouter(ctx, { adminAuth, filesApi }) {
     res.json({
       version: pkg.version,
       baseUrl: base,
-      urls: { api: `${base}/v1`, docs: `${base}/docs`, openapi: `${base}/openapi.json`, health: `${base}/health`, inspector: `${base}/<any-other-path>`, token: `${base}/oauth/token` },
+      urls: { api: `${base}/v1`, docs: `${base}/docs`, openapi: `${base}/openapi.json`, adminOpenapi: `${base}/admin/api/openapi.json`, app: `${base}/app/`, health: `${base}/health`, inspector: `${base}/<any-other-path>`, token: `${base}/oauth/token` },
       authMode: mode,
       dateFormat: settings.get('dateFormat'),
       chaos: { errorRate: settings.get('errorRate'), errorTypes: settings.get('errorTypes'), latency: [settings.get('latencyMinMs'), settings.get('latencyMaxMs')] },
@@ -205,5 +214,6 @@ module.exports = function adminRouter(ctx, { adminAuth, filesApi }) {
   });
 
   r.use('/tester', testerRouter(ctx));
+  r.use('/app', appApiRouter(ctx));
   return r;
 };

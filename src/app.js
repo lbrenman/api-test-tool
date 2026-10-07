@@ -112,13 +112,16 @@ async function createApp(opts = {}) {
   app.use(logAll(ctx)); // records /v1 and /oauth traffic when INSPECTOR_LOG_ALL is on
 
   // Platform + OAuth (always open)
-  app.use(platformRouter(ctx));
+  app.use(platformRouter(ctx, { adminAuth }));
   app.use(oauthRouter(ctx));
 
   // Dashboard + admin API
   app.get('/', (req, res) => res.redirect(302, '/dashboard'));
   app.use('/dashboard', express.static(path.join(__dirname, 'public'), { index: 'index.html', fallthrough: true }));
   app.use('/dashboard', (req, res) => sendProblem(req, res, 404, { detail: 'Dashboard asset not found' }));
+  // Business-style back-office app over the mock data (talks to /admin/api/app, same password as the dashboard).
+  app.use('/app', express.static(path.join(__dirname, 'webapp'), { index: 'index.html', fallthrough: true }));
+  app.use('/app', (req, res) => sendProblem(req, res, 404, { detail: 'App asset not found' }));
   const filesApi = filesRouter(ctx);
   app.use('/admin/api', adminRouter(ctx, { adminAuth, filesApi }));
   app.use('/admin', (req, res) => sendProblem(req, res, 404, { detail: `No admin route ${req.method} ${req.originalUrl}` }));

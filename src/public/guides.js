@@ -146,7 +146,7 @@
         curls: [
           ['List two employees', curl('GET', '/v1/employees?limit=2')],
           ['Check health', plain('GET', '/health')],
-          ['Download the live OpenAPI spec', plain('GET', '/openapi.json', { output: 'api-test-tool.openapi.json' })],
+          ['Download the mock data API spec', plain('GET', '/openapi.json', { output: 'api-test-tool.openapi.json' })],
         ],
       },
       'overview.data': {
@@ -483,16 +483,18 @@
 
       // ------------------------------------------------------------ openapi
       openapi: {
-        title: 'Live OpenAPI',
-        purpose: 'An OpenAPI 3.1 description of the mock API, regenerated on every request from the current settings (server URL, auth scheme, date format, headers).',
+        title: 'Live OpenAPI (two specs)',
+        purpose: 'Two OpenAPI 3.1 documents, regenerated on every request from the current settings. The Mock Data API spec is for integrations; the Admin API spec is for scripting this tool.',
         steps: [
-          `Import \`${B}/openapi.json\` (or .yaml) into your platform, Postman or a code generator.`,
+          `Integrations: import \`${B}/openapi.json\` (or .yaml) into your platform, Postman or a code generator. It covers /v1 and the OAuth token endpoint only.`,
           'Re-import after changing auth, date format or headers so the definitions match.',
-          'Open Swagger UI to try every endpoint in the browser.',
+          `Automation: \`${B}/admin/api/openapi.json\` describes settings, seeding, files, OAuth clients, the inspector, the tester and /health. It needs the dashboard password.`,
+          'Open Swagger UI and switch between the two specs with the tabs at the top.',
         ],
         curls: [
-          ['Download JSON', plain('GET', '/openapi.json', { output: 'api-test-tool.openapi.json' })],
-          ['Download YAML', plain('GET', '/openapi.yaml', { output: 'api-test-tool.openapi.yaml' })],
+          ['Mock Data API spec (JSON)', plain('GET', '/openapi.json', { output: 'api-test-tool.openapi.json' })],
+          ['Mock Data API spec (YAML)', plain('GET', '/openapi.yaml', { output: 'api-test-tool.openapi.yaml' })],
+          ['Admin API spec (JSON)', admin('GET', '/openapi.json', { output: 'api-test-tool-admin.openapi.json' })],
         ],
       },
 

@@ -1,5 +1,7 @@
 'use strict';
-// Live OpenAPI 3.1 document reflecting the current settings (base URL, date format, auth, headers, chaos, pagination, files).
+// Live OpenAPI 3.1 document for the MOCK DATA API that integrations call (/v1/* and /oauth/token), reflecting the
+// current settings (base URL, date format, auth, headers, chaos, pagination, files). Served at /openapi.json|yaml.
+// The admin / control-plane API (/admin/api/*, /health, /ready) has its own document: openapiAdminGen.js.
 const { outputSchemas } = require('./schemas');
 const { SCHEMES } = require('./paginate');
 const { TYPE_NAMES } = require('../middleware/chaos');
@@ -346,9 +348,7 @@ async function generateOpenApi(ctx, req) {
     },
   };
 
-  // ---- platform
-  paths['/health'] = { get: { tags: ['Platform'], operationId: 'health', summary: 'Liveness + dependency checks', security: [], responses: { 200: { description: 'Healthy', content: { 'application/json': { schema: { type: 'object' } } } }, 503: { description: 'Unhealthy' } } } };
-  paths['/ready'] = { get: { tags: ['Platform'], operationId: 'ready', summary: 'Readiness', security: [], responses: { 200: { description: 'Ready' }, 503: { description: 'Not ready' } } } };
+  // ---- OAuth (token endpoint used by oauth2 / jwt clients)
   paths['/oauth/token'] = {
     post: {
       tags: ['OAuth'], operationId: 'oauthToken', summary: 'Token endpoint (client_credentials, authorization_code + PKCE, refresh_token)', security: [],
@@ -368,11 +368,17 @@ async function generateOpenApi(ctx, req) {
     openapi: '3.1.0',
     jsonSchemaDialect: 'https://spec.openapis.org/oas/3.1/dialect/base',
     info: {
-      title: 'API Test Tool — Mock API',
+      title: 'API Test Tool — Mock Data API',
       version: pkg.version,
       summary: 'Realistic mock target for integration testing (pagination, errors, files, auth, headers).',
       description: [
-        'Generated live from the current settings.',
+        '**For integrations and API clients.** Import this into your integration platform, Postman or a code generator to call the mock',
+        'data API: employees, products, departments, categories, the seven pagination schemes, the file pool and the OAuth token endpoint.',
+        '',
+        'Tool administration (settings, seeding, the inspector, the contract tester) and the health probes are not part of this document.',
+        `They are described by the admin spec at \`${base}/admin/api/openapi.json\` (requires the dashboard password).`,
+        '',
+        'Generated live from the current settings:',
         `- **Auth mode:** \`${mode}\``,
         `- **Timestamp format:** \`${settings.get('dateFormat')}\`${settings.get('dateFormat') === 'custom' ? ` (\`${settings.get('dateFormatPattern')}\`)` : ''}`,
         `- **Chaos:** error rate ${settings.get('errorRate')}%, types \`${settings.get('errorTypes')}\`, latency ${settings.get('latencyMinMs')}-${settings.get('latencyMaxMs')} ms`,
@@ -387,7 +393,7 @@ async function generateOpenApi(ctx, req) {
       { name: 'Employees' }, { name: 'Products' }, { name: 'Departments' }, { name: 'Categories' },
       { name: 'Pagination', description: 'Seven pagination schemes, each on its own path' },
       { name: 'Files', description: 'Shared file pool with multiple transfer protocols' },
-      { name: 'OAuth' }, { name: 'Platform' },
+      { name: 'OAuth', description: 'Token endpoint for the oauth2 and jwt auth modes' },
     ],
     paths,
     components: {

@@ -237,7 +237,7 @@
     auth: { purpose: 'Choose how /v1 calls must authenticate (none, API key, Basic, Bearer, JWT, OAuth2, HMAC), see the credentials, manage OAuth clients and get test tokens.' },
     chaos: { purpose: 'Make the mock API misbehave on purpose: random errors, latency, timeouts, broken JSON and rate limits, globally or per route, so you can test client error handling.' },
     headers: { purpose: 'Headers added to every response, and headers every /v1 request must carry (missing ones return 400).' },
-    openapi: { purpose: 'The OpenAPI 3.1 description of the mock API, regenerated live from the current settings. Import it into your API platform, Postman or any client.' },
+    openapi: { purpose: 'Two live OpenAPI 3.1 specs: the Mock Data API (/openapi.json) for integrations to import, and the Admin API (/admin/api/openapi.json) for scripting the tool itself.' },
     tester: { purpose: 'Test an API you built: load its OpenAPI spec, call your implementation, and check every response against the spec.' },
     help: { purpose: 'What this tool does and how to use each page.' },
   };
@@ -364,7 +364,7 @@
   VIEWS.overview = async (el) => {
     const o = await api('GET', '/overview');
     const health = await fetch('/health').then((r) => r.json()).catch(() => null);
-    el.append(header('Overview', o.baseUrl, h('a', { class: 'btn', href: '/docs', target: '_blank', rel: 'noopener' }, 'API docs ↗')));
+    el.append(header('Overview', o.baseUrl, h('a', { class: 'btn', href: '/app/', target: '_blank', rel: 'noopener', title: 'Business-style view of the mock data: KPIs, browse, create, edit and delete records' }, 'Back office app ↗'), h('a', { class: 'btn', href: '/docs', target: '_blank', rel: 'noopener' }, 'API docs ↗')));
     for (const w of o.warnings) el.append(h('div', { class: 'card', style: { borderLeft: '4px solid var(--warn)' } }, w));
     let dismissed = false;
     try { dismissed = localStorage.getItem('att-welcome-dismissed') === '1'; } catch { /* storage unavailable */ }
@@ -676,13 +676,53 @@
 
   // ---------------------------------------------------------------- openapi
   VIEWS.openapi = async (el) => {
-    const text = await fetch('/openapi.yaml').then((r) => r.text());
-    el.append(header('OpenAPI', 'Generated live from the current settings (auth, date format, headers, chaos).',
-      tip('openapi'),
-      h('a', { class: 'btn', href: '/openapi.json', download: 'api-test-tool.openapi.json' }, 'Download JSON'),
-      h('a', { class: 'btn', href: '/openapi.yaml', download: 'api-test-tool.openapi.yaml' }, 'Download YAML'),
-      h('a', { class: 'btn primary', href: '/docs', target: '_blank', rel: 'noopener' }, 'Swagger UI ↗')));
-    el.append(h('div', { class: 'card' }, codeBlock(text, { maxHeight: '75vh' })));
+    const base = location.origin;
+    const SPECS = {
+      data: {
+        title: 'Mock Data API',
+        audience: 'For integrations and API clients',
+        what: 'The API your integration platform, Postman or generated client calls: /v1 employees, products, departments and categories, the seven pagination schemes, the file pool, and the OAuth token endpoint.',
+        use: 'Import it into your integration platform to get every endpoint pre-defined. Re-import after changing auth, date format or required headers.',
+        not: 'Does not include tool administration or health probes.',
+        json: '/openapi.json', yaml: '/openapi.yaml', docs: '/docs', file: 'api-test-tool',
+        auth: 'Open URL. Operations use the active /v1 auth mode.',
+      },
+      admin: {
+        title: 'Admin API',
+        audience: 'For operators and automation',
+        what: 'The control plane behind this dashboard: settings, seeding, files, OAuth clients, the inspector and the contract tester, plus /health and /ready.',
+        use: 'Script the tool from CI or a shell, e.g. switch the auth mode, re-seed data or start a contract run. Do not hand this to integration partners.',
+        not: 'Does not include the mock /v1 API.',
+        json: '/admin/api/openapi.json', yaml: '/admin/api/openapi.yaml', docs: '/docs?spec=admin', file: 'api-test-tool-admin',
+        auth: 'Needs the dashboard password (session cookie, or Basic with any username).',
+      },
+    };
+    const card = (key) => {
+      const s = SPECS[key];
+      return h('div', { class: 'card' },
+        h('div', { class: 'row between' }, h('h2', { style: { margin: 0 } }, s.title), h('span', { class: 'small muted' }, s.audience)),
+        h('p', null, s.what),
+        h('p', { class: 'small' }, h('b', null, 'Use it to: '), s.use),
+        h('p', { class: 'small muted' }, s.not, ' ', s.auth),
+        h('div', { class: 'row', style: { marginBottom: '8px', flexWrap: 'nowrap' } }, h('code', { style: { flex: '1', overflowWrap: 'anywhere' } }, base + s.json), h('button', { class: 'small', onclick: () => copy(base + s.json) }, 'copy')),
+        h('div', { class: 'row' },
+          h('a', { class: 'btn', href: s.json, download: `${s.file}.openapi.json` }, 'Download JSON'),
+          h('a', { class: 'btn', href: s.yaml, download: `${s.file}.openapi.yaml` }, 'Download YAML'),
+          h('a', { class: 'btn primary', href: s.docs, target: '_blank', rel: 'noopener' }, 'Swagger UI ↗')));
+    };
+    el.append(header('OpenAPI', 'Two specs, generated live from the current settings: one for integrations, one for administering the tool.', tip('openapi')));
+    el.append(h('div', { class: 'grid cols-2' }, card('data'), card('admin')));
+    const preview = h('div');
+    const show = async (key) => {
+      clear(preview);
+      const r = await fetch(SPECS[key].yaml);
+      preview.append(codeBlock(r.ok ? await r.text() : `Could not load ${SPECS[key].yaml} (HTTP ${r.status}).`, { maxHeight: '70vh' }));
+    };
+    el.append(h('div', { class: 'card' },
+      h('div', { class: 'row between' }, h('b', null, 'Preview'),
+        tabs([{ id: 'data', label: 'Mock Data API' }, { id: 'admin', label: 'Admin API' }], show, 'data')),
+      preview));
+    await show('data');
   };
 
   // ---------------------------------------------------------------- tester
@@ -1045,7 +1085,10 @@
           ['/v1/files/…', 'File protocols: multipart, raw, base64, tus, presign, download (range), chunked.'],
           ['/oauth/token, /oauth/authorize, /oauth/introspect, /oauth/revoke', 'Built-in OAuth 2.0 server.'],
           ['/.well-known/jwks.json, /.well-known/oauth-authorization-server', 'Signing keys and OAuth discovery.'],
-          ['/openapi.json, /openapi.yaml, /docs', 'Live OpenAPI and Swagger UI.'],
+          ['/openapi.json, /openapi.yaml', 'Live OpenAPI for the mock data API (for integrations).'],
+          ['/admin/api/openapi.json, .yaml', 'Live OpenAPI for the admin API (password protected).'],
+          ['/app', 'Back office app: KPIs and a friendly view of the mock data with create, edit and delete (dashboard password).'],
+          ['/docs', 'Swagger UI for both specs (?spec=admin for the admin API).'],
           ['/health, /ready', 'Health and readiness checks.'],
           ['/samples/…', 'Bundled example specs for the API Tester.'],
           ['/dashboard, /admin/api/…', 'This dashboard and its API (password protected when ADMIN_PASSWORD is set).'],
