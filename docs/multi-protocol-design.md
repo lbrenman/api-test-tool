@@ -1,6 +1,6 @@
 # Multi-protocol support — design
 
-Status: **in progress** — step 1 merged; step 2a (SOAP mock) on branch `feat/soap-mock`
+Status: **in progress** — steps 1, 2a, 2b, 3 and 4 merged; step 5 (GraphQL) on branch `feat/graphql`; step 6 (OData) next
 Date: 2026-10-07
 
 ## Goal
@@ -98,12 +98,19 @@ resolved base URL) and `renderer.js`.
 - Documented in the data OpenAPI spec (`text/event-stream`).
 
 ### GraphQL — `/graphql`
-- Reference `graphql` package only; GraphiQL from CDN on GET with `Accept: text/html`; SDL at
-  `/graphql/schema.graphql`.
-- Queries with offset args **and** Relay connections; mutations for CRUD; nested
-  `department`/`category`/`employees` resolvers.
-- GraphQL chaos: partial data + `errors[]`, `extensions.code`, depth/complexity rejections.
-- Settings: `GRAPHQL_INTROSPECTION`, `GRAPHQL_MAX_DEPTH`.
+- Reference `graphql` package only (16.11.0, no transitive dependencies); GraphiQL from CDN on GET
+  with `Accept: text/html`; SDL at `/graphql/schema.graphql` (open).
+- Queries with offset args **and** Relay connections; filters reuse the REST operators
+  (`filter: [{field, op, value}]`); mutations for CRUD (updates are merge patches); nested
+  `department`/`category`/`manager`/`directReports`/`employees`/`products` resolvers.
+- Subscriptions: `changes` over graphql-transport-ws on the same path (fed by `ctx.events`, like
+  `/ws/changes` and `/sse/changes`). The WebSocket accept + keep-alive policy moved to
+  `src/protocols/ws/accept.js` so `/ws` and `/graphql` share it.
+- GraphQL chaos: partial data + `errors[]` via `X-Force-GraphQL-Error: field[:status]`,
+  `extensions.code`, depth rejections (`QUERY_TOO_DEEP`). No complexity limit (not needed so far).
+- GraphQL over HTTP: `application/json` (200 for parse/validation errors) or
+  `application/graphql-response+json` (400); mutations over GET are 405.
+- Settings: `GRAPHQL_ENABLED`, `GRAPHQL_INTROSPECTION`, `GRAPHQL_MAX_DEPTH`.
 
 ### OData — `/odata/v4/`, optional `/odata/v2/`
 - Service document, `$metadata` (CSDL XML), entity sets, key access `Employees(1)`, navigation.
@@ -218,5 +225,8 @@ Each step is its own branch, green CI before merge.
 - **One field table per entity** (`src/protocols/soap/model.js`) generates the XSD, the XML output and
   the XML input parsing, so the three cannot drift. The generated XSD was checked with libxml2: the
   WSDL schemas compile and sample responses validate.
+- **Dependencies in cloud sessions:** the npm registry is blocked there, so new packages are added
+  to `package-lock.json` by hand with the registry's `resolved`/`integrity` values (read in a CI job)
+  and verified by `npm ci` in CI.
 - **SOAP faults** distinguish transport-level errors (before the envelope is read: keep the real
   HTTP status) from envelope-level errors (SOAP binding rules), see `renderer.js`.

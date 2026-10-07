@@ -11,7 +11,7 @@
       "script": {
         "type": "text/javascript",
         "exec": [
-          "// Applies the auth mode in {{authMode}} to /v1 requests, SOAP POSTs and SSE streams. Requests with header X-Skip-Auth: 1 go out unauthenticated.",
+          "// Applies the auth mode in {{authMode}} to /v1 requests, SOAP POSTs, SSE streams and /graphql. Requests with header X-Skip-Auth: 1 go out unauthenticated.",
           "(function applyAuth() {",
           "  const sdk = require('postman-collection');",
           "  const CryptoJS = require('crypto-js');",
@@ -20,7 +20,7 @@
           "  if (skip) pm.request.headers.remove('X-Skip-Auth');",
           "  const resolved = new sdk.Url(pm.variables.replaceIn(pm.request.url.toString()));",
           "  const p = resolved.getPath();",
-          "  const isApi = (p.indexOf('/v1/') === 0 && p.indexOf('/v1/files/presigned/') !== 0) || (p.indexOf('/soap/') === 0 && pm.request.method === 'POST') || p.indexOf('/sse/') === 0;",
+          "  const isApi = (p.indexOf('/v1/') === 0 && p.indexOf('/v1/files/presigned/') !== 0) || (p.indexOf('/soap/') === 0 && pm.request.method === 'POST') || p.indexOf('/sse/') === 0 || p === '/graphql';",
           "  if (!isApi || skip || mode === 'none') return;",
           "  const set = (k, v) => pm.request.headers.upsert({ key: k, value: v });",
           "  if (mode === 'apikey') {",
@@ -3749,11 +3749,660 @@
       ]
     },
     {
-      "id": "att-002u",
-      "name": "Headers & inspector",
+      "id": "att-0037",
+      "name": "GraphQL",
       "item": [
         {
           "id": "att-002s",
+          "name": "SDL (always open)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/graphql/schema.graphql",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "graphql",
+                "schema.graphql"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test(\"Query type\", () => pm.expect(pm.response.text()).to.include(\"type Query {\"));",
+                  "pm.test(\"Subscription type\", () => pm.expect(pm.response.text()).to.include(\"type Subscription {\"));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "att-002t",
+          "name": "Query: offset page with nested department",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/graphql",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "graphql"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\"query\": \"query($n: Int) { employees(limit: $n, sort: \\\"id\\\") { total items { id fullName department { name } } } }\", \"variables\": {\"n\": 3}}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Content-Type application/json', () => pm.expect(pm.response.headers.get('Content-Type')).to.include('application/json'));",
+                  "pm.test('no errors', () => pm.expect(pm.response.json().errors).to.eql(undefined));",
+                  "const d = pm.response.json().data.employees; pm.test('three items', () => pm.expect(d.items.length).to.eql(3)); pm.test('nested', () => pm.expect(d.items[0].department.name).to.be.a('string'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "att-002u",
+          "name": "Query over GET",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/graphql?query=%7B%20product(id%3A%201)%20%7B%20id%20sku%20category%20%7B%20name%20%7D%20%7D%20%7D",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "graphql"
+              ],
+              "query": [
+                {
+                  "key": "query",
+                  "value": "%7B%20product(id%3A%201)%20%7B%20id%20sku%20category%20%7B%20name%20%7D%20%7D%20%7D"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('no errors', () => pm.expect(pm.response.json().errors).to.eql(undefined));",
+                  "pm.test('product 1', () => pm.expect(pm.response.json().data.product.id).to.eql(1));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "att-002v",
+          "name": "Relay connection: first page",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/graphql",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "graphql"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\"query\": \"{ productsConnection(first: 2) { totalCount pageInfo { hasNextPage endCursor } nodes { id } } }\", \"variables\": {}}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('no errors', () => pm.expect(pm.response.json().errors).to.eql(undefined));",
+                  "const c = pm.response.json().data.productsConnection; pm.test('ids 1,2', () => pm.expect(c.nodes.map((n) => n.id)).to.eql([1, 2])); pm.test('more pages', () => pm.expect(c.pageInfo.hasNextPage).to.eql(true)); pm.environment.set('gqlCursor', c.pageInfo.endCursor);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "att-002w",
+          "name": "Relay connection: next page",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/graphql",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "graphql"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\"query\": \"query($after: String) { productsConnection(first: 2, after: $after) { nodes { id } pageInfo { hasPreviousPage } } }\", \"variables\": {\"after\": \"{{gqlCursor}}\"}}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('no errors', () => pm.expect(pm.response.json().errors).to.eql(undefined));",
+                  "pm.test('ids 3,4', () => pm.expect(pm.response.json().data.productsConnection.nodes.map((n) => n.id)).to.eql([3, 4]));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "att-002x",
+          "name": "Filter and sort",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/graphql",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "graphql"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\"query\": \"{ employees(limit: 50, filter: [{ field: \\\"level\\\", value: \\\"L3\\\" }], sort: \\\"-salary\\\") { items { level salary } } }\", \"variables\": {}}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('no errors', () => pm.expect(pm.response.json().errors).to.eql(undefined));",
+                  "const it = pm.response.json().data.employees.items; pm.test('all L3', () => pm.expect(it.every((e) => e.level === 'L3')).to.eql(true)); pm.test('sorted', () => pm.expect(it.map((e) => e.salary)).to.eql(it.map((e) => e.salary).sort((a, b) => b - a)));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "att-002y",
+          "name": "Mutation: create department",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/graphql",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "graphql"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\"query\": \"mutation($in: DepartmentInput!) { createDepartment(input: $in) { id name code } }\", \"variables\": {\"in\": {\"name\": \"GraphQL Postman\", \"code\": \"GQL-PM\"}}}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('no errors', () => pm.expect(pm.response.json().errors).to.eql(undefined));",
+                  "pm.environment.set('gqlDeptId', pm.response.json().data.createDepartment.id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "att-002z",
+          "name": "Mutation: update (merge patch)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/graphql",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "graphql"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\"query\": \"mutation($id: Int!) { updateDepartment(id: $id, input: { name: \\\"GraphQL Renamed\\\" }) { name code } }\", \"variables\": {\"id\": {{gqlDeptId}}}}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('no errors', () => pm.expect(pm.response.json().errors).to.eql(undefined));",
+                  "pm.test('renamed, code kept', () => pm.expect(pm.response.json().data.updateDepartment).to.eql({ name: 'GraphQL Renamed', code: 'GQL-PM' }));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "att-0030",
+          "name": "Mutation: delete",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/graphql",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "graphql"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\"query\": \"mutation($id: Int!) { deleteDepartment(id: $id) { id deleted } }\", \"variables\": {\"id\": {{gqlDeptId}}}}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('no errors', () => pm.expect(pm.response.json().errors).to.eql(undefined));",
+                  "pm.test('deleted', () => pm.expect(pm.response.json().data.deleteDepartment.deleted).to.eql(true));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "att-0031",
+          "name": "Not found → field error NOT_FOUND (HTTP 200)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/graphql",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "graphql"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\"query\": \"mutation($id: Int!) { deleteDepartment(id: $id) { deleted } }\", \"variables\": {\"id\": {{gqlDeptId}}}}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('extensions.code NOT_FOUND', () => pm.expect(pm.response.json().errors[0].extensions.code).to.eql('NOT_FOUND'));",
+                  "pm.test('path', () => pm.expect(pm.response.json().errors[0].path).to.eql(['deleteDepartment']));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "att-0032",
+          "name": "Validation → BAD_USER_INPUT with field errors",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/graphql",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "graphql"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\"query\": \"mutation { createDepartment(input: { name: \\\"Bad\\\", code: \\\"lower case\\\" }) { id } }\", \"variables\": {}}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('extensions.code BAD_USER_INPUT', () => pm.expect(pm.response.json().errors[0].extensions.code).to.eql('BAD_USER_INPUT'));",
+                  "pm.test('field errors', () => pm.expect(pm.response.json().errors[0].extensions.errors.map((e) => e.field)).to.include('code'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "att-0033",
+          "name": "Invalid query → 400 with graphql-response+json",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/graphql-response+json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/graphql",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "graphql"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\"query\": \"{ nope }\", \"variables\": {}}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 400', () => pm.response.to.have.status(400));",
+                  "pm.test('Content-Type application/graphql-response+json', () => pm.expect(pm.response.headers.get('Content-Type')).to.include('application/graphql-response+json'));",
+                  "pm.test('extensions.code GRAPHQL_VALIDATION_FAILED', () => pm.expect(pm.response.json().errors[0].extensions.code).to.eql('GRAPHQL_VALIDATION_FAILED'));",
+                  "pm.test('no data entry', () => pm.expect(pm.response.json()).to.not.have.property('data'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "att-0034",
+          "name": "Injected field error → partial data",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-Force-GraphQL-Error",
+                "value": "department"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/graphql",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "graphql"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\"query\": \"{ employees(limit: 2) { items { id department { name } } } }\", \"variables\": {}}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "const b = pm.response.json(); pm.test('data kept', () => pm.expect(b.data.employees.items.length).to.eql(2)); pm.test('department nulled', () => pm.expect(b.data.employees.items[0].department).to.eql(null)); pm.test('two errors', () => pm.expect(b.errors.length).to.eql(2));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "att-0035",
+          "name": "Mutation over GET → 405",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/graphql?query=mutation%20%7B%20deleteCategory(id%3A%201)%20%7B%20deleted%20%7D%20%7D",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "graphql"
+              ],
+              "query": [
+                {
+                  "key": "query",
+                  "value": "mutation%20%7B%20deleteCategory(id%3A%201)%20%7B%20deleted%20%7D%20%7D"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 405', () => pm.response.to.have.status(405));",
+                  "pm.test('extensions.code METHOD_NOT_ALLOWED', () => pm.expect(pm.response.json().errors[0].extensions.code).to.eql('METHOD_NOT_ALLOWED'));",
+                  "pm.test('Allow: POST', () => pm.expect(pm.response.headers.get('Allow')).to.eql('POST'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "att-0036",
+          "name": "X-Force-Error: 503 → errors with the real status",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-Force-Error",
+                "value": "503"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/graphql",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "graphql"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\"query\": \"{ counts { employees } }\", \"variables\": {}}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 503', () => pm.response.to.have.status(503));",
+                  "pm.test('extensions.code SERVICE_UNAVAILABLE', () => pm.expect(pm.response.json().errors[0].extensions.code).to.eql('SERVICE_UNAVAILABLE'));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "att-003a",
+      "name": "Headers & inspector",
+      "item": [
+        {
+          "id": "att-0038",
           "name": "Request id echo",
           "request": {
             "method": "GET",
@@ -3793,7 +4442,7 @@
           ]
         },
         {
-          "id": "att-002t",
+          "id": "att-0039",
           "name": "Inspector catch-all",
           "request": {
             "method": "POST",

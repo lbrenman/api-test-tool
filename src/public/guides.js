@@ -13,7 +13,8 @@
   // Single-quote for POSIX shells (bash, zsh). zsh treats an unquoted "?" in a URL as a glob.
   const q = (s) => `'${String(s).replace(/'/g, "'\\''")}'`;
   // Paths that take API credentials: the /v1 mock API and SOAP requests (the WSDL and /soap listing are open).
-  const isApiPath = (p) => p === '/v1' || p.startsWith('/v1/') || p.startsWith('/v1?') || (p.startsWith('/soap/') && !/[?.]wsdl$/i.test(p));
+  const isApiPath = (p) => p === '/v1' || p.startsWith('/v1/') || p.startsWith('/v1?') || (p.startsWith('/soap/') && !/[?.]wsdl$/i.test(p))
+    || p.startsWith('/sse/') || p === '/graphql' || p.startsWith('/graphql?');
 
   /**
    * ctx: {
@@ -120,9 +121,10 @@
 
     /**
      * Connect to a WebSocket path of this server with Node's built-in WebSocket client (Node 22+),
-     * send one message and print what comes back. Credentials follow the active auth mode.
+     * send one message (or an array of messages, in order) and print what comes back. Credentials
+     * follow the active auth mode; protocols are offered as Sec-WebSocket-Protocol.
      */
-    function ws(path, message, { listenMs = 2000 } = {}) {
+    function ws(path, message, { listenMs = 2000, protocols } = {}) {
       const pre = [];
       const envs = [];
       const hdrs = [];
@@ -151,8 +153,10 @@
       for (const r of ctx.required || []) hdrs.push([r.name, JSON.stringify(r.value ?? 'test')]);
       const url = `${ctx.base}${p}`.replace(/^http/, 'ws');
       const headerSrc = hdrs.map(([k, v]) => `${JSON.stringify(k)}:${v}`).join(',');
-      const js = `const ws=new WebSocket(${JSON.stringify(url)}${headerSrc ? `,{headers:{${headerSrc}}}` : ''});`
-        + `ws.onopen=()=>{console.log('open',ws.protocol||'');${message === undefined ? '' : `ws.send(${JSON.stringify(message)});`}};`
+      const init = [protocols?.length ? `protocols:${JSON.stringify(protocols)}` : '', headerSrc ? `headers:{${headerSrc}}` : ''].filter(Boolean).join(',');
+      const sends = (message === undefined ? [] : [].concat(message)).map((m) => `ws.send(${JSON.stringify(m)});`).join('');
+      const js = `const ws=new WebSocket(${JSON.stringify(url)}${init ? `,{${init}}` : ''});`
+        + `ws.onopen=()=>{console.log('open',ws.protocol||'');${sends}};`
         + 'ws.onmessage=(e)=>console.log(e.data);ws.onerror=()=>console.log(\'handshake or connection failed\');'
         + `ws.onclose=(e)=>console.log('closed',e.code);setTimeout(()=>ws.close(),${listenMs})`;
       return [...pre, `${envs.length ? `${envs.join(' ')} ` : ''}node -e ${q(js)}`].join('\n');
@@ -695,6 +699,54 @@
         ],
         curls: [
           ['The same stream from a terminal', curl('GET', '/sse/ticks?interval=500&count=5', { extra: ['-N'] })],
+        ],
+      },
+
+      // ------------------------------------------------------------ protocols: GraphQL
+      'protocols.graphql': {
+        title: 'GraphQL',
+        purpose: 'A GraphQL endpoint over the same data: queries with offset pages and Relay connections, CRUD mutations, and a live changes subscription over WebSocket (graphql-transport-ws). It uses the active auth mode, rate limit, required headers and chaos like /v1.',
+        steps: [
+          `POST \`${B}/graphql\` with \`{"query": "…", "variables": {…}}\` (or GET with ?query= for queries). The schema is at \`${B}/graphql/schema.graphql\`; introspection works unless turned off.`,
+          'Lists take `limit`, `offset`, `sort` ("-salary,lastName"), `search` and `filter: [{ field, op, value }]` (the REST filter operators). `…Connection` fields take `first/after/last/before` and return edges, nodes, pageInfo and totalCount.',
+          'Field errors (validation, not found, conflicts) come back as HTTP 200 with partial `data` and `errors[].extensions.code` (BAD_USER_INPUT, NOT_FOUND, CONFLICT…); auth, rate-limit and chaos errors keep their HTTP status. Send `Accept: application/graphql-response+json` to get 400 for invalid queries.',
+          'Inject a field error with `X-Force-GraphQL-Error: department` (or `Query.employees:503`) to test partial-data handling; X-Force-Error still fails the whole request.',
+          `Subscriptions: connect a WebSocket to \`${B.replace(/^http/, 'ws')}/graphql\` with subprotocol graphql-transport-ws, send connection_init, then subscribe to \`changes\`. Credentials: ${C.authLabel}.`,
+        ],
+        curls: [
+          ['A query', curl('POST', '/graphql', { json: { query: '{ employees(limit: 3, sort: "lastName") { total items { id fullName department { name } } } }' } })],
+          ['A query with variables (GET)', curl('GET', `/graphql?query=${encodeURIComponent('query($id: Int!) { product(id: $id) { id name price category { name } } }')}&variables=${encodeURIComponent('{"id":1}')}`)],
+          ['Relay pagination', curl('POST', '/graphql', { json: { query: '{ productsConnection(first: 2) { totalCount pageInfo { hasNextPage endCursor } nodes { id name } } }' } })],
+          ['Create a department', curl('POST', '/graphql', { json: { query: 'mutation($in: DepartmentInput!) { createDepartment(input: $in) { id name code } }', variables: { in: { name: 'Research', code: 'RND-2' } } } })],
+          ['Partial data with an injected field error', curl('POST', '/graphql', { json: { query: '{ employees(limit: 2) { items { id department { name } } } }' }, headers: { 'X-Force-GraphQL-Error': 'department' } })],
+          ['Download the SDL', plain('GET', '/graphql/schema.graphql', { output: 'schema.graphql' })],
+          ['Subscribe to changes for 30 s (Node 22+)', ws('/graphql', [JSON.stringify({ type: 'connection_init' }), JSON.stringify({ id: '1', type: 'subscribe', payload: { query: 'subscription { changes { type resource id at } }' } })], { listenMs: 30000, protocols: ['graphql-transport-ws'] })],
+        ],
+      },
+      'protocols.graphql-settings': {
+        title: 'GraphQL settings',
+        purpose: 'Turn the GraphQL mock on or off, allow or block introspection, and limit how deeply operations may nest.',
+        steps: [
+          '`graphqlIntrospection`: off makes __schema / __type queries fail validation, like many production servers. The SDL file stays available.',
+          '`graphqlMaxDepth`: operations nested deeper than this are rejected with QUERY_TOO_DEEP (fragments are expanded; introspection fields do not count). 0 = no limit.',
+          'Subscriptions use the WebSocket settings (message size, idle timeout, pings).',
+          ...pw,
+        ],
+        curls: [
+          ['Turn introspection off', admin('PUT', '/settings', { json: { graphqlIntrospection: false } })],
+          ['Back to the defaults', admin('POST', '/settings/reset', { json: { section: 'graphql' } })],
+        ],
+      },
+      'protocols.graphql-try': {
+        title: 'Try a GraphQL request',
+        purpose: 'Send a query or mutation from this page with the active auth mode and see the status, the errors and the data.',
+        steps: [
+          'Pick a sample or write your own query, add variables as JSON, and press Send.',
+          'Fill X-Force-GraphQL-Error with a field name to see partial data, or X-Force-Error with a status to fail the whole request.',
+          `For an editor with autocompletion, open GraphiQL at \`${B}/graphql\` in a browser tab and add auth headers in its Headers tab.`,
+        ],
+        curls: [
+          ['The same from a terminal', curl('POST', '/graphql', { json: { query: '{ counts { employees products departments categories } }' } })],
         ],
       },
 

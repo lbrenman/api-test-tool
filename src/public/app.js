@@ -452,7 +452,7 @@
     const filterText = h('input', { type: 'text', placeholder: 'Filter path, header, body…', 'aria-label': 'Filter' });
     const filterMethod = h('select', { 'aria-label': 'Method' }, ['', 'GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'].map((m) => h('option', { value: m }, m || 'All methods')));
     const filterSource = h('select', { 'aria-label': 'Source' },
-      [['', 'All sources'], ['catch-all', 'Webhooks / other paths'], ['v1', 'Mock API (/v1)'], ['soap', 'SOAP (/soap)'], ['ws', 'WebSocket (/ws)'], ['sse', 'SSE (/sse)'], ['oauth', 'OAuth (/oauth)']].map(([v, l]) => h('option', { value: v }, l)));
+      [['', 'All sources'], ['catch-all', 'Webhooks / other paths'], ['v1', 'Mock API (/v1)'], ['soap', 'SOAP (/soap)'], ['ws', 'WebSocket (/ws)'], ['sse', 'SSE (/sse)'], ['graphql', 'GraphQL (/graphql)'], ['oauth', 'OAuth (/oauth)']].map(([v, l]) => h('option', { value: v }, l)));
     const live = h('span', { class: 'live-dot' });
     const count = h('span', { class: 'muted small' });
     const logAll = h('input', { type: 'checkbox', checked: !!sval('inspectorLogAll') });
@@ -768,8 +768,81 @@
     if (services.length) soapTry(el, services);
     const wsCleanup = await wsSection(el);
     const sseCleanup = await sseSection(el);
+    graphqlSection(el);
     return () => { wsCleanup?.(); sseCleanup?.(); }; // close the live consoles when leaving the page
   };
+
+  // GraphQL endpoint, settings and a query console (POST /graphql from the browser with the active auth).
+  function graphqlSection(el) {
+    const on = !!sval('graphqlEnabled');
+    const base = location.origin;
+    const links = [
+      ['Endpoint', `${base}/graphql`, null],
+      ['Schema (SDL)', `${base}/graphql/schema.graphql`, true],
+      ['GraphiQL', `${base}/graphql`, true],
+      ['Subscriptions', `${base.replace(/^http/, 'ws')}/graphql`, null],
+    ];
+    el.append(h('div', { class: 'grid cols-2' },
+      h('div', { class: 'card' }, titled('GraphQL', 'protocols.graphql'),
+        !on ? h('p', { class: 'muted' }, 'The GraphQL mock is off. Turn on graphqlEnabled in the settings next to this card.')
+          : h('div', { class: 'stack' },
+            h('div', { class: 'kv' }, links.flatMap(([k, url, open]) => [h('div', null, k), h('div', null, h('code', null, url), ' ', h('button', { class: 'small', onclick: () => copy(url) }, 'copy'),
+              open ? h('span', null, ' ', h('a', { href: url, target: '_blank', rel: 'noopener' }, 'open ↗')) : null)])),
+            h('div', { class: 'small muted' }, 'Queries with offset pages and Relay connections, CRUD mutations, and a changes subscription (graphql-transport-ws). Field errors come back as HTTP 200 with partial data and errors[].extensions.code; auth, rate-limit and chaos errors keep their HTTP status.'))),
+      h('div', { class: 'card' }, titled('GraphQL settings', 'protocols.graphql-settings'),
+        settingsForm(['graphqlEnabled', 'graphqlIntrospection', 'graphqlMaxDepth'], { onSaved: () => route() }))));
+    if (!on) return;
+
+    const SAMPLES = {
+      'List employees': ['query Employees($limit: Int = 5) {\n  employees(limit: $limit, sort: "lastName") {\n    total\n    items { id fullName title level department { name } }\n  }\n}', '{ "limit": 5 }'],
+      'Relay connection': ['query Products($after: String) {\n  productsConnection(first: 3, after: $after) {\n    totalCount\n    pageInfo { hasNextPage endCursor }\n    edges { cursor node { id name price category { name } } }\n  }\n}', '{}'],
+      'Filter': ['{\n  employees(limit: 5, filter: [{ field: "level", value: "L3" }, { field: "salary", op: gte, value: "90000" }], sort: "-salary") {\n    total\n    items { fullName salary level }\n  }\n}', '{}'],
+      'Create department': ['mutation Create($input: DepartmentInput!) {\n  createDepartment(input: $input) { id name code }\n}', '{ "input": { "name": "Research", "code": "RND-2" } }'],
+      'Validation error': ['mutation {\n  createDepartment(input: { name: "Bad", code: "lower case" }) { id }\n}', '{}'],
+    };
+    const sample = h('select', { 'aria-label': 'Sample' }, Object.keys(SAMPLES).map((k) => h('option', { value: k }, k)));
+    const queryIn = h('textarea', { rows: 10, class: 'mono', spellcheck: 'false', 'aria-label': 'GraphQL query' });
+    const varsIn = h('textarea', { rows: 3, class: 'mono', spellcheck: 'false', 'aria-label': 'Variables (JSON)' });
+    const fieldErr = h('input', { type: 'text', placeholder: 'e.g. department or Query.employees:503', style: { maxWidth: '260px' } });
+    const forceErr = h('input', { type: 'text', placeholder: 'e.g. 503', style: { maxWidth: '140px' } });
+    const out = h('div', { class: 'stack' });
+    const load = () => { [queryIn.value, varsIn.value] = SAMPLES[sample.value]; };
+    sample.addEventListener('change', load);
+    load();
+
+    const send = guard(async () => {
+      let variables;
+      try { variables = varsIn.value.trim() ? JSON.parse(varsIn.value) : undefined; } catch (e) { throw new Error(`Variables are not valid JSON: ${e.message}`); }
+      const body = JSON.stringify({ query: queryIn.value, variables });
+      const hdrs = { 'Content-Type': 'application/json', Accept: 'application/json', ...(await protocolAuthHeaders('POST', '/graphql', body)) };
+      if (fieldErr.value.trim()) hdrs['X-Force-GraphQL-Error'] = fieldErr.value.trim();
+      if (forceErr.value.trim()) hdrs['X-Force-Error'] = forceErr.value.trim();
+      const url = CURL?.ctx?.mode === 'apikey' && CURL.ctx.apiKey.in === 'query' ? `/graphql?${encodeURIComponent(CURL.ctx.apiKey.name)}=${encodeURIComponent(CURL.ctx.apiKey.value)}` : '/graphql';
+      const started = performance.now();
+      const res = await fetch(url, { method: 'POST', headers: hdrs, body, credentials: 'omit' });
+      const text = await res.text();
+      const ms = Math.round(performance.now() - started);
+      let json = null;
+      try { json = JSON.parse(text); } catch { /* chaos can break the body */ }
+      const errs = Array.isArray(json?.errors) ? json.errors : [];
+      const shown = ['content-type', 'x-chaos-injected', 'www-authenticate', 'retry-after', 'x-request-id'];
+      clear(out).append(
+        h('div', { class: 'row' }, h('span', { class: statusClass(res.status) }, String(res.status)), h('span', { class: 'muted small' }, `${ms} ms · ${fmtBytes(text.length)}`),
+          errs.length ? h('span', { class: 'badge warn' }, `${errs.length} error${errs.length > 1 ? 's' : ''}: ${[...new Set(errs.map((e) => e.extensions?.code || '?'))].join(', ')}`) : null,
+          json && 'data' in json && errs.length ? h('span', { class: 'badge' }, 'partial data') : null),
+        kv(Object.fromEntries(shown.filter((k) => res.headers.get(k)).map((k) => [k, res.headers.get(k)]))),
+        h('div', { class: 'row between' }, h('span', { class: 'small muted' }, 'Response'), h('button', { class: 'small', onclick: () => copy(text) }, 'copy')),
+        codeBlock(json ? JSON.stringify(json, null, 2) : text, { maxHeight: '480px' }));
+    });
+
+    el.append(h('div', { class: 'card stack' }, titled('Try a GraphQL request', 'protocols.graphql-try'),
+      h('div', { class: 'row' }, field('Sample', sample), field('X-Force-GraphQL-Error (optional)', fieldErr), field('X-Force-Error (optional)', forceErr)),
+      queryIn,
+      field('Variables (JSON)', varsIn),
+      h('div', { class: 'row' }, h('button', { class: 'primary', onclick: send }, 'Send'), h('button', { onclick: load }, 'Reset sample'),
+        h('span', { class: 'small muted' }, `Sent from your browser with the active auth mode (${CURL?.mode || 'none'}). The call also appears on the Inspector page.`)),
+      out));
+  }
 
   // Server-Sent Events streams, settings and a live viewer (the browser's EventSource).
   async function sseSection(el) {
@@ -1446,6 +1519,7 @@
           ['/soap, /soap/{EmployeeService|ProductService}', 'Mock SOAP 1.1/1.2 services over the same data. ?wsdl returns the WSDL (always open); POST requests use the active auth mode.'],
           ['/ws, /ws/{echo|rpc|changes}, /ws/asyncapi.json', 'Mock WebSocket channels over the same data (the upgrade uses the active auth mode) and their AsyncAPI 3.0 document.'],
           ['/sse, /sse/changes, /sse/ticks, POST /sse/stream', 'Server-Sent Events: change feed with Last-Event-ID replay, numbered ticks, and LLM-style request/stream (described in /openapi.json).'],
+          ['/graphql, /graphql/schema.graphql', 'GraphQL over the same data: queries (offset pages and Relay connections), mutations, and a changes subscription over WebSocket (graphql-transport-ws). GraphiQL in a browser; the SDL is always open.'],
           ['/oauth/token, /oauth/authorize, /oauth/introspect, /oauth/revoke', 'Built-in OAuth 2.0 server.'],
           ['/.well-known/jwks.json, /.well-known/oauth-authorization-server', 'Signing keys and OAuth discovery.'],
           ['/openapi.json, /openapi.yaml', 'Live OpenAPI for the mock data API (for integrations).'],

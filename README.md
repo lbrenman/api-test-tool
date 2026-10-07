@@ -119,6 +119,7 @@ Fly.io, Render and Northflank are covered in [Deployment](#deployment).
 | **SOAP** | Mock SOAP 1.1 and 1.2 services (`EmployeeService`, `ProductService`) over the same data, with live WSDLs (document/literal, a SOAP 1.1 and a 1.2 binding). Get, List (paging, filters, text search, sort), Create, Update, Delete. Auth mode, chaos, rate limits and required headers apply as on `/v1`; errors are SOAP faults with field-level detail. Optional WS-Security UsernameToken (PasswordText and PasswordDigest) and SOAPAction checking. |
 | **WebSocket** | Mock channels over the same data: `/ws/echo`, `/ws/rpc` (JSON-RPC 2.0: get/list employees, products, departments, categories) and `/ws/changes` (live created/updated/deleted events from any protocol), with an AsyncAPI 3.0 document. The upgrade goes through auth, rate limiting, required headers and chaos. Size limit (1009), idle timeout, keep-alive pings, and a live console in the dashboard. In-house RFC 6455 implementation, no dependency. |
 | **Server-Sent Events** | `/sse/changes` (live change feed from any protocol, Last-Event-ID replay, `event: reset` on gaps), `/sse/ticks` (numbered, resumable) and `POST /sse/stream` (LLM-style token streaming, plain events or OpenAI chunk format with `[DONE]`). Heartbeats, `retry:`, stream chaos (`dropAfter`, `malformedAt`, `skipIds`), documented in `/openapi.json`, with a live viewer in the dashboard. The tester reads SSE responses for a time window. |
+| **GraphQL** | `/graphql` over the same data: queries with offset pages and Relay connections (filters, sort, search), nested department/category/manager resolvers, CRUD mutations with merge-patch updates, and a live `changes` subscription over WebSocket (graphql-transport-ws). Field errors come back as HTTP 200 with partial data and `extensions.code`; auth, rate-limit and chaos errors keep their HTTP status. GraphQL-over-HTTP media types, introspection on/off, depth limit, injected field errors (`X-Force-GraphQL-Error`), SDL at `/graphql/schema.graphql`, GraphiQL in the browser and a query console in the dashboard. |
 | **Inspector** | Catch-all capture with the actual path, live stream (SSE), detected auth (Basic user, decoded JWT, API keys), pretty bodies and multipart parts, copy as curl, replay, auto-forward, configurable responses and path rules. |
 | **Generated OpenAPI** | Two OAS 3.1 specs, regenerated from the live settings. **Mock Data API** (`/openapi.json`, `/openapi.yaml`) is for integrations: `/v1` resources, every pagination path, the file endpoints, the SSE streams and the OAuth token endpoint, reflecting the server URL, date format, auth scheme, required headers and chaos headers. **Admin API** (`/admin/api/openapi.json`, `.yaml`, password protected) is for operators and scripts: settings, seeding, files, OAuth clients, inspector, tester, `/health` and `/ready`. Swagger UI at `/docs` shows both (`/docs?spec=admin` for the admin spec). |
 | **API tester** | Upload, paste or URL load for OAS 3.0, 3.1 and Swagger 2.0 (REST), WSDL 1.1 (SOAP 1.1/1.2, with XSD validation and WS-Security) and AsyncAPI 2.x/3.0 (WebSocket, with message validation, correlation and scripted scenarios). Spec lint, per-operation "try it" with generated samples that honour `pattern`/`format`/`enum`/limits, auth profiles (none, API key, Basic, Bearer, OAuth2 client credentials), response validation, run-all contract mode with ID chaining and negative tests, run history, and JSON and HTML reports. "Mock from spec" serves a spec's examples from this tool. |
@@ -184,13 +185,16 @@ Settings marked **restart** can only be set through the environment.
 | `WS_MAX_MESSAGE_KB` | `1024` | Larger messages close the connection with 1009 |
 | `WS_IDLE_TIMEOUT_SECONDS` | `0` | Close connections that send nothing for this long (1001); 0 = never |
 | `WS_PING_INTERVAL_SECONDS` | `30` | Server keep-alive pings; a connection that misses a pong is dropped; 0 = off |
+| `GRAPHQL_ENABLED` | `true` | Serve the GraphQL mock at `/graphql` |
+| `GRAPHQL_INTROSPECTION` | `true` | Allow `__schema` / `__type` queries (the SDL file stays available) |
+| `GRAPHQL_MAX_DEPTH` | `10` | Reject operations nested deeper than this (introspection fields not counted); 0 = no limit |
 | `SSE_ENABLED` | `true` | Serve the SSE streams under `/sse` |
 | `SSE_HEARTBEAT_SECONDS` | `15` | Comment heartbeat interval; 0 = off |
 | `SSE_RETRY_MS` | `3000` | `retry:` sent at the start of every stream |
 | `SSE_REPLAY_BUFFER` | `500` | Change events kept for Last-Event-ID resume |
 | `SSE_TICK_INTERVAL_MS` | `1000` | Default `/sse/ticks` interval |
 | `INSPECTOR_RETENTION` | `500` | Captures kept |
-| `INSPECTOR_LOG_ALL` | `true` | Also record `/v1/*`, `/soap/*`, `/ws/*` (upgrades), `/sse/*` and `/oauth/*` calls (with their real responses). Toggle on the Inspector page. |
+| `INSPECTOR_LOG_ALL` | `true` | Also record `/v1/*`, `/soap/*`, `/ws/*` (upgrades), `/sse/*`, `/graphql` and `/oauth/*` calls (with their real responses). Toggle on the Inspector page. |
 | `INSPECTOR_RESPONSE_STATUS`, `…_CONTENT_TYPE`, `…_BODY`, `…_HEADERS`, `…_DELAY_MS` | `200`, `application/json`, receipt, —, `0` | Default catch-all response |
 | `INSPECTOR_RULES` | — | JSON path rules (first match wins) |
 | `INSPECTOR_FORWARD_ENABLED` / `INSPECTOR_FORWARD_URL` | `false` / — | Auto-forward captures |
@@ -201,7 +205,7 @@ Settings marked **restart** can only be set through the environment.
 
 ## Route map
 
-These prefixes are reserved: `/v1`, `/soap`, `/ws`, `/sse`, `/oauth`, `/.well-known`, `/admin`, `/dashboard`, `/app`, `/docs`, `/openapi.json`, `/openapi.yaml`, `/samples`, `/health`, `/ready`, and `GET /` (which redirects to the dashboard). **Every other path, and every method, is captured by the inspector.** Calls to `/v1`, `/soap`, `/ws` (the upgrade), `/sse` and `/oauth` are recorded there too (unless `INSPECTOR_LOG_ALL=false`); the dashboard, admin API, docs and health probes never are.
+These prefixes are reserved: `/v1`, `/soap`, `/ws`, `/sse`, `/graphql`, `/oauth`, `/.well-known`, `/admin`, `/dashboard`, `/app`, `/docs`, `/openapi.json`, `/openapi.yaml`, `/samples`, `/health`, `/ready`, and `GET /` (which redirects to the dashboard). **Every other path, and every method, is captured by the inspector.** Calls to `/v1`, `/soap`, `/ws` (the upgrade), `/sse`, `/graphql` and `/oauth` are recorded there too (unless `INSPECTOR_LOG_ALL=false`); the dashboard, admin API, docs and health probes never are.
 
 | Path | Purpose |
 |---|---|
@@ -220,6 +224,8 @@ These prefixes are reserved: `/v1`, `/soap`, `/ws`, `/sse`, `/oauth`, `/.well-kn
 | `GET /ws`, `GET /ws/asyncapi.json` | WebSocket channel list and AsyncAPI 3.0 document (open) |
 | `GET /ws/{echo\|rpc\|changes}` (upgrade) | Mock WebSocket channels (see [WebSocket channels](#websocket-channels)) |
 | `GET /sse`, `GET /sse/changes`, `GET /sse/ticks`, `POST /sse/stream` | Server-Sent Events streams (see [Server-Sent Events](#server-sent-events)) |
+| `GET /graphql/schema.graphql` | GraphQL SDL (open) |
+| `POST /graphql`, `GET /graphql?query=`, `GET /graphql` (upgrade) | GraphQL queries, mutations and subscriptions; GraphiQL in a browser (see [GraphQL](#graphql)) |
 | `/oauth/token`, `/oauth/authorize`, `/oauth/introspect`, `/oauth/revoke` | OAuth 2.0 server |
 | `/.well-known/oauth-authorization-server`, `/.well-known/openid-configuration`, `/.well-known/jwks.json` | Discovery and JWKS |
 | `/samples/*` | Bundled specs (handy for the tester's URL loader) |
@@ -532,6 +538,32 @@ The dashboard's **Protocols** page lists the streams, holds the SSE settings, an
 
 ---
 
+## GraphQL
+
+`/graphql` serves the mock data as a GraphQL API. The schema is at `/graphql/schema.graphql` (always open, like the WSDLs and `/openapi.json`); open `/graphql` in a browser for GraphiQL.
+
+| Operation | Fields |
+|---|---|
+| Queries | `employee(id)`, `product(id)`, `department(id)`, `category(id)`; `employees`, `products`, `departments`, `categories` with `limit`/`offset` (max 100) returning `{items, total, limit, offset}`; `…Connection` variants with `first/after/last/before` returning `{edges {cursor node}, nodes, pageInfo, totalCount}`; `counts`. Lists take `filter: [{field, op, value}]` (the REST operators: `eq ne gt gte lt lte in nin like exists`, dotted fields such as `address.city` or `department.name`), `sort: "-salary,lastName"` and `search`. Related records resolve on demand: `Employee.department`, `.manager`, `.directReports`, `Product.category`, `Department.employees`, `Category.products`. |
+| Mutations | `createX(input)`, `updateX(id, input)` (merge patch: omitted fields are kept, `null` clears), `deleteX(id)` for Employee, Product, Department and Category. Same validation, references and conflicts as `/v1`. |
+| Subscriptions | `changes(resources: [employees, …])`: one event per create, update or delete made through any protocol. WebSocket on `/graphql`, subprotocol `graphql-transport-ws` (connection_init → subscribe → next … complete; ping/pong; the graphql-ws close codes 4400/4401/4406/4408/4409/4429). Queries and mutations work over the socket too. |
+
+- **Transport:** `POST` with `application/json` (`{"query", "variables", "operationName"}`) or `application/graphql`; `GET ?query=` for queries only (a mutation over GET is `405`, `Allow: POST`). Responses are `application/json`, or `application/graphql-response+json` when the client asks for it.
+- **Errors:** field errors (validation, not found, conflicts) are HTTP 200 with partial `data` and `errors[]` with `path` and `extensions` (`code` such as `BAD_USER_INPUT`, `NOT_FOUND`, `CONFLICT`; `status`; `problemCode`; field-level `errors`). Parse and validation failures have no `data` (HTTP 200 with `application/json`, 400 with `application/graphql-response+json`; codes `GRAPHQL_PARSE_FAILED`, `GRAPHQL_VALIDATION_FAILED`, `QUERY_TOO_DEEP`). Auth, rate limits, required headers and chaos run before the query and keep their HTTP status (401 + `UNAUTHENTICATED`, 429 + `RATE_LIMITED`, an injected 503 + `SERVICE_UNAVAILABLE`).
+- **Chaos for partial data:** `X-Force-GraphQL-Error: department` makes every `department` field fail (`Type.field` and `:status` work too, comma-separated); nullable fields become `null` next to the error, as a real server would.
+- **Auth:** `AUTH_MODE` applies to `POST`/`GET /graphql` and to the WebSocket upgrade (with `?access_token=` for `bearer`, `jwt` and `oauth2`, since browsers cannot set headers on WebSockets). GraphiQL (loaded from a CDN) has a Headers tab for credentials.
+
+```bash
+curl -s "$B/graphql" -H 'Content-Type: application/json' \
+  -d '{"query":"{ employees(limit: 3, sort: \"lastName\") { total items { id fullName department { name } } } }"}'
+curl -s "$B/graphql" -H 'Content-Type: application/json' -H 'X-Force-GraphQL-Error: department' \
+  -d '{"query":"{ employees(limit: 2) { items { id department { name } } } }"}'
+```
+
+The dashboard's **Protocols** page shows the endpoint, holds the GraphQL settings, and has a query console with samples (including validation and partial-data errors).
+
+---
+
 ## Inspector
 
 Send anything to any non-reserved path and it shows up live on the dashboard's **Inspector** page with:
@@ -628,7 +660,7 @@ For WebSocket APIs you expose, load an **AsyncAPI 2.x or 3.0** document (upload,
 
 ## Postman and Newman
 
-- `postman/API-Test-Tool.postman_collection.json` has 91 requests with test scripts, covering:
+- `postman/API-Test-Tool.postman_collection.json` has 106 requests with test scripts, covering:
   - health, OpenAPI and discovery;
   - OAuth: token, introspect, revoke, error cases;
   - each auth mode (with and without credentials);
@@ -639,9 +671,10 @@ For WebSocket APIs you expose, load an **AsyncAPI 2.x or 3.0** document (upload,
   - every file protocol (multipart, raw, base64, presign round trip, range, chunked, tus);
   - SOAP: WSDL, SOAP 1.1 and 1.2 calls, create/update/delete, faults (Client/Sender, validation detail, SOAPAction mismatch, injected 503);
   - Server-Sent Events: ticks (count, Last-Event-ID resume), request/stream in both formats, and errors before the stream starts;
+  - GraphQL: SDL, queries (POST and GET), Relay pagination, filters, create/update/delete mutations, NOT_FOUND and BAD_USER_INPUT field errors, a 400 with `application/graphql-response+json`, injected field errors (partial data), 405 for a mutation over GET and an injected 503;
   - headers and the inspector.
-  - WebSocket channels are not covered (Postman collections cannot drive WebSockets); `npm test` covers them.
-- `postman/API-Test-Tool.postman_environment.json` holds `baseUrl`, `authMode` and credentials. Set `authMode` to the server's `AUTH_MODE`; the collection-level pre-request script then authenticates every `/v1` call, SOAP request and SSE stream, fetching and caching an OAuth token for `jwt` and `oauth2` and signing requests for `hmac`.
+  - WebSocket channels and GraphQL subscriptions are not covered (Postman collections cannot drive WebSockets); `npm test` covers them.
+- `postman/API-Test-Tool.postman_environment.json` holds `baseUrl`, `authMode` and credentials. Set `authMode` to the server's `AUTH_MODE`; the collection-level pre-request script then authenticates every `/v1` call, SOAP request, SSE stream and GraphQL request, fetching and caching an OAuth token for `jwt` and `oauth2` and signing requests for `hmac`.
 - `npm run postman` boots a fresh server for each auth mode and runs Newman against it. `npm run postman -- --mode hmac` runs one mode, and `npm run postman -- --url https://your-app.fly.dev --mode none` runs against a deployed instance.
 - `.github/workflows/newman.yml` runs `npm test` and then a Newman matrix over all seven auth modes (SQLite + local files) on every push.
 - The collection is generated by `scripts/build-postman.js`. Edit that file and run `npm run postman:build`.

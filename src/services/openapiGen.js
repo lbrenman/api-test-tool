@@ -422,7 +422,7 @@ async function generateOpenApi(ctx, req) {
       description: [
         '**For integrations and API clients.** Import this into your integration platform, Postman or a code generator to call the mock',
         'data API: employees, products, departments, categories, the seven pagination schemes, the file pool, the Server-Sent Events streams and the OAuth token endpoint.',
-        `SOAP is described by WSDLs (\`${base}/soap/EmployeeService?wsdl\`) and WebSockets by AsyncAPI (\`${base}/ws/asyncapi.json\`).`,
+        `SOAP is described by WSDLs (\`${base}/soap/EmployeeService?wsdl\`), WebSockets by AsyncAPI (\`${base}/ws/asyncapi.json\`) and GraphQL by its SDL (\`${base}/graphql/schema.graphql\`).`,
         '',
         'Tool administration (settings, seeding, the inspector, the contract tester) and the health probes are not part of this document.',
         `They are described by the admin spec at \`${base}/admin/api/openapi.json\` (requires the dashboard password).`,

@@ -53,6 +53,7 @@ function apiKind(path) {
   if (path === '/soap' || path.startsWith('/soap/')) return 'soap';
   if (path === '/ws' || path.startsWith('/ws/')) return 'ws';
   if (path === '/sse' || path.startsWith('/sse/')) return 'sse';
+  if (path === '/graphql' || path.startsWith('/graphql/')) return 'graphql';
   if (path.startsWith('/oauth/') || path.startsWith('/.well-known/')) return 'oauth';
   return null;
 }

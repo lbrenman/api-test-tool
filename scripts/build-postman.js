@@ -48,7 +48,7 @@ const collectionPreBody = [
   "if (skip) pm.request.headers.remove('X-Skip-Auth');",
   "const resolved = new sdk.Url(pm.variables.replaceIn(pm.request.url.toString()));",
   "const p = resolved.getPath();",
-  "const isApi = (p.indexOf('/v1/') === 0 && p.indexOf('/v1/files/presigned/') !== 0) || (p.indexOf('/soap/') === 0 && pm.request.method === 'POST') || p.indexOf('/sse/') === 0;",
+  "const isApi = (p.indexOf('/v1/') === 0 && p.indexOf('/v1/files/presigned/') !== 0) || (p.indexOf('/soap/') === 0 && pm.request.method === 'POST') || p.indexOf('/sse/') === 0 || p === '/graphql';",
   "if (!isApi || skip || mode === 'none') return;",
   "const set = (k, v) => pm.request.headers.upsert({ key: k, value: v });",
   "if (mode === 'apikey') {",
@@ -91,7 +91,7 @@ const collectionPreBody = [
 ];
 // The sandbox does not allow top-level return, so the body runs inside a function.
 const collectionPre = [
-  '// Applies the auth mode in {{authMode}} to /v1 requests, SOAP POSTs and SSE streams. Requests with header X-Skip-Auth: 1 go out unauthenticated.',
+  '// Applies the auth mode in {{authMode}} to /v1 requests, SOAP POSTs, SSE streams and /graphql. Requests with header X-Skip-Auth: 1 go out unauthenticated.',
   '(function applyAuth() {',
   ...collectionPreBody.map((l) => `  ${l}`),
   '})();',
@@ -284,6 +284,28 @@ const sseFolder = folder('Server-Sent Events', [
   req('Unknown resource → 400 before the stream starts', 'GET', '/sse/changes?resource=widgets', { tests: problem(400) }),
 ]);
 
+const gql = (query, variables = '{}') => ({ mode: 'raw', raw: `{"query": ${JSON.stringify(query)}, "variables": ${variables}}`, options: { raw: { language: 'json' } } });
+const GQL_JSON = { 'Content-Type': 'application/json' };
+const gqlCode = (code, i = 0) => `pm.test('extensions.code ${code}', () => pm.expect(pm.response.json().errors[${i}].extensions.code).to.eql('${code}'));`;
+const gqlNoErrors = "pm.test('no errors', () => pm.expect(pm.response.json().errors).to.eql(undefined));";
+const graphqlFolder = folder('GraphQL', [
+  req('SDL (always open)', 'GET', '/graphql/schema.graphql', { tests: [status(200), has('Query type', 'type Query {'), has('Subscription type', 'type Subscription {')] }),
+  req('Query: offset page with nested department', 'POST', '/graphql', { headers: GQL_JSON, body: gql('query($n: Int) { employees(limit: $n, sort: "id") { total items { id fullName department { name } } } }', '{"n": 3}'), tests: [status(200), ctype('application/json'), gqlNoErrors, "const d = pm.response.json().data.employees; pm.test('three items', () => pm.expect(d.items.length).to.eql(3)); pm.test('nested', () => pm.expect(d.items[0].department.name).to.be.a('string'));"] }),
+  req('Query over GET', 'GET', `/graphql?query=${encodeURIComponent('{ product(id: 1) { id sku category { name } } }')}`, { tests: [status(200), gqlNoErrors, "pm.test('product 1', () => pm.expect(pm.response.json().data.product.id).to.eql(1));"] }),
+  req('Relay connection: first page', 'POST', '/graphql', { headers: GQL_JSON, body: gql('{ productsConnection(first: 2) { totalCount pageInfo { hasNextPage endCursor } nodes { id } } }'), tests: [status(200), gqlNoErrors, "const c = pm.response.json().data.productsConnection; pm.test('ids 1,2', () => pm.expect(c.nodes.map((n) => n.id)).to.eql([1, 2])); pm.test('more pages', () => pm.expect(c.pageInfo.hasNextPage).to.eql(true)); pm.environment.set('gqlCursor', c.pageInfo.endCursor);"] }),
+  req('Relay connection: next page', 'POST', '/graphql', { headers: GQL_JSON, body: gql('query($after: String) { productsConnection(first: 2, after: $after) { nodes { id } pageInfo { hasPreviousPage } } }', '{"after": "{{gqlCursor}}"}'), tests: [status(200), gqlNoErrors, "pm.test('ids 3,4', () => pm.expect(pm.response.json().data.productsConnection.nodes.map((n) => n.id)).to.eql([3, 4]));"] }),
+  req('Filter and sort', 'POST', '/graphql', { headers: GQL_JSON, body: gql('{ employees(limit: 50, filter: [{ field: "level", value: "L3" }], sort: "-salary") { items { level salary } } }'), tests: [status(200), gqlNoErrors, "const it = pm.response.json().data.employees.items; pm.test('all L3', () => pm.expect(it.every((e) => e.level === 'L3')).to.eql(true)); pm.test('sorted', () => pm.expect(it.map((e) => e.salary)).to.eql(it.map((e) => e.salary).sort((a, b) => b - a)));"] }),
+  req('Mutation: create department', 'POST', '/graphql', { headers: GQL_JSON, body: gql('mutation($in: DepartmentInput!) { createDepartment(input: $in) { id name code } }', '{"in": {"name": "GraphQL Postman", "code": "GQL-PM"}}'), tests: [status(200), gqlNoErrors, "pm.environment.set('gqlDeptId', pm.response.json().data.createDepartment.id);"] }),
+  req('Mutation: update (merge patch)', 'POST', '/graphql', { headers: GQL_JSON, body: gql('mutation($id: Int!) { updateDepartment(id: $id, input: { name: "GraphQL Renamed" }) { name code } }', '{"id": {{gqlDeptId}}}'), tests: [status(200), gqlNoErrors, "pm.test('renamed, code kept', () => pm.expect(pm.response.json().data.updateDepartment).to.eql({ name: 'GraphQL Renamed', code: 'GQL-PM' }));"] }),
+  req('Mutation: delete', 'POST', '/graphql', { headers: GQL_JSON, body: gql('mutation($id: Int!) { deleteDepartment(id: $id) { id deleted } }', '{"id": {{gqlDeptId}}}'), tests: [status(200), gqlNoErrors, "pm.test('deleted', () => pm.expect(pm.response.json().data.deleteDepartment.deleted).to.eql(true));"] }),
+  req('Not found → field error NOT_FOUND (HTTP 200)', 'POST', '/graphql', { headers: GQL_JSON, body: gql('mutation($id: Int!) { deleteDepartment(id: $id) { deleted } }', '{"id": {{gqlDeptId}}}'), tests: [status(200), gqlCode('NOT_FOUND'), "pm.test('path', () => pm.expect(pm.response.json().errors[0].path).to.eql(['deleteDepartment']));"] }),
+  req('Validation → BAD_USER_INPUT with field errors', 'POST', '/graphql', { headers: GQL_JSON, body: gql('mutation { createDepartment(input: { name: "Bad", code: "lower case" }) { id } }'), tests: [status(200), gqlCode('BAD_USER_INPUT'), "pm.test('field errors', () => pm.expect(pm.response.json().errors[0].extensions.errors.map((e) => e.field)).to.include('code'));"] }),
+  req('Invalid query → 400 with graphql-response+json', 'POST', '/graphql', { headers: { ...GQL_JSON, Accept: 'application/graphql-response+json' }, body: gql('{ nope }'), tests: [status(400), ctype('application/graphql-response+json'), gqlCode('GRAPHQL_VALIDATION_FAILED'), "pm.test('no data entry', () => pm.expect(pm.response.json()).to.not.have.property('data'));"] }),
+  req('Injected field error → partial data', 'POST', '/graphql', { headers: { ...GQL_JSON, 'X-Force-GraphQL-Error': 'department' }, body: gql('{ employees(limit: 2) { items { id department { name } } } }'), tests: [status(200), "const b = pm.response.json(); pm.test('data kept', () => pm.expect(b.data.employees.items.length).to.eql(2)); pm.test('department nulled', () => pm.expect(b.data.employees.items[0].department).to.eql(null)); pm.test('two errors', () => pm.expect(b.errors.length).to.eql(2));"] }),
+  req('Mutation over GET → 405', 'GET', `/graphql?query=${encodeURIComponent('mutation { deleteCategory(id: 1) { deleted } }')}`, { tests: [status(405), gqlCode('METHOD_NOT_ALLOWED'), "pm.test('Allow: POST', () => pm.expect(pm.response.headers.get('Allow')).to.eql('POST'));"] }),
+  req('X-Force-Error: 503 → errors with the real status', 'POST', '/graphql', { headers: { ...GQL_JSON, 'X-Force-Error': '503' }, body: gql('{ counts { employees } }'), tests: [status(503), gqlCode('SERVICE_UNAVAILABLE')] }),
+]);
+
 const misc = folder('Headers & inspector', [
   req('Request id echo', 'GET', '/v1/employees/1', { headers: { 'X-Request-Id': 'postman-req-1', 'X-Correlation-Id': 'postman-corr-1' }, tests: [status(200), "pm.test('echoed', () => { pm.expect(pm.response.headers.get('X-Request-Id')).to.eql('postman-req-1'); pm.expect(pm.response.headers.get('X-Correlation-Id')).to.eql('postman-corr-1'); });"] }),
   req('Inspector catch-all', 'POST', '/hooks/postman?source=newman', { headers: { 'Content-Type': 'application/json' }, body: json({ event: 'order.created', id: 42 }), tests: [status(200), "pm.test('captured with actual path', () => { pm.expect(pm.response.json().status).to.eql('captured'); pm.expect(pm.response.json().path).to.eql('/hooks/postman'); });"] }),
@@ -301,7 +323,7 @@ const collection = {
     { listen: 'test', script: { type: 'text/javascript', exec: collectionTest } },
   ],
   variable: [{ key: 'cachedToken', value: '' }, { key: 'cachedTokenExp', value: '0' }],
-  item: [platform, oauth, authFolder, crud, query, pagination, chaos, files, soapFolder, sseFolder, misc],
+  item: [platform, oauth, authFolder, crud, query, pagination, chaos, files, soapFolder, sseFolder, graphqlFolder, misc],
 };
 
 const environment = {

@@ -11,7 +11,7 @@
 const express = require('express');
 const { HttpError, sendProblem } = require('../../util/problem');
 const { protocolStack } = require('../../middleware/protocol');
-const { checkUpgrade, acceptUpgrade } = require('../../util/websocket');
+const { acceptWs } = require('./accept');
 const { CHANNELS, RPC_METHODS } = require('./channels');
 const { generateAsyncApi } = require('./asyncapi');
 
@@ -22,7 +22,6 @@ function wsBase(baseUrl) {
 module.exports = function wsRouter(ctx) {
   const { settings, baseUrl } = ctx;
   const r = express.Router();
-  const hub = ctx.wsHub;
 
   r.use((req, res, next) => {
     if (!settings.get('wsEnabled')) return sendProblem(req, res, 404, { detail: 'The WebSocket mock is disabled (WS_ENABLED=false)', code: 'ws-disabled' });
@@ -38,7 +37,7 @@ module.exports = function wsRouter(ctx) {
         { name: 'changes', url: `${base}/ws/changes`, description: 'Live created/updated/deleted events; ?resource= filters.' },
       ],
       asyncapi: `${baseUrl(req)}/ws/asyncapi.json`,
-      open: hub.size,
+      open: ctx.wsHub.size,
       maxMessageKb: settings.get('wsMaxMessageKb'),
       idleTimeoutSeconds: settings.get('wsIdleTimeoutSeconds'),
       pingIntervalSeconds: settings.get('wsPingIntervalSeconds'),
@@ -54,42 +53,8 @@ module.exports = function wsRouter(ctx) {
     if (!req.ws) {
       throw new HttpError(426, `This is a WebSocket endpoint: connect to ${wsBase(baseUrl(req))}/ws/${name}`, { code: 'upgrade-required', headers: { Upgrade: 'websocket', Connection: 'Upgrade' } });
     }
-    const bad = checkUpgrade(req);
-    if (bad) throw new HttpError(bad.status, bad.message, { code: 'bad-upgrade' });
-
-    res.statusCode = 101;
-    req.ws.accepted = true;
-    const conn = acceptUpgrade(req, req.ws.socket, req.ws.head, {
-      extraHeaders: res.getHeaders(),
-      chooseProtocol: (offered) => offered[0] || null,
-      maxMessageBytes: settings.get('wsMaxMessageKb') * 1024,
-    });
+    const conn = acceptWs(ctx, req, res);
     conn.channel = name;
-    conn.on('error', () => { /* protocol errors close the connection with the right code */ });
-    hub.add(conn);
-    res.emit('finish'); // lets the inspector record the upgrade (101) now rather than when the socket closes
-
-    // Idle timeout (no messages from the client; pongs do not count) and keep-alive pings.
-    let lastMessage = Date.now();
-    let lastPing = Date.now();
-    let awaitingPong = false;
-    conn.on('message', () => { lastMessage = Date.now(); });
-    conn.on('pong', () => { awaitingPong = false; });
-    const pingEvery = settings.get('wsPingIntervalSeconds') * 1000;
-    const idle = settings.get('wsIdleTimeoutSeconds') * 1000;
-    const timer = setInterval(() => {
-      if (!conn.open) return;
-      const now = Date.now();
-      if (idle && now - lastMessage >= idle) { conn.close(1001, `Idle for ${idle / 1000}s`); return; }
-      if (pingEvery && now - lastPing >= pingEvery) {
-        if (awaitingPong) { conn.terminate(); return; }
-        awaitingPong = true;
-        lastPing = now;
-        conn.ping('keepalive');
-      }
-    }, Math.max(500, Math.min(pingEvery || 30000, idle || 30000) / 2));
-    timer.unref();
-    conn.on('close', () => { clearInterval(timer); hub.delete(conn); });
 
     handler(conn, req, ctx);
   });

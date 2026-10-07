@@ -56,6 +56,18 @@ test('SOAP requests carry credentials; the WSDL and service list do not', () => 
   assert.match(g['protocols.soap'].curls.find(([l]) => /GetEmployee/.test(l))[1], /-u 'demo:demo'[\s\S]*SOAPAction/);
 });
 
+test('SSE and GraphQL requests carry credentials; the stream list and the SDL do not', () => {
+  const C = makeCurl({ ...BASE_CTX, mode: 'bearer' });
+  assert.match(C.curl('GET', '/sse/changes', { extra: ['-N'] }), /Authorization: Bearer demo-token/);
+  assert.match(C.curl('POST', '/graphql', { json: { query: '{ counts { employees } }' } }), /Authorization: Bearer demo-token/);
+  assert.match(C.curl('GET', '/graphql?query=%7B%7D'), /Authorization: Bearer demo-token/);
+  assert.doesNotMatch(C.curl('GET', '/sse'), /Authorization/);
+  assert.doesNotMatch(C.curl('GET', '/graphql/schema.graphql'), /Authorization/);
+  const g = build(makeCurl({ ...BASE_CTX, mode: 'none' }), {});
+  for (const id of ['protocols.graphql', 'protocols.graphql-settings', 'protocols.graphql-try']) assert.ok(g[id], `guide ${id}`);
+  assert.match(g['protocols.graphql'].curls.find(([l]) => /Subscribe/.test(l))[1], /protocols:\["graphql-transport-ws"\]/);
+});
+
 test('required request headers are added to /v1 calls only', () => {
   const C = makeCurl({ ...BASE_CTX, mode: 'none', required: [{ name: 'X-Tenant' }, { name: 'X-Env', value: 'demo' }] });
   const cmd = C.curl('GET', '/v1/products');
