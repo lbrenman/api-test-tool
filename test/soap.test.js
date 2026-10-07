@@ -6,7 +6,7 @@ const assert = require('node:assert/strict');
 const crypto = require('node:crypto');
 const request = require('supertest');
 const { makeApp } = require('./helpers');
-const { parseXml, child, elements, textOf, NS } = require('../src/protocols/soap/xml');
+const { parseXml, child, elements, textOf, NS } = require('../src/util/xml');
 const { passwordDigest, TYPE_DIGEST } = require('../src/protocols/soap/wsse');
 
 const EMP_NS = 'urn:api-test-tool:soap:EmployeeService';

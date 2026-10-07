@@ -4,7 +4,7 @@
 //   - JSON document -> XML (responses)
 //   - XML -> JSON input (Create/Update requests), which then goes through the same validation as /v1
 //
-// Field: { name, type, nillable?, ro?, list?, item?, fields?, enum?, out? }
+// Field: { name, type, nillable?, ro?, list?, item?, fields?, enum?, pattern?, out? }
 //   type: string | int | decimal | double | boolean | date | dateTime | complex
 //   list: true  -> wrapper element <name> containing repeated <item> elements
 //   ro:   true  -> output only (ignored / rejected on input)
@@ -12,13 +12,13 @@
 // Timestamps are always xsd:dateTime in UTC here: DATE_FORMAT only applies to the JSON /v1 API.
 const { HttpError } = require('../../util/problem');
 const { INPUT, LEVELS, PHONE_TYPES, CURRENCIES, DIM_UNITS, SIZES } = require('../../services/schemas');
-const { escapeXml, elements, textOf, isNil } = require('./xml');
+const { escapeXml, elements, textOf, isNil } = require('../../util/xml');
 
 const money = (decimalField, numberField) => (d) => d[decimalField] ?? (d[numberField] == null ? undefined : Number(d[numberField]).toFixed(2));
 
 const ADDRESS = [
   { name: 'street', type: 'string' }, { name: 'city', type: 'string' }, { name: 'region', type: 'string' },
-  { name: 'postalCode', type: 'string' }, { name: 'countryCode', type: 'string' },
+  { name: 'postalCode', type: 'string' }, { name: 'countryCode', type: 'string', pattern: '[A-Z]{2}' },
   { name: 'geo', type: 'complex', typeName: 'GeoPoint', fields: [{ name: 'lat', type: 'double' }, { name: 'lng', type: 'double' }] },
 ];
 
@@ -31,7 +31,7 @@ const ENTITIES = {
     fields: [
       { name: 'id', type: 'int', ro: true },
       { name: 'uuid', type: 'string', ro: true },
-      { name: 'employeeNumber', type: 'string' },
+      { name: 'employeeNumber', type: 'string', pattern: 'EMP-[0-9]{6}' },
       { name: 'firstName', type: 'string' },
       { name: 'lastName', type: 'string' },
       { name: 'email', type: 'string' },
@@ -64,7 +64,7 @@ const ENTITIES = {
     fields: [
       { name: 'id', type: 'int', ro: true },
       { name: 'uuid', type: 'string', ro: true },
-      { name: 'sku', type: 'string' },
+      { name: 'sku', type: 'string', pattern: '[A-Z0-9\\-]{3,40}' },
       { name: 'name', type: 'string' },
       { name: 'description', type: 'string' },
       { name: 'price', type: 'decimal', out: money('priceDecimal', 'price') },
@@ -94,7 +94,7 @@ const ENTITIES = {
     resource: 'departments',
     element: 'department',
     fields: [
-      { name: 'id', type: 'int', ro: true }, { name: 'name', type: 'string' }, { name: 'code', type: 'string' },
+      { name: 'id', type: 'int', ro: true }, { name: 'name', type: 'string' }, { name: 'code', type: 'string', pattern: '[A-Z0-9\\-]{2,16}' },
       { name: 'createdAt', type: 'dateTime', ro: true }, { name: 'updatedAt', type: 'dateTime', ro: true },
     ],
   },
@@ -102,7 +102,7 @@ const ENTITIES = {
     resource: 'categories',
     element: 'category',
     fields: [
-      { name: 'id', type: 'int', ro: true }, { name: 'name', type: 'string' }, { name: 'code', type: 'string' },
+      { name: 'id', type: 'int', ro: true }, { name: 'name', type: 'string' }, { name: 'code', type: 'string', pattern: '[A-Z0-9\\-]{2,16}' },
       { name: 'createdAt', type: 'dateTime', ro: true }, { name: 'updatedAt', type: 'dateTime', ro: true },
     ],
   },
@@ -224,6 +224,10 @@ function xsdElement(f, mode, required, ind) {
     return `${ind}<xsd:element name="${f.name}" minOccurs="${min}"${nil}>\n`
       + `${ind}  <xsd:complexType><xsd:sequence><xsd:element name="${f.item}" type="${itemType}" minOccurs="0" maxOccurs="unbounded"/></xsd:sequence></xsd:complexType>\n`
       + `${ind}</xsd:element>`;
+  }
+  if (f.pattern && !f.enum) {
+    // XSD patterns are implicitly anchored.
+    return `${ind}<xsd:element name="${f.name}" minOccurs="${min}"${nil}><xsd:simpleType><xsd:restriction base="${XSD_TYPE[f.type]}"><xsd:pattern value="${escapeXml(f.pattern)}"/></xsd:restriction></xsd:simpleType></xsd:element>`;
   }
   const t = f.type === 'complex' ? `tns:${f.typeName}` : base(f.type);
   return `${ind}<xsd:element name="${f.name}" type="${t}" minOccurs="${min}"${nil}/>`;

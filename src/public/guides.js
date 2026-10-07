@@ -584,9 +584,10 @@
       // ------------------------------------------------------------ tester (spec list)
       'tester.add': {
         title: 'Add a spec',
-        purpose: 'Load the OpenAPI document your implementation is supposed to follow. OpenAPI 3.0, 3.1 and Swagger 2.0 (converted) are supported.',
+        purpose: 'Load the contract your implementation is supposed to follow: OpenAPI 3.0, 3.1 or Swagger 2.0 (converted) for REST, or a WSDL 1.1 for SOAP. The kind is detected from the content.',
         steps: [
-          'Upload a file, load it from a URL, or paste YAML/JSON.',
+          'Upload a file, load it from a URL, or paste YAML/JSON (OpenAPI) or XML (WSDL).',
+          'For a WSDL with imported schemas, load it by URL (e.g. `https://host/Service?wsdl`) so relative imports resolve.',
           'The spec is dereferenced, linted and saved. You land on its Target tab.',
           'Set the base URL and auth for your implementation there, then use Try it or Run all.',
           ...pw,
@@ -594,20 +595,23 @@
         curls: [
           ['Load a spec from a URL', admin('POST', '/tester/specs', { json: { name: 'my-api', url: 'https://example.com/openapi.yaml' } })],
           ['Upload a local file (needs jq)', `jq -Rs '{name: "my-api", content: .}' ./openapi.yaml | ${admin('POST', '/tester/specs', { extra: ["-H 'Content-Type: application/json'", '--data-binary @-'] })}`],
+          ['Load a WSDL from a URL', admin('POST', '/tester/specs', { json: { name: 'my-soap-service', url: 'https://example.com/OrderService?wsdl' } })],
         ],
       },
       'tester.samples': {
         title: 'Bundled samples',
-        purpose: 'Example specs to learn the tester with — including this tool\'s own live spec, which you can test against this server.',
+        purpose: 'Example specs to learn the tester with — including this tool\'s own live OpenAPI spec and SOAP WSDL, which you can test against this server.',
         steps: [
           'Press Load on a sample.',
-          'For "This tool", set the target to "use this tool" and run all operations against the mock API.',
+          'For "This tool (live /openapi.json)", the target is already this server: run all operations against the mock API.',
+          'For "This tool (live SOAP WSDL)", the endpoint is this server\'s /soap/EmployeeService: try the WSDL tester end to end.',
           'The Supplier Order sample has a deliberate allOf problem: see it on the Spec lint tab.',
           ...pw,
         ],
         curls: [
           ['Load the Supplier Order sample', admin('POST', '/tester/specs', { json: { sample: 'Supplier_Order_Collaboration_OpenAPI_3_1.yaml' } })],
           ['Load this tool\'s own spec', admin('POST', '/tester/specs', { json: { sample: 'self' } })],
+          ['Load this tool\'s own SOAP WSDL', admin('POST', '/tester/specs', { json: { sample: 'self-soap' } })],
         ],
       },
       'tester.specs': {
@@ -626,10 +630,10 @@
       // ------------------------------------------------------------ tester (one spec)
       'tester.target': {
         title: 'Target',
-        purpose: 'Where and how the tester calls your implementation. Spec servers and token URLs are often placeholders, so set the real ones here.',
+        purpose: 'Where and how the tester calls your implementation. Spec servers, WSDL addresses and token URLs are often placeholders, so set the real ones here.',
         steps: [
-          'Set the base URL of your implementation (or "use this tool" to call the mock API).',
-          'Choose an auth profile that matches the spec\'s security schemes: API key, OAuth2 client credentials (with your token URL), Basic or Bearer. "Test token request" shows the full exchange.',
+          'OpenAPI: set the base URL of your implementation (or "use this tool" to call the mock API). WSDL: set the endpoint URL every operation is posted to, and the SOAP version (Auto uses SOAP 1.1 when the WSDL has it).',
+          'Choose an auth profile that matches the spec\'s security schemes: API key, OAuth2 client credentials (with your token URL), Basic or Bearer. "Test token request" shows the full exchange. For SOAP there is also WS-Security UsernameToken (text or digest password), added to every envelope.',
           'Add default headers sent on every call; `{{uuid}}` and `{{now}}` are expanded.',
           'Tick "Lenient allOf" only if the spec combines allOf with additionalProperties: false. Save target.',
           ...pw,
@@ -637,6 +641,7 @@
         curls: [
           ['Set the target with an API key', admin('PUT', `/tester/specs/${specId}`, { json: { target: { baseUrl: 'https://my-api.example.com/v1', auth: { type: 'apikey', name: 'X-API-Key', in: 'header', value: 'MY_KEY' }, headers: {}, timeoutMs: 30000 } } })],
           ['Set the target with OAuth2 client credentials', admin('PUT', `/tester/specs/${specId}`, { json: { target: { baseUrl: 'https://my-api.example.com/v1', auth: { type: 'oauth2cc', tokenUrl: 'https://idp.example.com/oauth2/token', clientId: 'CLIENT_ID', clientSecret: 'CLIENT_SECRET', scopes: 'read write', clientAuth: 'basic' }, headers: {}, timeoutMs: 30000 } } })],
+          ['SOAP: endpoint, SOAP 1.2 and WS-Security', admin('PUT', `/tester/specs/${specId}`, { json: { target: { baseUrl: 'https://my-soap.example.com/services/OrderService', soapVersion: '1.2', auth: { type: 'wsse', username: 'USER', password: 'PASSWORD', passwordType: 'digest' } } } })],
         ],
       },
       'tester.mock': {
@@ -687,7 +692,7 @@
         steps: [
           'Order: collection POSTs → collection GETs → item operations → DELETEs. Ids are taken from Location headers and response bodies.',
           'Add variables (JSON) to supply ids the run cannot discover, e.g. `{"purchaseOrderId":"PO-4500123456"}`.',
-          'Tick "Negative tests" to also check 401 without auth, 400/422 for invalid bodies and 404 for unknown ids.',
+          'Tick "Negative tests" to also check 401 without auth, 400/422 for invalid bodies and 404 for unknown ids. For WSDL contracts: no credentials, a missing required element, an unknown id and malformed XML must each be rejected with the right SOAP fault.',
           'Open the HTML report or export JSON to share the result. Automate it from CI with the commands below.',
           ...pw,
         ],

@@ -168,14 +168,14 @@ async function generateAdminOpenApi(ctx, req) {
   const specId = pathParam('id', 'Spec id', 'spec_0123456789ab');
   const runId = pathParam('runId', 'Run id', 'run_0123456789ab');
   add(`${T}/samples`, 'get', op('Tester', 'listTesterSamples', 'Bundled specs that can be loaded by name', {
-    responses: { ...ok('Samples', { type: 'array', items: obj({ id: { type: 'string' }, name: { type: 'string' }, file: { type: 'string' }, url: { type: 'string' } }) }), ...AUTHED },
+    responses: { ...ok('Samples', { type: 'array', items: obj({ id: { type: 'string' }, name: { type: 'string' }, file: { type: 'string' }, url: { type: 'string' }, kind: { type: 'string', enum: ['openapi', 'wsdl'] } }) }), ...AUTHED },
   }));
   add(`${T}/specs`, 'get', op('Tester', 'listSpecs', 'Loaded specs', { responses: { ...ok('Specs', { type: 'array', items: S('SpecSummary') }), ...AUTHED } }));
-  add(`${T}/specs`, 'post', op('Tester', 'loadSpec', 'Load a spec (OpenAPI 3.0/3.1 or Swagger 2.0) from pasted content, a URL, a bundled sample or a file upload', {
+  add(`${T}/specs`, 'post', op('Tester', 'loadSpec', 'Load a contract (OpenAPI 3.0/3.1, Swagger 2.0, or WSDL 1.1 for SOAP) from pasted content, a URL, a bundled sample or a file upload. The kind is detected from the content.', {
     requestBody: {
       required: true,
       content: {
-        ...json(obj({ name: { type: 'string' }, content: { type: 'string', description: 'YAML or JSON text' }, url: { type: 'string', format: 'uri' }, sample: { type: 'string', description: 'Sample id from /tester/samples' } }), { name: 'supplier', sample: 'Supplier_Order_Collaboration_OpenAPI_3_1.yaml' }),
+        ...json(obj({ name: { type: 'string' }, content: { type: 'string', description: 'OpenAPI YAML/JSON text or WSDL XML' }, url: { type: 'string', format: 'uri' }, sample: { type: 'string', description: 'Sample id from /tester/samples' } }), { name: 'supplier', sample: 'Supplier_Order_Collaboration_OpenAPI_3_1.yaml' }),
         'multipart/form-data': { schema: obj({ name: { type: 'string' }, file: { type: 'string', format: 'binary' } }) },
       },
     },
@@ -188,12 +188,12 @@ async function generateAdminOpenApi(ctx, req) {
     responses: { ...ok('Updated', anyObj()), ...AUTHED, ...NF },
   }));
   add(`${T}/specs/{id}`, 'delete', op('Tester', 'deleteSpec', 'Delete a spec', { parameters: [specId], responses: { ...noContent('Deleted'), ...AUTHED, ...NF } }));
-  add(`${T}/specs/{id}/document`, 'get', op('Tester', 'getSpecDocument', 'The dereferenced OpenAPI document', { parameters: [specId], responses: { ...ok('Document', anyObj()), ...AUTHED, ...NF } }));
+  add(`${T}/specs/{id}/document`, 'get', op('Tester', 'getSpecDocument', 'The contract: the bundled OpenAPI document (JSON) or the original WSDL (XML)', { parameters: [specId], responses: { 200: { description: 'Document', content: { 'application/json': { schema: anyObj() }, 'text/xml': { schema: { type: 'string' } } } }, ...AUTHED, ...NF } }));
   add(`${T}/specs/{id}/reload`, 'post', op('Tester', 'reloadSpec', 'Reload a spec from its original source (URL or sample)', { parameters: [specId], responses: { ...ok('Reloaded', anyObj()), ...AUTHED, ...NF } }));
   add(`${T}/specs/{id}/lint`, 'get', op('Tester', 'lintSpec', 'Spec lint findings (e.g. allOf + additionalProperties:false)', { parameters: [specId], responses: { ...ok('Lint', anyObj('counts and findings with JSON pointers')), ...AUTHED, ...NF } }));
   add(`${T}/specs/{id}/operations`, 'get', op('Tester', 'listSpecOperations', 'Operations in a spec', { parameters: [specId], responses: { ...ok('Operations', { type: 'array', items: anyObj() }), ...AUTHED, ...NF } }));
   add(`${T}/specs/{id}/request`, 'get', op('Tester', 'getSampleRequest', 'Generated sample request for one operation', {
-    parameters: [specId, { name: 'op', in: 'query', required: true, schema: { type: 'string' } }, { name: 'example', in: 'query', description: 'Named example to use', schema: { type: 'string' } }],
+    parameters: [specId, { name: 'op', in: 'query', required: true, schema: { type: 'string' } }, { name: 'example', in: 'query', description: 'Named example to use (OpenAPI)', schema: { type: 'string' } }, { name: 'version', in: 'query', description: 'SOAP version for WSDL contracts', schema: { type: 'string', enum: ['1.1', '1.2'] } }],
     responses: { ...ok('Request', anyObj('path, query, headers and body')), ...BAD, ...AUTHED, ...NF },
   }));
   add(`${T}/specs/{id}/send`, 'post', op('Tester', 'sendOperation', 'Call one operation on the target and validate the response ("try it")', {
@@ -295,7 +295,7 @@ async function generateAdminOpenApi(ctx, req) {
       { name: 'Files', description: 'Manage the shared file pool' },
       { name: 'Auth', description: '/v1 auth configuration and OAuth clients' },
       { name: 'Inspector', description: 'Captured requests (webhook-style catch-all)' },
-      { name: 'Tester', description: 'Contract tester for APIs you implemented' },
+      { name: 'Tester', description: 'Contract tester for APIs you implemented (OpenAPI and WSDL/SOAP)' },
       { name: 'App', description: 'Backend for the back-office app at /app (bypasses /v1 auth, chaos and rate limits)' },
     ],
     paths,
@@ -328,11 +328,12 @@ async function generateAdminOpenApi(ctx, req) {
         OAuthClient: obj({ clientId: { type: 'string' }, secret: { type: 'string' }, scopes: {}, redirectUris: { type: 'array', items: { type: 'string' } }, source: { type: 'string' } }, ['clientId'], { additionalProperties: true }),
         Capture: anyObj('Captured request: id, timestamp, method, url, path, query, headers, detected auth, client IP, body, size, duration and the response returned'),
         Target: obj({
-          baseUrl: { type: 'string' }, headers: { type: 'object', additionalProperties: { type: 'string' } }, timeoutMs: { type: 'integer' },
-          auth: obj({ type: { type: 'string', enum: ['none', 'apikey', 'basic', 'bearer', 'oauth2cc'] } }, ['type'], { additionalProperties: true }),
+          baseUrl: { type: 'string', description: 'Base URL (OpenAPI) or endpoint URL (WSDL)' }, headers: { type: 'object', additionalProperties: { type: 'string' } }, timeoutMs: { type: 'integer' },
+          soapVersion: { type: 'string', enum: ['auto', '1.1', '1.2'], description: 'WSDL contracts only' },
+          auth: obj({ type: { type: 'string', enum: ['none', 'apikey', 'basic', 'bearer', 'oauth2cc', 'wsse'] } }, ['type'], { additionalProperties: true }),
         }),
         SpecSummary: obj({
-          id: { type: 'string' }, name: { type: 'string' }, title: { type: 'string' }, apiVersion: { type: 'string' }, version: { type: 'string' }, originalVersion: { type: 'string' },
+          id: { type: 'string' }, kind: { type: 'string', enum: ['openapi', 'wsdl'] }, name: { type: 'string' }, title: { type: 'string' }, apiVersion: { type: 'string' }, version: { type: 'string' }, originalVersion: { type: 'string' },
           converted: { type: 'boolean' }, source: anyObj(), operations: { type: 'integer' }, baseUrl: { type: 'string' }, updatedAt: { type: 'string' }, lastRun: { type: ['object', 'null'] },
         }, ['id', 'name']),
         RunSummary: obj({ id: { type: 'string' }, specId: { type: 'string' }, specName: { type: 'string' }, startedAt: { type: 'string' }, durationMs: { type: 'integer' }, summary: anyObj(), options: anyObj(), baseUrl: { type: 'string' } }, ['id', 'specId']),

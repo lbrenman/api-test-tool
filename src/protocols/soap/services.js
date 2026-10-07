@@ -4,7 +4,7 @@
 const { HttpError } = require('../../util/problem');
 const { applyQuery } = require('../../services/query');
 const { ENTITIES, entityXml, entityFromXml, scalarIn } = require('./model');
-const { elements } = require('./xml');
+const { elements } = require('../../util/xml');
 
 const NS_BASE = 'urn:api-test-tool:soap:';
 const MAX_PAGE_SIZE = 200;

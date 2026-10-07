@@ -34,17 +34,22 @@ module.exports = function testerRouter(ctx) {
   r.post('/specs', async (req, res) => {
     let body = req.body || {};
     if (/multipart\/form-data/i.test(req.get('content-type') || '')) body = await readUpload(req);
-    if (!body.content && !body.url && !body.sample) throw new HttpError(400, 'Provide content (pasted/uploaded YAML or JSON), url, or sample');
-    const spec = await tester.create({ name: body.name || (body.filename ? body.filename.replace(/\.(ya?ml|json)$/i, '') : undefined), content: body.content, url: body.url, sample: body.sample, source: body.filename ? { type: 'upload', filename: body.filename } : undefined }, req);
-    res.status(201).json({ id: spec.id, name: spec.name, version: spec.version, originalVersion: spec.originalVersion, notes: spec.notes, lint: tester.lint(spec).counts });
+    if (!body.content && !body.url && !body.sample) throw new HttpError(400, 'Provide content (pasted/uploaded OpenAPI YAML/JSON or WSDL XML), url, or sample');
+    const spec = await tester.create({ name: body.name || (body.filename ? body.filename.replace(/\.(ya?ml|json|wsdl|xml)$/i, '') : undefined), content: body.content, url: body.url, sample: body.sample, source: body.filename ? { type: 'upload', filename: body.filename } : undefined }, req);
+    res.status(201).json({ id: spec.id, kind: spec.kind, name: spec.name, version: spec.version, originalVersion: spec.originalVersion, notes: spec.notes, lint: tester.lint(spec).counts });
   });
 
   r.get('/specs/:id', async (req, res) => {
     const s = await tester.get(req.params.id);
-    res.json({ ...s, operations: tester.operations(s), profiles: tester.profiles(s), lint: tester.lint(s).counts });
+    const { raw, ...rest } = s; // the raw WSDL is served by /document
+    res.json({ ...rest, operations: tester.operations(s), profiles: tester.profiles(s), lint: tester.lint(s).counts });
   });
 
-  r.get('/specs/:id/document', async (req, res) => res.json((await tester.get(req.params.id)).doc));
+  // The contract itself: OpenAPI as JSON, WSDL as the original XML.
+  r.get('/specs/:id/document', async (req, res) => {
+    const d = tester.document(await tester.get(req.params.id));
+    res.type(d.contentType).send(d.body);
+  });
 
   r.put('/specs/:id', async (req, res) => {
     const s = await tester.update(req.params.id, req.body || {});
@@ -65,7 +70,7 @@ module.exports = function testerRouter(ctx) {
   r.get('/specs/:id/request', async (req, res) => {
     const s = await tester.get(req.params.id);
     if (!req.query.op) throw new HttpError(400, 'op query parameter required');
-    res.json(tester.defaultRequest(s, String(req.query.op), req.query.example ? String(req.query.example) : undefined));
+    res.json(tester.defaultRequest(s, String(req.query.op), req.query.example ? String(req.query.example) : undefined, { version: req.query.version ? String(req.query.version) : undefined }));
   });
 
   r.post('/specs/:id/send', async (req, res) => {

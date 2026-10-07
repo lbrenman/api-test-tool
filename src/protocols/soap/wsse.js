@@ -9,7 +9,7 @@
 const crypto = require('node:crypto');
 const { HttpError } = require('../../util/problem');
 const { safeEq } = require('../../services/oauth');
-const { NS, child, attr, textOf } = require('./xml');
+const { NS, child, attr, textOf } = require('../../util/xml');
 
 const TYPE_TEXT = 'http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-username-token-profile-1.0#PasswordText';
 const TYPE_DIGEST = 'http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-username-token-profile-1.0#PasswordDigest';

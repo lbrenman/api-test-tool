@@ -1,10 +1,12 @@
 'use strict';
 // Standalone HTML report for a contract run.
+const { prettyXml } = require('../../util/xml');
 
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
 function pretty(text) {
   if (text === null || text === undefined) return '';
+  if (typeof text === 'string' && /^\s*</.test(text)) return prettyXml(text.trim());
   try { return JSON.stringify(JSON.parse(text), null, 2); } catch { return String(text); }
 }
 

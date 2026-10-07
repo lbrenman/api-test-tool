@@ -2,7 +2,7 @@
 // WSDL 1.1 for a SOAP service: document/literal wrapped, one SOAP 1.1 and one SOAP 1.2 binding/port
 // on the same address. Generated per request so the address follows the resolved base URL.
 const { entityXsd } = require('./model');
-const { escapeXml, NS } = require('./xml');
+const { escapeXml, NS } = require('../../util/xml');
 
 function opElements(op, ind) {
   const seq = (items) => items.map((p) => {

@@ -10,7 +10,7 @@
 //     not found, WS-Security, …): SOAP rules apply. SOAP 1.1 faults use HTTP 500; SOAP 1.2 Sender
 //     faults use 400 and Receiver faults 500.
 const { registerErrorRenderer } = require('../../util/problem');
-const { NS, escapeXml } = require('./xml');
+const { NS, escapeXml } = require('../../util/xml');
 
 const CONTENT_TYPE = { '1.1': 'text/xml; charset=utf-8', '1.2': 'application/soap+xml; charset=utf-8' };
 

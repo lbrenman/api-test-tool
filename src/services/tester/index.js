@@ -1,19 +1,20 @@
 'use strict';
-// Tester service: persisted specs + runs, validator cache, glue around load/lint/sample/run/mock.
+// Tester service (the shared core): persisted contracts ("specs") and runs, lint cache, target and
+// auth handling, run history. Everything that depends on the contract language lives in an adapter:
+//   adapters/openapi.js  OpenAPI 3.0 / 3.1 and Swagger 2.0 (REST)
+//   adapters/wsdl/       WSDL 1.1 (SOAP 1.1 / 1.2)
+// A spec's adapter is chosen by spec.kind (older records without a kind are OpenAPI).
 const crypto = require('node:crypto');
 const fs = require('node:fs/promises');
 const path = require('node:path');
-const { loadSpec } = require('./load');
-const { lintSpec } = require('./lint');
-const { SpecValidator } = require('./validate');
-const { listOperations } = require('./operations');
-const { defaultRequest, execute, validateResponse, runAll, summarize, serverUrl } = require('./runner');
-const { profilesFromSpec, mask } = require('./auth');
-const { installMock, removeMock, slugify } = require('./mock');
+const { mask } = require('./auth');
 const { HttpError } = require('../../util/problem');
+const { OpenApiAdapter } = require('./adapters/openapi');
+const { WsdlAdapter } = require('./adapters/wsdl');
 
 const SAMPLES_DIR = path.resolve(__dirname, '../../../samples');
 const MAX_STEP_BODY = 64 * 1024;
+const SAMPLE_FILES = /\.(ya?ml|json|wsdl)$/i;
 
 function maskAuth(auth) {
   if (!auth) return auth;
@@ -33,47 +34,89 @@ function trimStep(step) {
   return s;
 }
 
+async function fetchContract(url) {
+  let u;
+  try { u = new URL(url); } catch { throw new HttpError(422, 'Invalid spec URL', { code: 'spec-load-failed' }); }
+  if (!/^https?:$/.test(u.protocol)) throw new HttpError(422, 'Spec URL must be http(s)', { code: 'spec-load-failed' });
+  let res;
+  try {
+    res = await fetch(u, { headers: { Accept: 'application/yaml, application/json;q=0.9, text/xml;q=0.9, application/wsdl+xml;q=0.9, */*;q=0.5' }, signal: AbortSignal.timeout(20000) });
+  } catch (e) {
+    throw new HttpError(422, `Fetching spec failed: ${e.cause?.message || e.message}`, { code: 'spec-load-failed' });
+  }
+  if (!res.ok) throw new HttpError(422, `Fetching spec failed: HTTP ${res.status}`, { code: 'spec-load-failed' });
+  return res.text();
+}
+
 class TesterService {
   constructor(ctx) {
     this.ctx = ctx;
-    this.validators = new Map();
+    this.adapters = { openapi: new OpenApiAdapter(ctx), wsdl: new WsdlAdapter(ctx) };
     this.lints = new Map();
   }
 
+  adapter(spec) {
+    const a = this.adapters[spec?.kind || 'openapi'];
+    if (!a) throw new HttpError(500, `No tester adapter for contract kind "${spec.kind}"`);
+    return a;
+  }
+
+  detect(text, url) {
+    if (url && /([?&]wsdl\b|\.wsdl$)/i.test(url)) return 'wsdl';
+    return this.adapters.wsdl.detect(text) ? 'wsdl' : 'openapi';
+  }
+
   async samples() {
-    const files = (await fs.readdir(SAMPLES_DIR).catch(() => [])).filter((f) => /\.(ya?ml|json)$/i.test(f))
-      .sort((a, b) => Number(/swagger_?2/i.test(a)) - Number(/swagger_?2/i.test(b)) || a.localeCompare(b));
+    const files = (await fs.readdir(SAMPLES_DIR).catch(() => [])).filter((f) => SAMPLE_FILES.test(f))
+      .sort((a, b) => Number(/\.wsdl$/i.test(a)) - Number(/\.wsdl$/i.test(b)) || Number(/swagger_?2/i.test(a)) - Number(/swagger_?2/i.test(b)) || a.localeCompare(b));
     return [
-      ...files.map((f) => ({ id: f, name: f.replace(/[_-]/g, ' ').replace(/\.(ya?ml|json)$/i, ''), file: f, url: `/samples/${f}` })),
-      { id: 'self', name: 'This tool (live /openapi.json)', url: '/openapi.json' },
+      ...files.map((f) => ({ id: f, name: f.replace(/[_-]/g, ' ').replace(SAMPLE_FILES, ''), file: f, url: `/samples/${f}`, kind: /\.wsdl$/i.test(f) ? 'wsdl' : 'openapi' })),
+      { id: 'self', name: 'This tool (live /openapi.json)', url: '/openapi.json', kind: 'openapi' },
+      { id: 'self-soap', name: 'This tool (live SOAP WSDL: EmployeeService)', url: '/soap/EmployeeService?wsdl', kind: 'wsdl' },
     ];
+  }
+
+  async sampleContent(sample, req) {
+    if (sample === 'self') {
+      const { generateOpenApi } = require('../openapiGen');
+      return { text: JSON.stringify(await generateOpenApi(this.ctx, req)), kind: 'openapi', target: { baseUrl: this.ctx.baseUrl(req) } };
+    }
+    if (sample === 'self-soap') {
+      const { SERVICES } = require('../../protocols/soap/services');
+      const { generateWsdl } = require('../../protocols/soap/wsdl');
+      const endpoint = `${this.ctx.baseUrl(req)}/soap/EmployeeService`;
+      return { text: generateWsdl(SERVICES.EmployeeService, endpoint), kind: 'wsdl', target: { baseUrl: endpoint } };
+    }
+    const file = path.join(SAMPLES_DIR, path.basename(sample));
+    const text = await fs.readFile(file, 'utf8').catch(() => { throw new HttpError(404, `Unknown sample ${sample}`); });
+    return { text, kind: this.detect(text, file) };
   }
 
   async create({ name, content, url, sample, source }, req) {
     let src = source || (url ? { type: 'url', url } : { type: 'paste' });
     let text = content;
+    let kind;
+    let targetOverride = null;
     if (sample) {
-      if (sample === 'self') {
-        const { generateOpenApi } = require('../openapiGen');
-        text = JSON.stringify(await generateOpenApi(this.ctx, req));
-        src = { type: 'sample', sample: 'self' };
-      } else {
-        const file = path.join(SAMPLES_DIR, path.basename(sample));
-        text = await fs.readFile(file, 'utf8').catch(() => { throw new HttpError(404, `Unknown sample ${sample}`); });
-        src = { type: 'sample', sample: path.basename(sample) };
-      }
+      const s = await this.sampleContent(sample, req);
+      ({ text, kind } = s);
+      targetOverride = s.target || null;
+      src = { type: 'sample', sample: sample === 'self' || sample === 'self-soap' ? sample : path.basename(sample) };
+    } else if (!text && url) {
+      text = await fetchContract(url);
     }
+    kind = kind || this.detect(text, url);
     let loaded;
     try {
-      loaded = await loadSpec({ content: text, url: text ? undefined : url });
+      loaded = await this.adapters[kind].load({ content: text, url: src.type === 'url' ? url : undefined });
     } catch (e) {
       throw new HttpError(e.status || 422, e.message, { code: 'spec-load-failed' });
     }
     const now = new Date().toISOString();
     const id = `spec_${crypto.randomBytes(6).toString('hex')}`;
-    const isSelf = src.sample === 'self';
     const spec = {
       id,
+      kind,
       name: name || loaded.title,
       title: loaded.title,
       apiVersion: loaded.apiVersion,
@@ -84,13 +127,15 @@ class TesterService {
       structural: loaded.structural,
       source: src,
       doc: loaded.doc,
+      ...(loaded.raw !== undefined ? { raw: loaded.raw } : {}),
       target: {
-        baseUrl: isSelf ? this.ctx.baseUrl(req) : serverUrl(loaded.doc),
         auth: { type: 'none' },
         headers: {},
         timeoutMs: 30000,
+        ...loaded.defaultTarget,
+        ...(targetOverride || {}),
       },
-      options: { lenientAllOf: false },
+      options: loaded.options || {},
       createdAt: now,
       updatedAt: now,
     };
@@ -100,8 +145,8 @@ class TesterService {
 
   async list() {
     return (await this.ctx.repo.list('tester_specs')).map((s) => ({
-      id: s.id, name: s.name, title: s.title, apiVersion: s.apiVersion, version: s.version, originalVersion: s.originalVersion,
-      converted: s.converted, source: s.source, operations: listOperations(s.doc).length, baseUrl: s.target?.baseUrl, updatedAt: s.updatedAt,
+      id: s.id, kind: s.kind || 'openapi', name: s.name, title: s.title, apiVersion: s.apiVersion, version: s.version, originalVersion: s.originalVersion,
+      converted: s.converted, source: s.source, operations: this.adapter(s).operationCount(s), baseUrl: s.target?.baseUrl, updatedAt: s.updatedAt,
       lastRun: s.lastRun || null,
     })).sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1));
   }
@@ -109,6 +154,7 @@ class TesterService {
   async get(id) {
     const s = await this.ctx.repo.get('tester_specs', id);
     if (!s) throw new HttpError(404, `Spec ${id} not found`);
+    if (!s.kind) s.kind = 'openapi';
     return s;
   }
 
@@ -118,8 +164,9 @@ class TesterService {
     if (patch.target) s.target = { ...s.target, ...patch.target };
     if (patch.options) s.options = { ...s.options, ...patch.options };
     if (patch.content) {
-      const loaded = await loadSpec({ content: patch.content }).catch((e) => { throw new HttpError(422, e.message); });
+      const loaded = await this.adapter(s).load({ content: patch.content, url: patch.url }).catch((e) => { throw new HttpError(422, e.message); });
       Object.assign(s, { doc: loaded.doc, version: loaded.version, originalVersion: loaded.originalVersion, converted: loaded.converted, notes: loaded.notes, structural: loaded.structural, title: loaded.title, apiVersion: loaded.apiVersion });
+      if (loaded.raw !== undefined) s.raw = loaded.raw;
     }
     s.updatedAt = new Date().toISOString();
     await this.ctx.repo.put('tester_specs', id, s);
@@ -129,15 +176,17 @@ class TesterService {
 
   async reload(id, req) {
     const s = await this.get(id);
-    let text;
-    if (s.source?.type === 'url') text = undefined;
-    else if (s.source?.type === 'sample') {
-      const fresh = await this.create({ sample: s.source.sample }, req);
-      await this.ctx.repo.del('tester_specs', fresh.id);
-      return this.update(id, { content: JSON.stringify(fresh.doc) });
-    } else throw new HttpError(400, 'Only URL or bundled-sample specs can be reloaded; paste the new content instead');
-    const loaded = await loadSpec({ url: s.source.url, content: text }).catch((e) => { throw new HttpError(422, e.message); });
-    return this.update(id, { content: JSON.stringify(loaded.doc) });
+    if (s.source?.type === 'sample') {
+      const { text } = await this.sampleContent(s.source.sample, req);
+      return this.update(id, { content: text });
+    }
+    if (s.source?.type !== 'url') throw new HttpError(400, 'Only URL or bundled-sample specs can be reloaded; paste the new content instead');
+    if (s.kind === 'openapi') {
+      // Keep the original behaviour: the loader fetches the URL itself so relative external $refs resolve.
+      const loaded = await this.adapters.openapi.load({ url: s.source.url }).catch((e) => { throw new HttpError(422, e.message); });
+      return this.update(id, { content: JSON.stringify(loaded.doc) });
+    }
+    return this.update(id, { content: await fetchContract(s.source.url), url: s.source.url });
   }
 
   async remove(id) {
@@ -148,69 +197,41 @@ class TesterService {
   }
 
   invalidate(id) {
-    for (const k of [...this.validators.keys()]) if (k.startsWith(`${id}|`)) this.validators.delete(k);
+    for (const a of Object.values(this.adapters)) a.invalidate(id);
     this.lints.delete(id);
   }
 
-  validator(spec, lenient = spec.options?.lenientAllOf) {
-    const key = `${spec.id}|${spec.updatedAt}|${!!lenient}`;
-    if (!this.validators.has(key)) this.validators.set(key, new SpecValidator(spec.doc, { version: spec.version, lenientAllOf: !!lenient }));
-    return this.validators.get(key);
-  }
-
   lint(spec) {
-    const key = spec.id;
-    const cached = this.lints.get(key);
+    const cached = this.lints.get(spec.id);
     if (cached && cached.updatedAt === spec.updatedAt) return cached.result;
-    const result = lintSpec(spec);
-    this.lints.set(key, { updatedAt: spec.updatedAt, result });
+    const result = this.adapter(spec).lint(spec);
+    this.lints.set(spec.id, { updatedAt: spec.updatedAt, result });
     return result;
   }
 
-  operations(spec) {
-    return listOperations(spec.doc).map((o) => ({
-      id: o.id, method: o.method, path: o.path, operationId: o.operationId, summary: o.summary, tags: o.tags, deprecated: o.deprecated,
-      hasBody: !!o.requestBody, secured: Array.isArray(o.security) && o.security.some((x) => Object.keys(x).length),
-      responses: Object.keys(o.responses || {}),
-    }));
-  }
+  operations(spec) { return this.adapter(spec).operations(spec); }
 
-  op(spec, opId) {
-    const op = listOperations(spec.doc).find((o) => o.id === opId || o.operationId === opId);
-    if (!op) throw new HttpError(404, `Operation ${opId} not found in spec`);
-    return op;
-  }
-
-  defaultRequest(spec, opId, exampleName) {
-    return defaultRequest(spec, this.op(spec, opId), { exampleName });
-  }
+  defaultRequest(spec, opId, exampleName, opts = {}) { return this.adapter(spec).defaultRequest(spec, opId, exampleName, opts); }
 
   async send(spec, { opId, request, target, lenientAllOf }) {
-    const op = this.op(spec, opId);
     const t = { ...spec.target, ...(target || {}) };
-    const req = request || defaultRequest(spec, op);
-    const r = await execute(this.ctx, spec, op, req, t, {});
-    const checks = r.error ? r.checks : validateResponse(spec, this.validator(spec, lenientAllOf ?? spec.options?.lenientAllOf), op, r.response);
-    const outcome = summarize(checks);
-    const out = { opId: op.id, ...r, checks, outcome, pass: outcome !== 'fail' };
-    if (out.response) delete out.response.json;
-    return out;
+    return this.adapter(spec).send(spec, { opId, request, target: t, lenientAllOf });
   }
 
   async run(spec, { negative = false, variables = {}, operationIds, target, lenientAllOf } = {}) {
     const startedAt = new Date();
-    const lenient = lenientAllOf ?? spec.options?.lenientAllOf;
     const t = { ...spec.target, ...(target || {}) };
-    const result = await runAll(this.ctx, spec, this.validator(spec, lenient), { target: t, negative, variables, operationIds });
+    const result = await this.adapter(spec).run(spec, { target: t, negative, variables, operationIds, lenientAllOf });
     const run = {
       id: `run_${crypto.randomBytes(6).toString('hex')}`,
       specId: spec.id,
       specName: spec.name,
+      kind: spec.kind,
       startedAt: startedAt.toISOString(),
       finishedAt: new Date().toISOString(),
       durationMs: Date.now() - startedAt.getTime(),
       target: { ...t, auth: maskAuth(t.auth) },
-      options: { negative, lenientAllOf: !!lenient, operationIds: operationIds || null },
+      options: { negative, lenientAllOf: !!result.options?.lenientAllOf, operationIds: operationIds || null },
       summary: result.summary,
       variables: result.variables,
       steps: result.steps.map(trimStep),
@@ -238,14 +259,13 @@ class TesterService {
 
   async deleteRun(id) { await this.ctx.repo.del('tester_runs', id); }
 
-  profiles(spec) { return profilesFromSpec(spec.doc); }
+  profiles(spec) { return this.adapter(spec).profiles(spec); }
 
-  async mock(spec, req) {
-    const r = await installMock(this.ctx, spec, slugify(spec.name));
-    return { ...r, url: `${this.ctx.baseUrl(req)}${r.prefix}` };
-  }
+  async mock(spec, req) { return this.adapter(spec).mock(spec, req); }
 
-  async unmock(spec) { return removeMock(this.ctx, slugify(spec.name)); }
+  async unmock(spec) { return this.adapter(spec).unmock(spec); }
+
+  document(spec) { return this.adapter(spec).document(spec); }
 }
 
 module.exports = { TesterService };
