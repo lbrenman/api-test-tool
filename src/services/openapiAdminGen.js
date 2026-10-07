@@ -224,6 +224,37 @@ async function generateAdminOpenApi(ctx, req) {
   }));
   add(`${T}/runs/{runId}/export.json`, 'get', op('Tester', 'exportRun', 'The run as a JSON download', { parameters: [runId], responses: { ...ok('Run', S('Run')), ...AUTHED, ...NF } }));
 
+  // ---- Back-office app (/app)
+  const P = `${A}/app`;
+  const appResource = { name: 'resource', in: 'path', required: true, schema: { type: 'string', enum: ['employees', 'products', 'departments', 'categories'] } };
+  const recId = { name: 'id', in: 'path', required: true, schema: { type: 'integer', minimum: 1 }, example: 1 };
+  add(`${P}/summary`, 'get', op('App', 'getAppSummary', 'KPIs, chart series and recent changes for the back-office home page', {
+    responses: { ...ok('Summary', S('AppSummary')), ...AUTHED },
+  }));
+  add(`${P}/lookups`, 'get', op('App', 'getAppLookups', 'Departments, categories and employees for form dropdowns', {
+    responses: { ...ok('Lookups', obj({ departments: { type: 'array', items: anyObj() }, categories: { type: 'array', items: anyObj() }, employees: { type: 'array', items: anyObj() } })), ...AUTHED },
+  }));
+  add(`${P}/records/{resource}`, 'get', op('App', 'listAppRecords', 'Search, filter, sort and page records (rows include computed columns)', {
+    description: 'Accepts the same filters as /v1 (?field=value, ?field[gte]=x, ?q=, ?sort=-a,b) plus ?page= and ?size= (max 100). Timestamps are always ISO 8601.',
+    parameters: [appResource, { name: 'q', in: 'query', schema: { type: 'string' } }, { name: 'sort', in: 'query', schema: { type: 'string' }, example: '-updatedAt' },
+      { name: 'page', in: 'query', schema: { type: 'integer', minimum: 1, default: 1 } }, { name: 'size', in: 'query', schema: { type: 'integer', minimum: 1, maximum: 100, default: 25 } }],
+    responses: { ...ok('Page of records', obj({ items: { type: 'array', items: anyObj() }, total: { type: 'integer' }, page: { type: 'integer' }, size: { type: 'integer' }, pages: { type: 'integer' } }, ['items', 'total', 'page', 'size', 'pages'])), ...BAD, ...AUTHED, ...NF },
+  }));
+  add(`${P}/records/{resource}`, 'post', op('App', 'createAppRecord', 'Create a record (same validation as POST /v1/{resource})', {
+    parameters: [appResource], requestBody: body(anyObj(), { name: 'Logistics', code: 'LOG' }),
+    responses: { ...created('Created', anyObj()), ...BAD, ...AUTHED, ...NF, 422: R('Problem') },
+  }));
+  add(`${P}/records/{resource}/{id}`, 'get', op('App', 'getAppRecord', 'A record with related records (direct reports, department staff, category products)', {
+    parameters: [appResource, recId], responses: { ...ok('Record', obj({ record: anyObj(), related: anyObj() }, ['record', 'related'])), ...AUTHED, ...NF },
+  }));
+  add(`${P}/records/{resource}/{id}`, 'patch', op('App', 'updateAppRecord', 'Update a record (JSON Merge Patch, same validation as /v1)', {
+    parameters: [appResource, recId], requestBody: body(anyObj(), { title: 'Senior Engineer', isActive: true }),
+    responses: { ...ok('Updated', anyObj()), ...BAD, ...AUTHED, ...NF, 422: R('Problem') },
+  }));
+  add(`${P}/records/{resource}/{id}`, 'delete', op('App', 'deleteAppRecord', 'Delete a record (409 when a department or category is still in use)', {
+    parameters: [appResource, recId], responses: { ...noContent('Deleted'), ...AUTHED, ...NF, 409: R('Problem') },
+  }));
+
   // ---- the admin spec itself
   add(`${A}/openapi.json`, 'get', op('Platform', 'getAdminOpenApiJson', 'This document (JSON)', { responses: { ...ok('OpenAPI document', anyObj()), ...AUTHED } }));
   add(`${A}/openapi.yaml`, 'get', op('Platform', 'getAdminOpenApiYaml', 'This document (YAML)', { responses: { 200: { description: 'OpenAPI document', content: { 'application/yaml': { schema: { type: 'string' } } } }, ...AUTHED } }));
@@ -237,7 +268,8 @@ async function generateAdminOpenApi(ctx, req) {
       summary: 'Control plane for the tool: settings, data, files, auth, inspector and the contract tester.',
       description: [
         '**For operators and automation, not for integrations.** This is the API the dashboard uses. Use it to script the tool',
-        '(change settings, re-seed data, manage OAuth clients, read the inspector, drive the contract tester) or to check its health.',
+        '(change settings, re-seed data, manage OAuth clients, read the inspector, drive the contract tester), to back the /app back-office UI,',
+        'or to check its health.',
         '',
         `The mock data API that integrations call (\`/v1/*\` and \`/oauth/token\`) is described separately at [\`${base}/openapi.json\`](${base}/openapi.json).`,
         '',
@@ -261,6 +293,7 @@ async function generateAdminOpenApi(ctx, req) {
       { name: 'Auth', description: '/v1 auth configuration and OAuth clients' },
       { name: 'Inspector', description: 'Captured requests (webhook-style catch-all)' },
       { name: 'Tester', description: 'Contract tester for APIs you implemented' },
+      { name: 'App', description: 'Backend for the back-office app at /app (bypasses /v1 auth, chaos and rate limits)' },
     ],
     paths,
     components: {
@@ -300,6 +333,13 @@ async function generateAdminOpenApi(ctx, req) {
           converted: { type: 'boolean' }, source: anyObj(), operations: { type: 'integer' }, baseUrl: { type: 'string' }, updatedAt: { type: 'string' }, lastRun: { type: ['object', 'null'] },
         }, ['id', 'name']),
         RunSummary: obj({ id: { type: 'string' }, specId: { type: 'string' }, specName: { type: 'string' }, startedAt: { type: 'string' }, durationMs: { type: 'integer' }, summary: anyObj(), options: anyObj(), baseUrl: { type: 'string' } }, ['id', 'specId']),
+        AppSummary: obj({
+          generatedAt: { type: 'string', format: 'date-time' }, currency: { type: 'string' }, fxNote: { type: 'string' },
+          people: anyObj('headcount, active, activePct, avgSalary, annualPayroll, avgRating, hiresLast12Months, departments'),
+          catalog: anyObj('products, live, inStockPct, lowStock, outOfStock, discontinued, inventoryValueUsd, avgRating, categories'),
+          charts: anyObj('headcountByDepartment, avgSalaryByLevel, hiresByYear, productsByCategory, stockStatus: arrays of {label, value}'),
+          recent: { type: 'array', items: anyObj() },
+        }, ['people', 'catalog', 'charts']),
         Run: obj({
           id: { type: 'string' }, specId: { type: 'string' }, specName: { type: 'string' }, startedAt: { type: 'string' }, finishedAt: { type: 'string' }, durationMs: { type: 'integer' },
           target: anyObj(), options: anyObj(), summary: anyObj('pass / fail / warn / skip counts'), variables: anyObj(), steps: { type: 'array', items: anyObj() },

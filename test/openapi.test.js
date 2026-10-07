@@ -22,6 +22,7 @@ function declaredAdminRoutes() {
   };
   scan('admin.js', '/admin/api');
   scan('tester.js', '/admin/api/tester');
+  scan('appApi.js', '/admin/api/app');
   return out;
 }
 

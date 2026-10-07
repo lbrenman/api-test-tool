@@ -364,7 +364,7 @@
   VIEWS.overview = async (el) => {
     const o = await api('GET', '/overview');
     const health = await fetch('/health').then((r) => r.json()).catch(() => null);
-    el.append(header('Overview', o.baseUrl, h('a', { class: 'btn', href: '/docs', target: '_blank', rel: 'noopener' }, 'API docs ↗')));
+    el.append(header('Overview', o.baseUrl, h('a', { class: 'btn', href: '/app/', target: '_blank', rel: 'noopener', title: 'Business-style view of the mock data: KPIs, browse, create, edit and delete records' }, 'Back office app ↗'), h('a', { class: 'btn', href: '/docs', target: '_blank', rel: 'noopener' }, 'API docs ↗')));
     for (const w of o.warnings) el.append(h('div', { class: 'card', style: { borderLeft: '4px solid var(--warn)' } }, w));
     let dismissed = false;
     try { dismissed = localStorage.getItem('att-welcome-dismissed') === '1'; } catch { /* storage unavailable */ }
@@ -1087,6 +1087,7 @@
           ['/.well-known/jwks.json, /.well-known/oauth-authorization-server', 'Signing keys and OAuth discovery.'],
           ['/openapi.json, /openapi.yaml', 'Live OpenAPI for the mock data API (for integrations).'],
           ['/admin/api/openapi.json, .yaml', 'Live OpenAPI for the admin API (password protected).'],
+          ['/app', 'Back office app: KPIs and a friendly view of the mock data with create, edit and delete (dashboard password).'],
           ['/docs', 'Swagger UI for both specs (?spec=admin for the admin API).'],
           ['/health, /ready', 'Health and readiness checks.'],
           ['/samples/…', 'Bundled example specs for the API Tester.'],

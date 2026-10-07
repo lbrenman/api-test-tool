@@ -84,6 +84,7 @@ Fly.io, Render and Northflank are covered in [Deployment](#deployment).
 | **Inspector** | Catch-all capture with the actual path, live stream (SSE), detected auth (Basic user, decoded JWT, API keys), pretty bodies and multipart parts, copy as curl, replay, auto-forward, configurable responses and path rules. |
 | **Generated OpenAPI** | Two OAS 3.1 specs, regenerated from the live settings. **Mock Data API** (`/openapi.json`, `/openapi.yaml`) is for integrations: `/v1` resources, every pagination path, the file endpoints and the OAuth token endpoint, reflecting the server URL, date format, auth scheme, required headers and chaos headers. **Admin API** (`/admin/api/openapi.json`, `.yaml`, password protected) is for operators and scripts: settings, seeding, files, OAuth clients, inspector, tester, `/health` and `/ready`. Swagger UI at `/docs` shows both (`/docs?spec=admin` for the admin spec). |
 | **API tester** | Upload, paste or URL load for OAS 3.0, 3.1 and Swagger 2.0. Spec lint, per-operation "try it" with generated samples that honour `pattern`/`format`/`enum`/limits, auth profiles (none, API key, Basic, Bearer, OAuth2 client credentials), response validation, run-all contract mode with ID chaining and negative tests, run history, and JSON and HTML reports. "Mock from spec" serves a spec's examples from this tool. |
+| **Back office app** | `/app` is a business-style app over the mock data, for demos and non-technical viewers: KPIs (headcount, payroll, stock value, stock health), charts, searchable and sortable lists, record pages with related records, and forms to create, edit and delete employees, products, departments and categories. It reads and writes the same data as `/v1` but through its own backend (`/admin/api/app/*`), so the `/v1` auth mode, chaos, rate limits and required headers never break it. Uses the dashboard password. |
 | **Dashboard** | Overview, Settings (with source badges and resets), Data, Inspector, Files, Auth, Chaos, Headers, OpenAPI, API Tester, and About & Help (what each page does, quick starts, reserved paths, handy headers). Every page has a "? Help" link, and every main component has a **"?" guide** (hover, focus or tap) with numbered steps for using it in your integration or tests and copy-ready curl commands. The curls use the resolved base URL, the auth mode that is active right now (from `AUTH_MODE` or a dashboard override — the guides never change it), and any required request headers; in `jwt`/`oauth2` mode they fetch a token first, and in `hmac` mode they sign the request with `openssl`. The tester's **Try it → Request** tab adds "Copy as curl" for the exact call it sent. Responsive, with light and dark themes. |
 
 ---
@@ -150,7 +151,7 @@ Settings marked **restart** can only be set through the environment.
 
 ## Route map
 
-These prefixes are reserved: `/v1`, `/oauth`, `/.well-known`, `/admin`, `/dashboard`, `/docs`, `/openapi.json`, `/openapi.yaml`, `/samples`, `/health`, `/ready`, and `GET /` (which redirects to the dashboard). **Every other path, and every method, is captured by the inspector.** Calls to `/v1` and `/oauth` are recorded there too (unless `INSPECTOR_LOG_ALL=false`); the dashboard, admin API, docs and health probes never are.
+These prefixes are reserved: `/v1`, `/oauth`, `/.well-known`, `/admin`, `/dashboard`, `/app`, `/docs`, `/openapi.json`, `/openapi.yaml`, `/samples`, `/health`, `/ready`, and `GET /` (which redirects to the dashboard). **Every other path, and every method, is captured by the inspector.** Calls to `/v1` and `/oauth` are recorded there too (unless `INSPECTOR_LOG_ALL=false`); the dashboard, admin API, docs and health probes never are.
 
 | Path | Purpose |
 |---|---|
@@ -168,6 +169,8 @@ These prefixes are reserved: `/v1`, `/oauth`, `/.well-known`, `/admin`, `/dashbo
 | `/samples/*` | Bundled specs (handy for the tester's URL loader) |
 | `/dashboard`, `/admin/api/*` | Dashboard and its API (password protected; described by `/admin/api/openapi.json`) |
 | `/admin/api/tester/*` | API tester backend |
+| `/app/` | Back office app (business view of the mock data; dashboard password) |
+| `/admin/api/app/*` | Back office app backend: KPIs, lookups, record search and CRUD |
 | anything else | Inspector catch-all |
 
 ---
@@ -521,10 +524,11 @@ src/
   config/              settings registry (env -> override), base URL detection
   db/                  sqlite.js, postgres.js, repo.js (one generic docs table)
   middleware/          requestId, headers, cors, ratelimit, auth, chaos, idempotency, body, adminAuth, inspector
-  routes/              platform, oauth, resources, files, admin, tester
+  routes/              platform, oauth, resources, files, admin, tester, appApi
   services/            seed, schemas, resources, query, paginate, dateFormat, files + fileStore/, sampleFiles,
                        keys, oauth, inspector, openapiGen (data spec), openapiAdminGen (admin spec), tester/ (load, lint, sample, validate, runner, auth, mock, report)
   public/              dashboard (index.html, app.js, styles.css)
+  webapp/              back office app at /app (index.html, app.js, app.css)
 samples/               Supplier_Order_Collaboration_OpenAPI_3_1.yaml, Inventory_Swagger_2_0.yaml
 postman/               collection, environment, fixtures
 scripts/               seed.js, build-postman.js, run-newman.js
