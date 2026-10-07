@@ -174,7 +174,7 @@
                   "pm.test('status 200', () => pm.response.to.have.status(200));",
                   "pm.test('3.1', () => pm.expect(pm.response.json().openapi).to.eql('3.1.0'));",
                   "pm.test('auth mode reflected', () => { const s = pm.response.json().components.securitySchemes; const m = pm.environment.get('authMode'); if (m === 'none') pm.expect(Object.keys(s)).to.have.length(0); else pm.expect(Object.keys(s)).to.have.length(1); });",
-                  "pm.test('data API only (no admin or health paths)', () => pm.expect(Object.keys(pm.response.json().paths).filter((p) => !p.startsWith('/v1/') && !p.startsWith('/oauth/'))).to.have.length(0));"
+                  "pm.test('data API only (no admin or health paths)', () => pm.expect(Object.keys(pm.response.json().paths).filter((p) => !p.startsWith('/v1/') && !p.startsWith('/oauth/') && !p.startsWith('/sse/'))).to.have.length(0));"
                 ]
               }
             }

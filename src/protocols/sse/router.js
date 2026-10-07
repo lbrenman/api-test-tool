@@ -91,16 +91,16 @@ function openStream(req, res, settings) {
   s.send = (ev) => {
     if (s.closed) return false;
     s.sent += 1;
-    if (chaos.malformedAt && s.sent === chaos.malformedAt) {
-      res.write(`id ${ev.id ?? ''}\nevent: ${ev.event || 'message'}\ndata: {"broken": \n\n`); // missing colon on id, invalid JSON
-    } else {
-      res.write(frame(ev));
-    }
+    const text = chaos.malformedAt && s.sent === chaos.malformedAt
+      ? `id ${ev.id ?? ''}\nevent: ${ev.event || 'message'}\ndata: {"broken": \n\n` // missing colon on id, invalid JSON
+      : frame(ev);
     if (chaos.dropAfter && s.sent >= chaos.dropAfter) {
+      // Cut the connection (no clean end of the chunked body) once this last event is on the wire.
       cleanup();
-      res.socket?.destroy();
+      res.write(text, () => res.socket?.destroy());
       return false;
     }
+    res.write(text);
     return true;
   };
   s.end = (ev) => {
