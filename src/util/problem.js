@@ -1,5 +1,10 @@
 'use strict';
-// RFC 9457 problem+json helpers.
+// Error rendering. Every error in the app goes through sendProblem(req, res, status, opts).
+//
+// By default errors are RFC 9457 problem+json. A protocol module (SOAP, OData, GraphQL, SSE, ...)
+// can register its own error renderer and tag its requests with req.errorFormat = '<name>'
+// (see middleware/protocol.js). Shared middleware (auth, chaos, rate limit, required headers,
+// idempotency) keeps calling sendProblem and the error comes out in the protocol's native shape.
 
 const TITLES = {
   400: 'Bad Request', 401: 'Unauthorized', 403: 'Forbidden', 404: 'Not Found', 405: 'Method Not Allowed',
@@ -43,10 +48,50 @@ function problemBody(req, status, { detail, title, type, errors, code } = {}) {
   return body;
 }
 
+// ---- Error renderer registry -------------------------------------------------
+// A renderer is (problem, req) => { status?, contentType, body, headers? }
+//   problem  - the problem+json object (type, title, status, detail, instance, requestId, timestamp, code?, errors?)
+//   status   - HTTP status to send (defaults to problem.status; e.g. GraphQL may answer 200 with errors[])
+//   body     - string or Buffer
+//   headers  - extra headers specific to the protocol
+// Headers passed by the caller (WWW-Authenticate, Retry-After, ...) are always applied first.
+const RENDERERS = new Map();
+
+function registerErrorRenderer(name, render) {
+  if (!name || typeof render !== 'function') throw new TypeError('registerErrorRenderer(name, fn) requires a name and a function');
+  RENDERERS.set(name, render);
+}
+
+function errorFormats() {
+  return [...RENDERERS.keys()];
+}
+
+function renderProblem(req, status, opts = {}) {
+  const problem = problemBody(req, status, opts);
+  const render = RENDERERS.get(req.errorFormat) || RENDERERS.get('problem');
+  try {
+    const out = render(problem, req) || {};
+    return { status: out.status ?? status, contentType: out.contentType, body: out.body ?? '', headers: out.headers };
+  } catch (e) {
+    // A broken protocol renderer must never hide the original error.
+    req.app?.locals?.ctx?.log?.('error', `error renderer "${req.errorFormat}" failed:`, e);
+    return RENDERERS.get('problem')(problem, req);
+  }
+}
+
 function sendProblem(req, res, status, opts = {}) {
   if (res.headersSent) return;
   if (opts.headers) for (const [k, v] of Object.entries(opts.headers)) res.setHeader(k, v);
-  res.status(status).type('application/problem+json').send(JSON.stringify(problemBody(req, status, opts)));
+  const out = renderProblem(req, status, opts);
+  if (out.headers) for (const [k, v] of Object.entries(out.headers)) res.setHeader(k, v);
+  res.status(out.status ?? status).type(out.contentType || 'application/problem+json').send(out.body);
 }
 
-module.exports = { HttpError, sendProblem, problemBody, TITLES };
+// Built-in: RFC 9457 problem+json (the /v1 REST API and everything else by default).
+registerErrorRenderer('problem', (problem) => ({
+  status: problem.status,
+  contentType: 'application/problem+json',
+  body: JSON.stringify(problem),
+}));
+
+module.exports = { HttpError, sendProblem, problemBody, renderProblem, registerErrorRenderer, errorFormats, TITLES };

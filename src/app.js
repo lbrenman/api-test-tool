@@ -18,11 +18,9 @@ const { HttpError, sendProblem } = require('./util/problem');
 
 const requestId = require('./middleware/requestId');
 const cors = require('./middleware/cors');
-const rateLimit = require('./middleware/ratelimit');
 const idempotency = require('./middleware/idempotency');
-const { responseHeaders, requiredHeaders } = require('./middleware/headers');
-const { makeAuth } = require('./middleware/auth');
-const { makeChaos } = require('./middleware/chaos');
+const { responseHeaders } = require('./middleware/headers');
+const { protocolStack } = require('./middleware/protocol');
 const { v1Body } = require('./middleware/body');
 const { makeAdminAuth } = require('./middleware/adminAuth');
 const { catchAll, logAll } = require('./middleware/inspector');
@@ -129,13 +127,10 @@ async function createApp(opts = {}) {
   // Presigned URLs carry their own signature: mounted before /v1 auth.
   app.use(filesRouter.presignedRouter(ctx, filesApi));
 
-  // Mock API
+  // Mock REST API. protocolStack = error format -> body -> required headers -> rate limit -> auth -> chaos,
+  // shared with every other mock protocol surface (see middleware/protocol.js).
   const v1 = express.Router();
-  v1.use(v1Body(settings));
-  v1.use(requiredHeaders(settings));
-  v1.use(rateLimit(settings));
-  v1.use(makeAuth(ctx));
-  v1.use(makeChaos(ctx));
+  v1.use(...protocolStack(ctx, { format: 'problem', body: v1Body(settings) }));
   v1.use(idempotency(ctx));
   v1.use('/files', filesApi.router);
   v1.use(resourcesRouter(ctx));
