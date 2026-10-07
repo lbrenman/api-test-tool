@@ -11,7 +11,7 @@
       "script": {
         "type": "text/javascript",
         "exec": [
-          "// Applies the auth mode in {{authMode}} to /v1 requests, SOAP POSTs, SSE streams and /graphql. Requests with header X-Skip-Auth: 1 go out unauthenticated.",
+          "// Applies the auth mode in {{authMode}} to /v1 requests, SOAP POSTs, SSE streams, /graphql and OData. Requests with header X-Skip-Auth: 1 go out unauthenticated.",
           "(function applyAuth() {",
           "  const sdk = require('postman-collection');",
           "  const CryptoJS = require('crypto-js');",
@@ -20,7 +20,7 @@
           "  if (skip) pm.request.headers.remove('X-Skip-Auth');",
           "  const resolved = new sdk.Url(pm.variables.replaceIn(pm.request.url.toString()));",
           "  const p = resolved.getPath();",
-          "  const isApi = (p.indexOf('/v1/') === 0 && p.indexOf('/v1/files/presigned/') !== 0) || (p.indexOf('/soap/') === 0 && pm.request.method === 'POST') || p.indexOf('/sse/') === 0 || p === '/graphql';",
+          "  const isApi = (p.indexOf('/v1/') === 0 && p.indexOf('/v1/files/presigned/') !== 0) || (p.indexOf('/soap/') === 0 && pm.request.method === 'POST') || p.indexOf('/sse/') === 0 || p === '/graphql' || (p.indexOf('/odata/v4/') === 0 && p !== '/odata/v4/' && p !== '/odata/v4/$metadata');",
           "  if (!isApi || skip || mode === 'none') return;",
           "  const set = (k, v) => pm.request.headers.upsert({ key: k, value: v });",
           "  if (mode === 'apikey') {",
@@ -4398,11 +4398,732 @@
       ]
     },
     {
-      "id": "att-003a",
-      "name": "Headers & inspector",
+      "id": "att-003q",
+      "name": "OData v4",
       "item": [
         {
           "id": "att-0038",
+          "name": "Service document (open)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/odata/v4",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "odata",
+                "v4"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('four entity sets', () => pm.expect(pm.response.json().value.map((x) => x.name)).to.eql(['Employees', 'Products', 'Departments', 'Categories']));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "att-0039",
+          "name": "$metadata (open)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/odata/v4/$metadata",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "odata",
+                "v4",
+                "$metadata"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Content-Type application/xml', () => pm.expect(pm.response.headers.get('Content-Type')).to.include('application/xml'));",
+                  "pm.test(\"CSDL\", () => pm.expect(pm.response.text()).to.include(\"<edmx:Edmx Version=\\\"4.0\\\"\"));",
+                  "pm.test(\"Employee type\", () => pm.expect(pm.response.text()).to.include(\"<EntityType Name=\\\"Employee\\\">\"));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "att-003a",
+          "name": "Filter, select, orderby, count",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/odata/v4/Employees?$filter=level%20eq%20%27L3%27%20and%20salary%20gt%201&$select=level%2Csalary&$orderby=salary%20desc&$count=true",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "odata",
+                "v4",
+                "Employees"
+              ],
+              "query": [
+                {
+                  "key": "$filter",
+                  "value": "level%20eq%20%27L3%27%20and%20salary%20gt%201"
+                },
+                {
+                  "key": "$select",
+                  "value": "level%2Csalary"
+                },
+                {
+                  "key": "$orderby",
+                  "value": "salary%20desc"
+                },
+                {
+                  "key": "$count",
+                  "value": "true"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Content-Type odata.metadata=minimal', () => pm.expect(pm.response.headers.get('Content-Type')).to.include('odata.metadata=minimal'));",
+                  "const b = pm.response.json(); pm.test('count', () => pm.expect(b['@odata.count']).to.be.a('number')); pm.test('all L3', () => pm.expect(b.value.every((e) => e.level === 'L3')).to.eql(true)); pm.test('sorted', () => pm.expect(b.value.map((e) => e.salary)).to.eql(b.value.map((e) => e.salary).sort((x, y) => y - x)));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "att-003b",
+          "name": "Functions and lambda",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/odata/v4/Employees?$filter=startswith%28tolower%28lastName%29%2C%27a%27%29%20or%20skills%2Fany%28s%3A%20s%20eq%20%27Go%27%29&$select=lastName%2Cskills",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "odata",
+                "v4",
+                "Employees"
+              ],
+              "query": [
+                {
+                  "key": "$filter",
+                  "value": "startswith%28tolower%28lastName%29%2C%27a%27%29%20or%20skills%2Fany%28s%3A%20s%20eq%20%27Go%27%29"
+                },
+                {
+                  "key": "$select",
+                  "value": "lastName%2Cskills"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('matches', () => pm.expect(pm.response.json().value.every((e) => e.lastName.toLowerCase().startsWith('a') || e.skills.includes('Go'))).to.eql(true));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "att-003c",
+          "name": "Expand with nested options",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/odata/v4/Departments(1)?$expand=employees%28%24select%3DfirstName%3B%24top%3D2%3B%24count%3Dtrue%29",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "odata",
+                "v4",
+                "Departments(1)"
+              ],
+              "query": [
+                {
+                  "key": "$expand",
+                  "value": "employees%28%24select%3DfirstName%3B%24top%3D2%3B%24count%3Dtrue%29"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "const b = pm.response.json(); pm.test('expanded', () => pm.expect(b.employees.length).to.be.at.most(2)); pm.test('nested count', () => pm.expect(b['employees@odata.count']).to.be.a('number')); pm.test('ETag', () => pm.expect(pm.response.headers.get('ETag')).to.match(/^W\\//));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "att-003d",
+          "name": "$count",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/odata/v4/Products/$count?$filter=inStock%20eq%20true",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "odata",
+                "v4",
+                "Products",
+                "$count"
+              ],
+              "query": [
+                {
+                  "key": "$filter",
+                  "value": "inStock%20eq%20true"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('a number', () => pm.expect(Number(pm.response.text())).to.be.a('number'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "att-003e",
+          "name": "Property value",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/odata/v4/Employees(1)/email/$value",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "odata",
+                "v4",
+                "Employees(1)",
+                "email",
+                "$value"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Content-Type text/plain', () => pm.expect(pm.response.headers.get('Content-Type')).to.include('text/plain'));",
+                  "pm.test(\"an email\", () => pm.expect(pm.response.text()).to.include(\"@\"));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "att-003f",
+          "name": "Reset the paging walker",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/health",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "health"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.environment.set('walk_ids', ''); pm.environment.set('w_odata', pm.environment.get('baseUrl') + '/odata/v4/Products?$select=id');"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "att-003g",
+          "name": "Server paging: follow @odata.nextLink to the end",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Prefer",
+                "value": "odata.maxpagesize=25"
+              }
+            ],
+            "url": {
+              "raw": "{{w_odata}}",
+              "host": [
+                "{{w_odata}}"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "const total = 'totalProducts'; const items = body.value;",
+                  "pm.test('page size applied', () => { pm.expect(items.length).to.be.at.most(25); pm.expect(pm.response.headers.get('Preference-Applied')).to.eql('odata.maxpagesize=25'); });",
+                  "const more = !!body['@odata.nextLink'];",
+                  "if (more) pm.environment.set('w_odata', body['@odata.nextLink']);",
+                  "const ids = (pm.environment.get('walk_ids') || '').split(',').filter(Boolean).concat(items.map(x => String(x.id)));",
+                  "pm.environment.set('walk_ids', ids.join(','));",
+                  "if (more) { postman.setNextRequest(pm.info.requestName); } else {",
+                  "  pm.test('walked every item exactly once', () => { pm.expect(new Set(ids).size).to.eql(ids.length); pm.expect(ids.length).to.eql(Number(pm.environment.get(total))); });",
+                  "  pm.environment.set('walk_ids', '');",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "att-003h",
+          "name": "Create employee with @odata.bind",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/odata/v4/Employees",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "odata",
+                "v4",
+                "Employees"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"firstName\": \"OData\",\n  \"lastName\": \"Postman\",\n  \"email\": \"odata.postman@example.com\",\n  \"department@odata.bind\": \"Departments(1)\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 201', () => pm.response.to.have.status(201));",
+                  "const b = pm.response.json(); pm.test('bound', () => pm.expect(b.departmentId).to.eql(1)); pm.test('Location', () => pm.expect(pm.response.headers.get('Location')).to.include('/odata/v4/Employees(' + b.id + ')')); pm.environment.set('odEmpId', b.id); pm.environment.set('odEtag', pm.response.headers.get('ETag'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "att-003i",
+          "name": "PATCH with a stale If-Match → 412",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "If-Match",
+                "value": "W/\"stale\""
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/odata/v4/Employees({{odEmpId}})",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "odata",
+                "v4",
+                "Employees({{odEmpId}})"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"x\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 412', () => pm.response.to.have.status(412));",
+                  "pm.test('OData error', () => { const e = pm.response.json().error; pm.expect(e.code).to.be.a('string'); pm.expect(e.message).to.be.a('string'); });",
+                  "pm.test('OData-Version', () => pm.expect(pm.response.headers.get('OData-Version')).to.eql('4.0'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "att-003j",
+          "name": "PATCH with If-Match → 204",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "If-Match",
+                "value": "{{odEtag}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/odata/v4/Employees({{odEmpId}})",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "odata",
+                "v4",
+                "Employees({{odEmpId}})"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"OData tester\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 204', () => pm.response.to.have.status(204));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "att-003k",
+          "name": "PATCH return=representation → 200",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Prefer",
+                "value": "return=representation"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/odata/v4/Employees({{odEmpId}})",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "odata",
+                "v4",
+                "Employees({{odEmpId}})"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"level\": \"L2\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('merged', () => { const b = pm.response.json(); pm.expect(b.title).to.eql('OData tester'); pm.expect(b.level).to.eql('L2'); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "att-003l",
+          "name": "DELETE → 204",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/odata/v4/Employees({{odEmpId}})",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "odata",
+                "v4",
+                "Employees({{odEmpId}})"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 204', () => pm.response.to.have.status(204));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "att-003m",
+          "name": "Deleted → 404",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/odata/v4/Employees({{odEmpId}})",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "odata",
+                "v4",
+                "Employees({{odEmpId}})"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 404', () => pm.response.to.have.status(404));",
+                  "pm.test('OData error', () => { const e = pm.response.json().error; pm.expect(e.code).to.be.a('string'); pm.expect(e.message).to.be.a('string'); });",
+                  "pm.test('OData-Version', () => pm.expect(pm.response.headers.get('OData-Version')).to.eql('4.0'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "att-003n",
+          "name": "Unknown property in $filter → 400",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/odata/v4/Employees?$filter=colour%20eq%201",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "odata",
+                "v4",
+                "Employees"
+              ],
+              "query": [
+                {
+                  "key": "$filter",
+                  "value": "colour%20eq%201"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 400', () => pm.response.to.have.status(400));",
+                  "pm.test('OData error', () => { const e = pm.response.json().error; pm.expect(e.code).to.be.a('string'); pm.expect(e.message).to.be.a('string'); });",
+                  "pm.test('OData-Version', () => pm.expect(pm.response.headers.get('OData-Version')).to.eql('4.0'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "att-003o",
+          "name": "Validation → 422 with details",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/odata/v4/Departments",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "odata",
+                "v4",
+                "Departments"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Bad\",\n  \"code\": \"lower case\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 422', () => pm.response.to.have.status(422));",
+                  "pm.test('OData error', () => { const e = pm.response.json().error; pm.expect(e.code).to.be.a('string'); pm.expect(e.message).to.be.a('string'); });",
+                  "pm.test('OData-Version', () => pm.expect(pm.response.headers.get('OData-Version')).to.eql('4.0'));",
+                  "pm.test('details target code', () => pm.expect(pm.response.json().error.details.map((d) => d.target)).to.include('code'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "att-003p",
+          "name": "X-Force-Error: 503 → OData error",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-Force-Error",
+                "value": "503"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/odata/v4/Employees?$top=1",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "odata",
+                "v4",
+                "Employees"
+              ],
+              "query": [
+                {
+                  "key": "$top",
+                  "value": "1"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 503', () => pm.response.to.have.status(503));",
+                  "pm.test('OData error', () => { const e = pm.response.json().error; pm.expect(e.code).to.be.a('string'); pm.expect(e.message).to.be.a('string'); });",
+                  "pm.test('OData-Version', () => pm.expect(pm.response.headers.get('OData-Version')).to.eql('4.0'));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "att-003t",
+      "name": "Headers & inspector",
+      "item": [
+        {
+          "id": "att-003r",
           "name": "Request id echo",
           "request": {
             "method": "GET",
@@ -4442,7 +5163,7 @@
           ]
         },
         {
-          "id": "att-0039",
+          "id": "att-003s",
           "name": "Inspector catch-all",
           "request": {
             "method": "POST",

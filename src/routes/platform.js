@@ -47,6 +47,7 @@ module.exports = function platformRouter(ctx, { adminAuth } = {}) {
         soap: settings.get('soapEnabled') ? { wsse: settings.get('soapWsse'), soapActionCheck: settings.get('soapActionCheck') } : false,
         websocket: settings.get('wsEnabled') ? { open: ctx.wsHub ? ctx.wsHub.size : 0, maxMessageKb: settings.get('wsMaxMessageKb') } : false,
         graphql: settings.get('graphqlEnabled') ? { introspection: settings.get('graphqlIntrospection'), maxDepth: settings.get('graphqlMaxDepth') } : false,
+        odata: settings.get('odataEnabled') ? { maxPageSize: settings.get('odataMaxPageSize') } : false,
         sse: settings.get('sseEnabled') ? { heartbeatSeconds: settings.get('sseHeartbeatSeconds'), replayBuffer: settings.get('sseReplayBuffer') } : false,
         maxFileSizeMb: settings.get('maxFileSizeMb'),
         dashboardProtected: !!settings.get('adminPassword'),

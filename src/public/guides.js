@@ -14,7 +14,8 @@
   const q = (s) => `'${String(s).replace(/'/g, "'\\''")}'`;
   // Paths that take API credentials: the /v1 mock API and SOAP requests (the WSDL and /soap listing are open).
   const isApiPath = (p) => p === '/v1' || p.startsWith('/v1/') || p.startsWith('/v1?') || (p.startsWith('/soap/') && !/[?.]wsdl$/i.test(p))
-    || p.startsWith('/sse/') || p === '/graphql' || p.startsWith('/graphql?');
+    || p.startsWith('/sse/') || p === '/graphql' || p.startsWith('/graphql?')
+    || (p.startsWith('/odata/v4/') && !/^\/odata\/v4\/(\$metadata)?([?#]|$)/.test(p));
 
   /**
    * ctx: {
@@ -699,6 +700,53 @@
         ],
         curls: [
           ['The same stream from a terminal', curl('GET', '/sse/ticks?interval=500&count=5', { extra: ['-N'] })],
+        ],
+      },
+
+      // ------------------------------------------------------------ protocols: OData
+      'protocols.odata': {
+        title: 'OData v4',
+        purpose: 'An OData v4 (JSON) service over the same data, for platforms with an OData connector. It uses the active auth mode, rate limit, required headers and chaos like /v1; the service document and $metadata are open.',
+        steps: [
+          `Point your OData connector at the service root \`${B}/odata/v4\`; the CSDL is at \`${B}/odata/v4/$metadata\`. Entity sets: Employees, Products, Departments, Categories (key \`id\`).`,
+          'Query options: $filter (eq ne gt ge lt le, and or not, in, arithmetic, contains/startswith/endswith/tolower/year/…, any/all lambdas, navigation paths like department/name), $select, $expand with nested options, $orderby, $top, $skip, $count, $search.',
+          'Long results are paged by the server: follow `@odata.nextLink` until it is absent. Ask for smaller pages with `Prefer: odata.maxpagesize=N`.',
+          'Writes: POST to a set (201 + Location; `Prefer: return=minimal` → 204), PATCH merges, PUT replaces, DELETE. Link related records with `"department@odata.bind": "Departments(3)"`. Send the ETag back in If-Match to get 412 on a stale write.',
+          `Errors use \`{"error": {"code", "message", "target", "details"}}\` with the real HTTP status. Credentials: ${C.authLabel}.`,
+        ],
+        curls: [
+          ['Filter, select, sort, count', curl('GET', `/odata/v4/Employees?$filter=${encodeURIComponent("level eq 'L3' and salary gt 90000")}&$select=firstName,lastName,salary&$orderby=${encodeURIComponent('salary desc')}&$count=true&$top=5`)],
+          ['Expand related records', curl('GET', `/odata/v4/Departments(1)?$expand=${encodeURIComponent('employees($select=firstName,lastName;$top=3)')}`)],
+          ['Count only', curl('GET', `/odata/v4/Products/$count?$filter=${encodeURIComponent('inStock eq true')}`)],
+          ['Small pages (follow @odata.nextLink)', curl('GET', '/odata/v4/Products?$select=id,name', { headers: { Prefer: 'odata.maxpagesize=5' } })],
+          ['Create an employee bound to a department', curl('POST', '/odata/v4/Employees', { json: { firstName: 'Ada', lastName: 'Lovelace', email: 'ada.lovelace@example.com', 'department@odata.bind': 'Departments(1)' }, include: true })],
+          ['Update (PATCH, return the entity)', curl('PATCH', '/odata/v4/Employees(1)', { json: { title: 'Principal Engineer' }, headers: { Prefer: 'return=representation' } })],
+          ['Download $metadata', plain('GET', '/odata/v4/$metadata', { output: 'metadata.xml' })],
+        ],
+      },
+      'protocols.odata-settings': {
+        title: 'OData settings',
+        purpose: 'Turn the OData service on or off and set the server-driven page size.',
+        steps: [
+          '`odataMaxPageSize`: collections longer than this answer with `@odata.nextLink`. Lower it to test that your connector follows next links.',
+          'A client can ask for smaller pages with `Prefer: odata.maxpagesize=N`; the response says what was applied in `Preference-Applied`.',
+          ...pw,
+        ],
+        curls: [
+          ['Pages of 10', admin('PUT', '/settings', { json: { odataMaxPageSize: 10 } })],
+          ['Back to the defaults', admin('POST', '/settings/reset', { json: { section: 'odata' } })],
+        ],
+      },
+      'protocols.odata-try': {
+        title: 'Try an OData query',
+        purpose: 'Send a GET from this page with the active auth mode and see the status, headers and payload.',
+        steps: [
+          'Pick a sample or type a resource path (Employees, Employees(1), Departments(1)/employees, Products/$count) and query options.',
+          'Switch the metadata level to see @odata.type, ids and navigation links (full) or a bare payload (none).',
+          'Set Prefer odata.maxpagesize and use Next page to walk @odata.nextLink.',
+        ],
+        curls: [
+          ['The same from a terminal', curl('GET', '/odata/v4/Employees?$top=3&$select=firstName,lastName')],
         ],
       },
 

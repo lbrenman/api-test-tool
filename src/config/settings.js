@@ -94,6 +94,10 @@ const DEFS = [
   { key: 'graphqlIntrospection', env: 'GRAPHQL_INTROSPECTION', def: true, type: 'bool', section: 'graphql', desc: 'allow __schema / __type introspection queries (the SDL at /graphql/schema.graphql stays available)' },
   { key: 'graphqlMaxDepth', env: 'GRAPHQL_MAX_DEPTH', def: 10, type: 'int', section: 'graphql', min: 0, max: 100, desc: 'Reject operations nested deeper than this (introspection fields not counted); 0 = no limit' },
 
+  // ---- odata ----
+  { key: 'odataEnabled', env: 'ODATA_ENABLED', def: true, type: 'bool', section: 'odata', desc: 'serve the OData v4 service at /odata/v4 (Employees, Products, Departments, Categories)' },
+  { key: 'odataMaxPageSize', env: 'ODATA_MAX_PAGE_SIZE', def: 100, type: 'int', section: 'odata', min: 1, max: 1000, desc: 'Server-driven page size: longer results get @odata.nextLink (clients can ask for less with Prefer: odata.maxpagesize)' },
+
   // ---- sse ----
   { key: 'sseEnabled', env: 'SSE_ENABLED', def: true, type: 'bool', section: 'sse', desc: 'serve the Server-Sent Events streams under /sse (changes, ticks, stream)' },
   { key: 'sseHeartbeatSeconds', env: 'SSE_HEARTBEAT_SECONDS', def: 15, type: 'int', section: 'sse', min: 0, desc: 'Comment line sent this often to keep idle streams open; 0 = off' },
@@ -103,7 +107,7 @@ const DEFS = [
 
   // ---- inspector ----
   { key: 'inspectorRetention', env: 'INSPECTOR_RETENTION', def: 500, type: 'int', section: 'inspector', min: 1 },
-  { key: 'inspectorLogAll', env: 'INSPECTOR_LOG_ALL', def: true, type: 'bool', section: 'inspector', desc: 'also record /v1/*, /soap/*, /ws/* (upgrades), /sse/*, /graphql and /oauth/* calls (the dashboard, docs and health probes are never recorded)' },
+  { key: 'inspectorLogAll', env: 'INSPECTOR_LOG_ALL', def: true, type: 'bool', section: 'inspector', desc: 'also record /v1/*, /soap/*, /ws/* (upgrades), /sse/*, /graphql, /odata/* and /oauth/* calls (the dashboard, docs and health probes are never recorded)' },
   { key: 'inspectorResponseStatus', env: 'INSPECTOR_RESPONSE_STATUS', def: 200, type: 'int', section: 'inspector', min: 100, max: 599 },
   { key: 'inspectorResponseContentType', env: 'INSPECTOR_RESPONSE_CONTENT_TYPE', def: 'application/json', type: 'string', section: 'inspector' },
   { key: 'inspectorResponseBody', env: 'INSPECTOR_RESPONSE_BODY', def: '', type: 'string', section: 'inspector', desc: 'blank = JSON receipt with the capture id' },

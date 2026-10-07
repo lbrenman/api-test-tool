@@ -452,7 +452,7 @@
     const filterText = h('input', { type: 'text', placeholder: 'Filter path, header, body…', 'aria-label': 'Filter' });
     const filterMethod = h('select', { 'aria-label': 'Method' }, ['', 'GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'].map((m) => h('option', { value: m }, m || 'All methods')));
     const filterSource = h('select', { 'aria-label': 'Source' },
-      [['', 'All sources'], ['catch-all', 'Webhooks / other paths'], ['v1', 'Mock API (/v1)'], ['soap', 'SOAP (/soap)'], ['ws', 'WebSocket (/ws)'], ['sse', 'SSE (/sse)'], ['graphql', 'GraphQL (/graphql)'], ['oauth', 'OAuth (/oauth)']].map(([v, l]) => h('option', { value: v }, l)));
+      [['', 'All sources'], ['catch-all', 'Webhooks / other paths'], ['v1', 'Mock API (/v1)'], ['soap', 'SOAP (/soap)'], ['ws', 'WebSocket (/ws)'], ['sse', 'SSE (/sse)'], ['graphql', 'GraphQL (/graphql)'], ['odata', 'OData (/odata)'], ['oauth', 'OAuth (/oauth)']].map(([v, l]) => h('option', { value: v }, l)));
     const live = h('span', { class: 'live-dot' });
     const count = h('span', { class: 'muted small' });
     const logAll = h('input', { type: 'checkbox', checked: !!sval('inspectorLogAll') });
@@ -769,8 +769,80 @@
     const wsCleanup = await wsSection(el);
     const sseCleanup = await sseSection(el);
     graphqlSection(el);
+    odataSection(el);
     return () => { wsCleanup?.(); sseCleanup?.(); }; // close the live consoles when leaving the page
   };
+
+  // OData v4 service, settings and a query console (GET from the browser with the active auth).
+  function odataSection(el) {
+    const on = !!sval('odataEnabled');
+    const root = `${location.origin}/odata/v4`;
+    const links = [['Service root', root, true], ['$metadata (CSDL)', `${root}/$metadata`, true]];
+    el.append(h('div', { class: 'grid cols-2' },
+      h('div', { class: 'card' }, titled('OData v4', 'protocols.odata'),
+        !on ? h('p', { class: 'muted' }, 'The OData mock is off. Turn on odataEnabled in the settings next to this card.')
+          : h('div', { class: 'stack' },
+            h('div', { class: 'kv' }, links.flatMap(([k, url]) => [h('div', null, k), h('div', null, h('code', null, url), ' ', h('button', { class: 'small', onclick: () => copy(url) }, 'copy'), ' ', h('a', { href: url, target: '_blank', rel: 'noopener' }, 'open ↗'))])),
+            h('div', { class: 'small muted' }, 'Entity sets Employees, Products, Departments and Categories with $filter, $select, $expand, $orderby, $top, $skip, $count and $search, @odata.nextLink paging, navigation, and create/update/delete with @odata.bind and If-Match. Errors use the OData error format with the real HTTP status.'))),
+      h('div', { class: 'card' }, titled('OData settings', 'protocols.odata-settings'),
+        settingsForm(['odataEnabled', 'odataMaxPageSize'], { onSaved: () => route() }))));
+    if (!on) return;
+
+    const SAMPLES = {
+      'Filter + select + count': ['Employees', "$filter=level eq 'L3' and salary gt 90000&$select=firstName,lastName,salary&$orderby=salary desc&$count=true&$top=5"],
+      'Expand navigation': ['Departments(1)', '$expand=employees($select=firstName,lastName;$top=3;$count=true)'],
+      'Lambda (any)': ['Products', "$filter=tags/any(t: t eq 'new')&$select=name,tags&$top=5"],
+      'String functions': ['Employees', "$filter=startswith(tolower(lastName),'a')&$select=firstName,lastName"],
+      'Count only': ['Products/$count', '$filter=inStock eq true'],
+      'Property value': ['Employees(1)/email/$value', ''],
+      'Bad property (400)': ['Employees', '$filter=colour eq 1'],
+    };
+    const sample = h('select', { 'aria-label': 'Sample' }, Object.keys(SAMPLES).map((k) => h('option', { value: k }, k)));
+    const pathIn = h('input', { type: 'text', class: 'mono', style: { maxWidth: '260px' }, 'aria-label': 'Resource path' });
+    const queryIn = h('input', { type: 'text', class: 'mono', 'aria-label': 'Query options' });
+    const level = h('select', { 'aria-label': 'Metadata' }, ['minimal', 'full', 'none'].map((v) => h('option', { value: v }, v)));
+    const pageSize = h('input', { type: 'number', min: '1', placeholder: 'server', style: { maxWidth: '100px' } });
+    const out = h('div', { class: 'stack' });
+    const load = () => { [pathIn.value, queryIn.value] = SAMPLES[sample.value]; };
+    sample.addEventListener('change', load);
+    load();
+
+    const send = guard(async (urlOverride) => {
+      let path;
+      if (typeof urlOverride === 'string') path = urlOverride;
+      else {
+        const qs = queryIn.value.trim().split('&').filter(Boolean).map((kv) => { const i = kv.indexOf('='); return i < 0 ? encodeURIComponent(kv) : `${kv.slice(0, i)}=${encodeURIComponent(kv.slice(i + 1))}`; }).join('&');
+        path = `/odata/v4/${pathIn.value.trim().replace(/^\/+/, '')}${qs ? `?${qs}` : ''}`;
+      }
+      const hdrs = { Accept: `application/json;odata.metadata=${level.value}`, ...(await protocolAuthHeaders('GET', path, '')) };
+      if (pageSize.value) hdrs.Prefer = `odata.maxpagesize=${pageSize.value}`;
+      const url = CURL?.ctx?.mode === 'apikey' && CURL.ctx.apiKey.in === 'query' ? `${path}${path.includes('?') ? '&' : '?'}${encodeURIComponent(CURL.ctx.apiKey.name)}=${encodeURIComponent(CURL.ctx.apiKey.value)}` : path;
+      const started = performance.now();
+      const res = await fetch(url, { headers: hdrs, credentials: 'omit' });
+      const text = await res.text();
+      const ms = Math.round(performance.now() - started);
+      let json = null;
+      try { json = JSON.parse(text); } catch { /* $count, $value, chaos */ }
+      const next = json?.['@odata.nextLink'];
+      const shown = ['content-type', 'odata-version', 'etag', 'preference-applied', 'x-chaos-injected', 'www-authenticate', 'retry-after', 'x-request-id'];
+      clear(out).append(
+        h('div', { class: 'row' }, h('span', { class: statusClass(res.status) }, String(res.status)), h('span', { class: 'muted small' }, `${ms} ms · ${fmtBytes(text.length)}`),
+          Array.isArray(json?.value) ? h('span', { class: 'badge' }, `${json.value.length} item${json.value.length === 1 ? '' : 's'}${json['@odata.count'] !== undefined ? ` of ${json['@odata.count']}` : ''}`) : null,
+          json?.error ? h('span', { class: 'badge warn' }, json.error.code) : null,
+          next ? h('button', { class: 'small', onclick: () => { const u = new URL(next); send(u.pathname + u.search); } }, 'Next page →') : null),
+        h('div', { class: 'small muted mono' }, `GET ${decodeURIComponent(path)}`),
+        kv(Object.fromEntries(shown.filter((k) => res.headers.get(k)).map((k) => [k, res.headers.get(k)]))),
+        h('div', { class: 'row between' }, h('span', { class: 'small muted' }, 'Response'), h('button', { class: 'small', onclick: () => copy(text) }, 'copy')),
+        codeBlock(json ? JSON.stringify(json, null, 2) : text, { maxHeight: '480px' }));
+    });
+
+    el.append(h('div', { class: 'card stack' }, titled('Try an OData query', 'protocols.odata-try'),
+      h('div', { class: 'row' }, field('Sample', sample), field('Resource path', pathIn), field('Metadata', level), field('Prefer odata.maxpagesize', pageSize)),
+      field('Query options (unencoded, & separated)', queryIn),
+      h('div', { class: 'row' }, h('button', { class: 'primary', onclick: send }, 'Send'), h('button', { onclick: load }, 'Reset sample'),
+        h('span', { class: 'small muted' }, `Sent from your browser with the active auth mode (${CURL?.mode || 'none'}). Writes (POST, PATCH, PUT, DELETE) are in the guide's curl examples.`)),
+      out));
+  }
 
   // GraphQL endpoint, settings and a query console (POST /graphql from the browser with the active auth).
   function graphqlSection(el) {
@@ -1519,6 +1591,7 @@
           ['/soap, /soap/{EmployeeService|ProductService}', 'Mock SOAP 1.1/1.2 services over the same data. ?wsdl returns the WSDL (always open); POST requests use the active auth mode.'],
           ['/ws, /ws/{echo|rpc|changes}, /ws/asyncapi.json', 'Mock WebSocket channels over the same data (the upgrade uses the active auth mode) and their AsyncAPI 3.0 document.'],
           ['/sse, /sse/changes, /sse/ticks, POST /sse/stream', 'Server-Sent Events: change feed with Last-Event-ID replay, numbered ticks, and LLM-style request/stream (described in /openapi.json).'],
+          ['/odata/v4, /odata/v4/$metadata', 'OData v4 (JSON) over the same data: query options, paging with @odata.nextLink, navigation and CRUD. $metadata is always open.'],
           ['/graphql, /graphql/schema.graphql', 'GraphQL over the same data: queries (offset pages and Relay connections), mutations, and a changes subscription over WebSocket (graphql-transport-ws). GraphiQL in a browser; the SDL is always open.'],
           ['/oauth/token, /oauth/authorize, /oauth/introspect, /oauth/revoke', 'Built-in OAuth 2.0 server.'],
           ['/.well-known/jwks.json, /.well-known/oauth-authorization-server', 'Signing keys and OAuth discovery.'],

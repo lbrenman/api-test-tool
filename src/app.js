@@ -36,6 +36,7 @@ const soapRouter = require('./protocols/soap/router');
 const wsRouter = require('./protocols/ws/router');
 const sseRouter = require('./protocols/sse/router');
 const graphqlRouter = require('./protocols/graphql/router');
+const odataRouter = require('./protocols/odata/router');
 
 const LEVELS = { debug: 10, info: 20, warn: 30, error: 40 };
 
@@ -154,6 +155,8 @@ async function createApp(opts = {}) {
   app.use('/sse', sseRouter(ctx));
   // GraphQL over HTTP and graphql-transport-ws (subscriptions) over the same data.
   app.use('/graphql', graphqlRouter(ctx));
+  // OData v4 (JSON) over the same data.
+  app.use('/odata', odataRouter(ctx));
 
   // Everything else: the inspector
   app.use(catchAll(ctx));

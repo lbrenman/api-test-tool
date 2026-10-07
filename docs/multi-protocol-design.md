@@ -1,6 +1,6 @@
 # Multi-protocol support — design
 
-Status: **in progress** — steps 1, 2a, 2b, 3 and 4 merged; step 5 (GraphQL) on branch `feat/graphql`; step 6 (OData) next
+Status: **steps 1–5 merged; step 6 (OData v4) on branch `feat/odata`**. OData v2 not built yet.
 Date: 2026-10-07
 
 ## Goal
@@ -117,7 +117,13 @@ resolved base URL) and `renderer.js`.
 - `$filter` (in-house parser: `eq ne gt ge lt le and or not`, `contains`, `startswith`, `endswith`)
   compiled into the same filter structure `/v1` uses; `$select`, `$expand`, `$orderby`, `$top`,
   `$skip`, `$count`, `@odata.nextLink`. `$batch` later.
-- v2: `d.results`, `__count`, `__next` envelope (relevant for SAP-style consumers).
+- v2: `d.results`, `__count`, `__next` envelope (relevant for SAP-style consumers). **Not built yet**:
+  v2 also needs its own EDMX (associations) and `/Date(ms)/` dates, so it is a separate step.
+- Built (v4): in-house expression parser compiled to JS closures (`expr.js`), checked against the
+  model so unknown properties are 400s; nested `$expand` options; `$search`; `$skiptoken` paging that
+  honours `$top` across pages; `@odata.bind`; If-Match on `W/` ETags; `odata.metadata` levels. Property
+  names match `/v1`; timestamps are always ISO; `Employee.metadata` (free-form) is not modelled.
+  `$batch`, `$apply`, `$compute` and deep insert answer 501.
 - Setting: `ODATA_MAX_PAGE_SIZE`.
 
 ### WebSocket — `/ws/echo`, `/ws/changes`

@@ -68,6 +68,16 @@ test('SSE and GraphQL requests carry credentials; the stream list and the SDL do
   assert.match(g['protocols.graphql'].curls.find(([l]) => /Subscribe/.test(l))[1], /protocols:\["graphql-transport-ws"\]/);
 });
 
+test('OData requests carry credentials; the service document and $metadata do not', () => {
+  const C = makeCurl({ ...BASE_CTX, mode: 'bearer' });
+  assert.match(C.curl('GET', '/odata/v4/Employees?$top=1'), /Authorization: Bearer demo-token/);
+  assert.match(C.curl('PATCH', '/odata/v4/Employees(1)', { json: { title: 'x' } }), /Authorization: Bearer demo-token/);
+  assert.doesNotMatch(C.curl('GET', '/odata/v4/$metadata'), /Authorization/);
+  assert.doesNotMatch(C.curl('GET', '/odata/v4/'), /Authorization/);
+  const g = build(makeCurl({ ...BASE_CTX, mode: 'none' }), {});
+  for (const id of ['protocols.odata', 'protocols.odata-settings', 'protocols.odata-try']) assert.ok(g[id], `guide ${id}`);
+});
+
 test('required request headers are added to /v1 calls only', () => {
   const C = makeCurl({ ...BASE_CTX, mode: 'none', required: [{ name: 'X-Tenant' }, { name: 'X-Env', value: 'demo' }] });
   const cmd = C.curl('GET', '/v1/products');

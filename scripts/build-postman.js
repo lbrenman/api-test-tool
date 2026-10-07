@@ -48,7 +48,7 @@ const collectionPreBody = [
   "if (skip) pm.request.headers.remove('X-Skip-Auth');",
   "const resolved = new sdk.Url(pm.variables.replaceIn(pm.request.url.toString()));",
   "const p = resolved.getPath();",
-  "const isApi = (p.indexOf('/v1/') === 0 && p.indexOf('/v1/files/presigned/') !== 0) || (p.indexOf('/soap/') === 0 && pm.request.method === 'POST') || p.indexOf('/sse/') === 0 || p === '/graphql';",
+  "const isApi = (p.indexOf('/v1/') === 0 && p.indexOf('/v1/files/presigned/') !== 0) || (p.indexOf('/soap/') === 0 && pm.request.method === 'POST') || p.indexOf('/sse/') === 0 || p === '/graphql' || (p.indexOf('/odata/v4/') === 0 && p !== '/odata/v4/' && p !== '/odata/v4/$metadata');",
   "if (!isApi || skip || mode === 'none') return;",
   "const set = (k, v) => pm.request.headers.upsert({ key: k, value: v });",
   "if (mode === 'apikey') {",
@@ -91,7 +91,7 @@ const collectionPreBody = [
 ];
 // The sandbox does not allow top-level return, so the body runs inside a function.
 const collectionPre = [
-  '// Applies the auth mode in {{authMode}} to /v1 requests, SOAP POSTs, SSE streams and /graphql. Requests with header X-Skip-Auth: 1 go out unauthenticated.',
+  '// Applies the auth mode in {{authMode}} to /v1 requests, SOAP POSTs, SSE streams, /graphql and OData. Requests with header X-Skip-Auth: 1 go out unauthenticated.',
   '(function applyAuth() {',
   ...collectionPreBody.map((l) => `  ${l}`),
   '})();',
@@ -178,8 +178,9 @@ const query = folder('Query: fields / filter / sort', [
 // Pagination walkers: each request loops on itself with setNextRequest until the last page.
 // Walker variables are initialised by the "Reset walkers" request (not in request pre-scripts), because the
 // collection-level auth/HMAC script runs first and must already see the final URL.
-function walker(name, raw, { step }) {
+function walker(name, raw, { step, headers = {} }) {
   return req(name, 'GET', raw, {
+    headers,
     tests: [
       status(200),
       'const body = pm.response.json();',
@@ -306,6 +307,29 @@ const graphqlFolder = folder('GraphQL', [
   req('X-Force-Error: 503 → errors with the real status', 'POST', '/graphql', { headers: { ...GQL_JSON, 'X-Force-Error': '503' }, body: gql('{ counts { employees } }'), tests: [status(503), gqlCode('SERVICE_UNAVAILABLE')] }),
 ]);
 
+const od = (path, params = {}) => `/odata/v4/${path}${Object.keys(params).length ? `?${Object.entries(params).map(([k, v]) => `${k}=${encodeURIComponent(v).replace(/[!'()*]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`)}`).join('&')}` : ''}`; // fully encoded so HMAC signs what Postman sends
+const odError = (code) => [status(code), "pm.test('OData error', () => { const e = pm.response.json().error; pm.expect(e.code).to.be.a('string'); pm.expect(e.message).to.be.a('string'); });", "pm.test('OData-Version', () => pm.expect(pm.response.headers.get('OData-Version')).to.eql('4.0'));"];
+const odataFolder = folder('OData v4', [
+  req('Service document (open)', 'GET', '/odata/v4', { tests: [status(200), "pm.test('four entity sets', () => pm.expect(pm.response.json().value.map((x) => x.name)).to.eql(['Employees', 'Products', 'Departments', 'Categories']));"] }),
+  req('$metadata (open)', 'GET', '/odata/v4/$metadata', { tests: [status(200), ctype('application/xml'), has('CSDL', '<edmx:Edmx Version="4.0"'), has('Employee type', '<EntityType Name="Employee">')] }),
+  req('Filter, select, orderby, count', 'GET', od('Employees', { $filter: "level eq 'L3' and salary gt 1", $select: 'level,salary', $orderby: 'salary desc', $count: 'true' }), { tests: [status(200), ctype('odata.metadata=minimal'), "const b = pm.response.json(); pm.test('count', () => pm.expect(b['@odata.count']).to.be.a('number')); pm.test('all L3', () => pm.expect(b.value.every((e) => e.level === 'L3')).to.eql(true)); pm.test('sorted', () => pm.expect(b.value.map((e) => e.salary)).to.eql(b.value.map((e) => e.salary).sort((x, y) => y - x)));"] }),
+  req('Functions and lambda', 'GET', od('Employees', { $filter: "startswith(tolower(lastName),'a') or skills/any(s: s eq 'Go')", $select: 'lastName,skills' }), { tests: [status(200), "pm.test('matches', () => pm.expect(pm.response.json().value.every((e) => e.lastName.toLowerCase().startsWith('a') || e.skills.includes('Go'))).to.eql(true));"] }),
+  req('Expand with nested options', 'GET', od('Departments(1)', { $expand: 'employees($select=firstName;$top=2;$count=true)' }), { tests: [status(200), "const b = pm.response.json(); pm.test('expanded', () => pm.expect(b.employees.length).to.be.at.most(2)); pm.test('nested count', () => pm.expect(b['employees@odata.count']).to.be.a('number')); pm.test('ETag', () => pm.expect(pm.response.headers.get('ETag')).to.match(/^W\\//));"] }),
+  req('$count', 'GET', od('Products/$count', { $filter: 'inStock eq true' }), { tests: [status(200), "pm.test('a number', () => pm.expect(Number(pm.response.text())).to.be.a('number'));"] }),
+  req('Property value', 'GET', '/odata/v4/Employees(1)/email/$value', { tests: [status(200), ctype('text/plain'), has('an email', '@')] }),
+  req('Reset the paging walker', 'GET', '/health', { tests: [status(200), "pm.environment.set('walk_ids', ''); pm.environment.set('w_odata', pm.environment.get('baseUrl') + '/odata/v4/Products?$select=id');"] }),
+  walker('Server paging: follow @odata.nextLink to the end', '{{w_odata}}', { headers: { Prefer: 'odata.maxpagesize=25' }, step: ["const total = 'totalProducts'; const items = body.value;", "pm.test('page size applied', () => { pm.expect(items.length).to.be.at.most(25); pm.expect(pm.response.headers.get('Preference-Applied')).to.eql('odata.maxpagesize=25'); });", "const more = !!body['@odata.nextLink'];", "if (more) pm.environment.set('w_odata', body['@odata.nextLink']);"] }),
+  req('Create employee with @odata.bind', 'POST', '/odata/v4/Employees', { headers: { 'Content-Type': 'application/json' }, body: json({ firstName: 'OData', lastName: 'Postman', email: 'odata.postman@example.com', 'department@odata.bind': 'Departments(1)' }), tests: [status(201), "const b = pm.response.json(); pm.test('bound', () => pm.expect(b.departmentId).to.eql(1)); pm.test('Location', () => pm.expect(pm.response.headers.get('Location')).to.include('/odata/v4/Employees(' + b.id + ')')); pm.environment.set('odEmpId', b.id); pm.environment.set('odEtag', pm.response.headers.get('ETag'));"] }),
+  req('PATCH with a stale If-Match → 412', 'PATCH', '/odata/v4/Employees({{odEmpId}})', { headers: { 'Content-Type': 'application/json', 'If-Match': 'W/"stale"' }, body: json({ title: 'x' }), tests: odError(412) }),
+  req('PATCH with If-Match → 204', 'PATCH', '/odata/v4/Employees({{odEmpId}})', { headers: { 'Content-Type': 'application/json', 'If-Match': '{{odEtag}}' }, body: json({ title: 'OData tester' }), tests: [status(204)] }),
+  req('PATCH return=representation → 200', 'PATCH', '/odata/v4/Employees({{odEmpId}})', { headers: { 'Content-Type': 'application/json', Prefer: 'return=representation' }, body: json({ level: 'L2' }), tests: [status(200), "pm.test('merged', () => { const b = pm.response.json(); pm.expect(b.title).to.eql('OData tester'); pm.expect(b.level).to.eql('L2'); });"] }),
+  req('DELETE → 204', 'DELETE', '/odata/v4/Employees({{odEmpId}})', { tests: [status(204)] }),
+  req('Deleted → 404', 'GET', '/odata/v4/Employees({{odEmpId}})', { tests: odError(404) }),
+  req('Unknown property in $filter → 400', 'GET', od('Employees', { $filter: 'colour eq 1' }), { tests: odError(400) }),
+  req('Validation → 422 with details', 'POST', '/odata/v4/Departments', { headers: { 'Content-Type': 'application/json' }, body: json({ name: 'Bad', code: 'lower case' }), tests: [...odError(422), "pm.test('details target code', () => pm.expect(pm.response.json().error.details.map((d) => d.target)).to.include('code'));"] }),
+  req('X-Force-Error: 503 → OData error', 'GET', '/odata/v4/Employees?$top=1', { headers: { 'X-Force-Error': '503' }, tests: odError(503) }),
+]);
+
 const misc = folder('Headers & inspector', [
   req('Request id echo', 'GET', '/v1/employees/1', { headers: { 'X-Request-Id': 'postman-req-1', 'X-Correlation-Id': 'postman-corr-1' }, tests: [status(200), "pm.test('echoed', () => { pm.expect(pm.response.headers.get('X-Request-Id')).to.eql('postman-req-1'); pm.expect(pm.response.headers.get('X-Correlation-Id')).to.eql('postman-corr-1'); });"] }),
   req('Inspector catch-all', 'POST', '/hooks/postman?source=newman', { headers: { 'Content-Type': 'application/json' }, body: json({ event: 'order.created', id: 42 }), tests: [status(200), "pm.test('captured with actual path', () => { pm.expect(pm.response.json().status).to.eql('captured'); pm.expect(pm.response.json().path).to.eql('/hooks/postman'); });"] }),
@@ -323,7 +347,7 @@ const collection = {
     { listen: 'test', script: { type: 'text/javascript', exec: collectionTest } },
   ],
   variable: [{ key: 'cachedToken', value: '' }, { key: 'cachedTokenExp', value: '0' }],
-  item: [platform, oauth, authFolder, crud, query, pagination, chaos, files, soapFolder, sseFolder, graphqlFolder, misc],
+  item: [platform, oauth, authFolder, crud, query, pagination, chaos, files, soapFolder, sseFolder, graphqlFolder, odataFolder, misc],
 };
 
 const environment = {

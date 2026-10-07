@@ -119,6 +119,7 @@ Fly.io, Render and Northflank are covered in [Deployment](#deployment).
 | **SOAP** | Mock SOAP 1.1 and 1.2 services (`EmployeeService`, `ProductService`) over the same data, with live WSDLs (document/literal, a SOAP 1.1 and a 1.2 binding). Get, List (paging, filters, text search, sort), Create, Update, Delete. Auth mode, chaos, rate limits and required headers apply as on `/v1`; errors are SOAP faults with field-level detail. Optional WS-Security UsernameToken (PasswordText and PasswordDigest) and SOAPAction checking. |
 | **WebSocket** | Mock channels over the same data: `/ws/echo`, `/ws/rpc` (JSON-RPC 2.0: get/list employees, products, departments, categories) and `/ws/changes` (live created/updated/deleted events from any protocol), with an AsyncAPI 3.0 document. The upgrade goes through auth, rate limiting, required headers and chaos. Size limit (1009), idle timeout, keep-alive pings, and a live console in the dashboard. In-house RFC 6455 implementation, no dependency. |
 | **Server-Sent Events** | `/sse/changes` (live change feed from any protocol, Last-Event-ID replay, `event: reset` on gaps), `/sse/ticks` (numbered, resumable) and `POST /sse/stream` (LLM-style token streaming, plain events or OpenAI chunk format with `[DONE]`). Heartbeats, `retry:`, stream chaos (`dropAfter`, `malformedAt`, `skipIds`), documented in `/openapi.json`, with a live viewer in the dashboard. The tester reads SSE responses for a time window. |
+| **OData v4** | `/odata/v4` over the same data: service document, CSDL `$metadata`, `$filter` (comparison, logical, arithmetic, `in`, string/date/math functions, `any`/`all` lambdas, navigation paths), `$select`, `$expand` with nested options, `$orderby`, `$top`, `$skip`, `$count`, `$search`, server-driven paging with `@odata.nextLink` and `Prefer: odata.maxpagesize`, key/property/`$value`/navigation addressing, and create/update/delete with `@odata.bind`, `Prefer: return=…` and If-Match ETags. OData error format, `odata.metadata=none/minimal/full`, a query console in the dashboard. |
 | **GraphQL** | `/graphql` over the same data: queries with offset pages and Relay connections (filters, sort, search), nested department/category/manager resolvers, CRUD mutations with merge-patch updates, and a live `changes` subscription over WebSocket (graphql-transport-ws). Field errors come back as HTTP 200 with partial data and `extensions.code`; auth, rate-limit and chaos errors keep their HTTP status. GraphQL-over-HTTP media types, introspection on/off, depth limit, injected field errors (`X-Force-GraphQL-Error`), SDL at `/graphql/schema.graphql`, GraphiQL in the browser and a query console in the dashboard. |
 | **Inspector** | Catch-all capture with the actual path, live stream (SSE), detected auth (Basic user, decoded JWT, API keys), pretty bodies and multipart parts, copy as curl, replay, auto-forward, configurable responses and path rules. |
 | **Generated OpenAPI** | Two OAS 3.1 specs, regenerated from the live settings. **Mock Data API** (`/openapi.json`, `/openapi.yaml`) is for integrations: `/v1` resources, every pagination path, the file endpoints, the SSE streams and the OAuth token endpoint, reflecting the server URL, date format, auth scheme, required headers and chaos headers. **Admin API** (`/admin/api/openapi.json`, `.yaml`, password protected) is for operators and scripts: settings, seeding, files, OAuth clients, inspector, tester, `/health` and `/ready`. Swagger UI at `/docs` shows both (`/docs?spec=admin` for the admin spec). |
@@ -185,6 +186,8 @@ Settings marked **restart** can only be set through the environment.
 | `WS_MAX_MESSAGE_KB` | `1024` | Larger messages close the connection with 1009 |
 | `WS_IDLE_TIMEOUT_SECONDS` | `0` | Close connections that send nothing for this long (1001); 0 = never |
 | `WS_PING_INTERVAL_SECONDS` | `30` | Server keep-alive pings; a connection that misses a pong is dropped; 0 = off |
+| `ODATA_ENABLED` | `true` | Serve the OData v4 service at `/odata/v4` |
+| `ODATA_MAX_PAGE_SIZE` | `100` | Server-driven page size; longer results get `@odata.nextLink` (1–1000) |
 | `GRAPHQL_ENABLED` | `true` | Serve the GraphQL mock at `/graphql` |
 | `GRAPHQL_INTROSPECTION` | `true` | Allow `__schema` / `__type` queries (the SDL file stays available) |
 | `GRAPHQL_MAX_DEPTH` | `10` | Reject operations nested deeper than this (introspection fields not counted); 0 = no limit |
@@ -194,7 +197,7 @@ Settings marked **restart** can only be set through the environment.
 | `SSE_REPLAY_BUFFER` | `500` | Change events kept for Last-Event-ID resume |
 | `SSE_TICK_INTERVAL_MS` | `1000` | Default `/sse/ticks` interval |
 | `INSPECTOR_RETENTION` | `500` | Captures kept |
-| `INSPECTOR_LOG_ALL` | `true` | Also record `/v1/*`, `/soap/*`, `/ws/*` (upgrades), `/sse/*`, `/graphql` and `/oauth/*` calls (with their real responses). Toggle on the Inspector page. |
+| `INSPECTOR_LOG_ALL` | `true` | Also record `/v1/*`, `/soap/*`, `/ws/*` (upgrades), `/sse/*`, `/graphql`, `/odata/*` and `/oauth/*` calls (with their real responses). Toggle on the Inspector page. |
 | `INSPECTOR_RESPONSE_STATUS`, `…_CONTENT_TYPE`, `…_BODY`, `…_HEADERS`, `…_DELAY_MS` | `200`, `application/json`, receipt, —, `0` | Default catch-all response |
 | `INSPECTOR_RULES` | — | JSON path rules (first match wins) |
 | `INSPECTOR_FORWARD_ENABLED` / `INSPECTOR_FORWARD_URL` | `false` / — | Auto-forward captures |
@@ -205,7 +208,7 @@ Settings marked **restart** can only be set through the environment.
 
 ## Route map
 
-These prefixes are reserved: `/v1`, `/soap`, `/ws`, `/sse`, `/graphql`, `/oauth`, `/.well-known`, `/admin`, `/dashboard`, `/app`, `/docs`, `/openapi.json`, `/openapi.yaml`, `/samples`, `/health`, `/ready`, and `GET /` (which redirects to the dashboard). **Every other path, and every method, is captured by the inspector.** Calls to `/v1`, `/soap`, `/ws` (the upgrade), `/sse`, `/graphql` and `/oauth` are recorded there too (unless `INSPECTOR_LOG_ALL=false`); the dashboard, admin API, docs and health probes never are.
+These prefixes are reserved: `/v1`, `/soap`, `/ws`, `/sse`, `/graphql`, `/odata`, `/oauth`, `/.well-known`, `/admin`, `/dashboard`, `/app`, `/docs`, `/openapi.json`, `/openapi.yaml`, `/samples`, `/health`, `/ready`, and `GET /` (which redirects to the dashboard). **Every other path, and every method, is captured by the inspector.** Calls to `/v1`, `/soap`, `/ws` (the upgrade), `/sse`, `/graphql`, `/odata` and `/oauth` are recorded there too (unless `INSPECTOR_LOG_ALL=false`); the dashboard, admin API, docs and health probes never are.
 
 | Path | Purpose |
 |---|---|
@@ -224,6 +227,8 @@ These prefixes are reserved: `/v1`, `/soap`, `/ws`, `/sse`, `/graphql`, `/oauth`
 | `GET /ws`, `GET /ws/asyncapi.json` | WebSocket channel list and AsyncAPI 3.0 document (open) |
 | `GET /ws/{echo\|rpc\|changes}` (upgrade) | Mock WebSocket channels (see [WebSocket channels](#websocket-channels)) |
 | `GET /sse`, `GET /sse/changes`, `GET /sse/ticks`, `POST /sse/stream` | Server-Sent Events streams (see [Server-Sent Events](#server-sent-events)) |
+| `GET /odata/v4`, `GET /odata/v4/$metadata` | OData service document and CSDL (open) |
+| `/odata/v4/{Employees\|Products\|Departments\|Categories}…` | OData v4 queries and writes (see [OData v4](#odata-v4)) |
 | `GET /graphql/schema.graphql` | GraphQL SDL (open) |
 | `POST /graphql`, `GET /graphql?query=`, `GET /graphql` (upgrade) | GraphQL queries, mutations and subscriptions; GraphiQL in a browser (see [GraphQL](#graphql)) |
 | `/oauth/token`, `/oauth/authorize`, `/oauth/introspect`, `/oauth/revoke` | OAuth 2.0 server |
@@ -538,6 +543,36 @@ The dashboard's **Protocols** page lists the streams, holds the SSE settings, an
 
 ---
 
+## OData v4
+
+`/odata/v4` is an OData v4 (JSON) service over the mock data, for platforms with an OData connector. The service document (`/odata/v4`) and `$metadata` (CSDL XML) are always open; everything else uses `AUTH_MODE`, rate limits, required headers and chaos like `/v1`. Property names are the same as `/v1` (`id` is the key); timestamps are always ISO 8601 (`Edm.DateTimeOffset`), whatever `DATE_FORMAT` says, and the free-form `metadata` object is not part of the model.
+
+| Request | Behaviour |
+|---|---|
+| `GET /Employees` (and `Products`, `Departments`, `Categories`) | `$filter`, `$select` (incl. `address/city`), `$expand` (`department`, `manager`, `directReports`, `employees`, `category`, `products`, `*`; nested `$select;$filter;$orderby;$top;$skip;$count;$expand`), `$orderby`, `$top`, `$skip`, `$count=true`, `$search`. Pages of `ODATA_MAX_PAGE_SIZE` with `@odata.nextLink` (`$skiptoken`); `Prefer: odata.maxpagesize=N` asks for less (`Preference-Applied`). |
+| `GET /Employees/$count`, `/Departments(1)/employees/$count` | Plain-text count, honouring `$filter` and `$search` |
+| `GET /Employees(1)` (or `Employees(id=1)`) | One entity with `ETag`; `$select` / `$expand` |
+| `GET /Employees(1)/firstName`, `…/firstName/$value`, `…/address` | Property, raw value, complex value (204 when null) |
+| `GET /Employees(1)/department`, `/Departments(1)/employees` | Navigation; collections take query options |
+| `POST /Employees` | 201 + `Location` (or 204 with `Prefer: return=minimal`). `"department@odata.bind": "Departments(3)"` sets the relationship; deep insert is 501 |
+| `PATCH /Employees(1)`, `PUT /Employees(1)` | Merge / replace; 204, or 200 with `Prefer: return=representation`. `If-Match` (from `ETag` / `@odata.etag`) → 412 when stale |
+| `DELETE /Employees(1)` | 204 (409 for a department or category still in use) |
+
+- `$filter` supports `eq ne gt ge lt le`, `and or not`, `in`, `add sub mul div divby mod`, `contains startswith endswith length indexof substring tolower toupper trim concat matchesPattern`, `year month day hour minute second date now round floor ceiling`, `any`/`all` lambdas (`skills/any(s: s eq 'Go')`) and to-one navigation paths (`department/name eq 'Sales'`). Unknown properties are a 400, as on real services.
+- `Accept: application/json;odata.metadata=none|minimal|full` (or `$format`) controls annotations: `full` adds `@odata.type`, `@odata.id`, `@odata.editLink` and navigation links. Non-JSON formats are 406. `$batch`, `$apply` and `$compute` are 501.
+- Errors are `{"error": {"code", "message", "target", "details": [{code, message, target}], "innererror": {status, requestId, …}}}` with the real HTTP status, and every response carries `OData-Version: 4.0`.
+
+```bash
+curl -s "$B/odata/v4/Employees?\$filter=level%20eq%20'L3'&\$select=firstName,lastName,salary&\$orderby=salary%20desc&\$count=true&\$top=5"
+curl -s "$B/odata/v4/Departments(1)?\$expand=employees(\$select=firstName;\$top=3)"
+curl -s -X POST "$B/odata/v4/Employees" -H 'Content-Type: application/json' \
+  -d '{"firstName":"Ada","lastName":"Lovelace","email":"ada@example.com","department@odata.bind":"Departments(1)"}'
+```
+
+OData v2 (`d.results`, `__count`, `__next`) is not implemented yet. The dashboard's **Protocols** page has the OData settings and a query console (samples, metadata level, page size, *Next page*).
+
+---
+
 ## GraphQL
 
 `/graphql` serves the mock data as a GraphQL API. The schema is at `/graphql/schema.graphql` (always open, like the WSDLs and `/openapi.json`); open `/graphql` in a browser for GraphiQL.
@@ -660,7 +695,7 @@ For WebSocket APIs you expose, load an **AsyncAPI 2.x or 3.0** document (upload,
 
 ## Postman and Newman
 
-- `postman/API-Test-Tool.postman_collection.json` has 106 requests with test scripts, covering:
+- `postman/API-Test-Tool.postman_collection.json` has 124 requests with test scripts, covering:
   - health, OpenAPI and discovery;
   - OAuth: token, introspect, revoke, error cases;
   - each auth mode (with and without credentials);
@@ -672,9 +707,10 @@ For WebSocket APIs you expose, load an **AsyncAPI 2.x or 3.0** document (upload,
   - SOAP: WSDL, SOAP 1.1 and 1.2 calls, create/update/delete, faults (Client/Sender, validation detail, SOAPAction mismatch, injected 503);
   - Server-Sent Events: ticks (count, Last-Event-ID resume), request/stream in both formats, and errors before the stream starts;
   - GraphQL: SDL, queries (POST and GET), Relay pagination, filters, create/update/delete mutations, NOT_FOUND and BAD_USER_INPUT field errors, a 400 with `application/graphql-response+json`, injected field errors (partial data), 405 for a mutation over GET and an injected 503;
+  - OData v4: service document, `$metadata`, filters (functions, lambdas), `$expand` with nested options, `$count`, `$value`, a walk through every page via `@odata.nextLink`, create with `@odata.bind`, If-Match (412 and 204), `return=representation`, delete, and error cases;
   - headers and the inspector.
   - WebSocket channels and GraphQL subscriptions are not covered (Postman collections cannot drive WebSockets); `npm test` covers them.
-- `postman/API-Test-Tool.postman_environment.json` holds `baseUrl`, `authMode` and credentials. Set `authMode` to the server's `AUTH_MODE`; the collection-level pre-request script then authenticates every `/v1` call, SOAP request, SSE stream and GraphQL request, fetching and caching an OAuth token for `jwt` and `oauth2` and signing requests for `hmac`.
+- `postman/API-Test-Tool.postman_environment.json` holds `baseUrl`, `authMode` and credentials. Set `authMode` to the server's `AUTH_MODE`; the collection-level pre-request script then authenticates every `/v1` call, SOAP request, SSE stream, GraphQL and OData request, fetching and caching an OAuth token for `jwt` and `oauth2` and signing requests for `hmac`.
 - `npm run postman` boots a fresh server for each auth mode and runs Newman against it. `npm run postman -- --mode hmac` runs one mode, and `npm run postman -- --url https://your-app.fly.dev --mode none` runs against a deployed instance.
 - `.github/workflows/newman.yml` runs `npm test` and then a Newman matrix over all seven auth modes (SQLite + local files) on every push.
 - The collection is generated by `scripts/build-postman.js`. Edit that file and run `npm run postman:build`.
