@@ -89,9 +89,16 @@ const DEFS = [
   { key: 'wsIdleTimeoutSeconds', env: 'WS_IDLE_TIMEOUT_SECONDS', def: 0, type: 'int', section: 'websocket', min: 0, desc: 'Close connections that send nothing for this long (1001); 0 = never' },
   { key: 'wsPingIntervalSeconds', env: 'WS_PING_INTERVAL_SECONDS', def: 30, type: 'int', section: 'websocket', min: 0, desc: 'Server ping interval; a connection that misses a pong is dropped. 0 = no pings' },
 
+  // ---- sse ----
+  { key: 'sseEnabled', env: 'SSE_ENABLED', def: true, type: 'bool', section: 'sse', desc: 'serve the Server-Sent Events streams under /sse (changes, ticks, stream)' },
+  { key: 'sseHeartbeatSeconds', env: 'SSE_HEARTBEAT_SECONDS', def: 15, type: 'int', section: 'sse', min: 0, desc: 'Comment line sent this often to keep idle streams open; 0 = off' },
+  { key: 'sseRetryMs', env: 'SSE_RETRY_MS', def: 3000, type: 'int', section: 'sse', min: 0, desc: 'retry: value sent at the start of every stream (client reconnect delay)' },
+  { key: 'sseReplayBuffer', env: 'SSE_REPLAY_BUFFER', def: 500, type: 'int', section: 'sse', min: 1, max: 100000, desc: 'Change events kept for Last-Event-ID resume on /sse/changes' },
+  { key: 'sseTickIntervalMs', env: 'SSE_TICK_INTERVAL_MS', def: 1000, type: 'int', section: 'sse', min: 50, max: 60000, desc: 'Default interval of /sse/ticks (override with ?interval=)' },
+
   // ---- inspector ----
   { key: 'inspectorRetention', env: 'INSPECTOR_RETENTION', def: 500, type: 'int', section: 'inspector', min: 1 },
-  { key: 'inspectorLogAll', env: 'INSPECTOR_LOG_ALL', def: true, type: 'bool', section: 'inspector', desc: 'also record /v1/*, /soap/*, /ws/* (upgrades) and /oauth/* calls (the dashboard, docs and health probes are never recorded)' },
+  { key: 'inspectorLogAll', env: 'INSPECTOR_LOG_ALL', def: true, type: 'bool', section: 'inspector', desc: 'also record /v1/*, /soap/*, /ws/* (upgrades), /sse/* and /oauth/* calls (the dashboard, docs and health probes are never recorded)' },
   { key: 'inspectorResponseStatus', env: 'INSPECTOR_RESPONSE_STATUS', def: 200, type: 'int', section: 'inspector', min: 100, max: 599 },
   { key: 'inspectorResponseContentType', env: 'INSPECTOR_RESPONSE_CONTENT_TYPE', def: 'application/json', type: 'string', section: 'inspector' },
   { key: 'inspectorResponseBody', env: 'INSPECTOR_RESPONSE_BODY', def: '', type: 'string', section: 'inspector', desc: 'blank = JSON receipt with the capture id' },

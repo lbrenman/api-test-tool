@@ -11,7 +11,7 @@
       "script": {
         "type": "text/javascript",
         "exec": [
-          "// Applies the auth mode in {{authMode}} to /v1 requests and SOAP POSTs. Requests with header X-Skip-Auth: 1 go out unauthenticated.",
+          "// Applies the auth mode in {{authMode}} to /v1 requests, SOAP POSTs and SSE streams. Requests with header X-Skip-Auth: 1 go out unauthenticated.",
           "(function applyAuth() {",
           "  const sdk = require('postman-collection');",
           "  const CryptoJS = require('crypto-js');",
@@ -20,7 +20,7 @@
           "  if (skip) pm.request.headers.remove('X-Skip-Auth');",
           "  const resolved = new sdk.Url(pm.variables.replaceIn(pm.request.url.toString()));",
           "  const p = resolved.getPath();",
-          "  const isApi = (p.indexOf('/v1/') === 0 && p.indexOf('/v1/files/presigned/') !== 0) || (p.indexOf('/soap/') === 0 && pm.request.method === 'POST');",
+          "  const isApi = (p.indexOf('/v1/') === 0 && p.indexOf('/v1/files/presigned/') !== 0) || (p.indexOf('/soap/') === 0 && pm.request.method === 'POST') || p.indexOf('/sse/') === 0;",
           "  if (!isApi || skip || mode === 'none') return;",
           "  const set = (k, v) => pm.request.headers.upsert({ key: k, value: v });",
           "  if (mode === 'apikey') {",
@@ -3496,11 +3496,264 @@
       ]
     },
     {
-      "id": "att-002n",
-      "name": "Headers & inspector",
+      "id": "att-002r",
+      "name": "Server-Sent Events",
       "item": [
         {
           "id": "att-002l",
+          "name": "List streams",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/sse",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "sse"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('three streams', () => pm.expect(pm.response.json().streams.length).to.eql(3));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "att-002m",
+          "name": "Ticks: three events then end",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/sse/ticks?interval=100&count=3",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "sse",
+                "ticks"
+              ],
+              "query": [
+                {
+                  "key": "interval",
+                  "value": "100"
+                },
+                {
+                  "key": "count",
+                  "value": "3"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Content-Type text/event-stream', () => pm.expect(pm.response.headers.get('Content-Type')).to.include('text/event-stream'));",
+                  "pm.test('3 × event: tick', () => pm.expect((pm.response.text().match(/^event: tick$/gm) || []).length).to.eql(3));",
+                  "pm.test('1 × event: end', () => pm.expect((pm.response.text().match(/^event: end$/gm) || []).length).to.eql(1));",
+                  "pm.test(\"retry line\", () => pm.expect(pm.response.text()).to.include(\"retry: \"));",
+                  "pm.test(\"ids\", () => pm.expect(pm.response.text()).to.include(\"id: 3\"));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "att-002n",
+          "name": "Ticks resume after Last-Event-ID",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Last-Event-ID",
+                "value": "2"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/sse/ticks?interval=50&count=4",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "sse",
+                "ticks"
+              ],
+              "query": [
+                {
+                  "key": "interval",
+                  "value": "50"
+                },
+                {
+                  "key": "count",
+                  "value": "4"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('2 × event: tick', () => pm.expect((pm.response.text().match(/^event: tick$/gm) || []).length).to.eql(2));",
+                  "pm.test(\"starts at 3\", () => pm.expect(pm.response.text()).to.include(\"id: 3\"));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "att-002o",
+          "name": "Stream (event format)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/sse/stream",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "sse",
+                "stream"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"prompt\": \"Who is on the team?\",\n  \"words\": 8,\n  \"delayMs\": 10\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Content-Type text/event-stream', () => pm.expect(pm.response.headers.get('Content-Type')).to.include('text/event-stream'));",
+                  "pm.test('8 × event: message', () => pm.expect((pm.response.text().match(/^event: message$/gm) || []).length).to.eql(8));",
+                  "pm.test('1 × event: done', () => pm.expect((pm.response.text().match(/^event: done$/gm) || []).length).to.eql(1));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "att-002p",
+          "name": "Stream (OpenAI chunk format)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/sse/stream",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "sse",
+                "stream"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"words\": 5,\n  \"delayMs\": 10,\n  \"format\": \"openai\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test(\"chunk objects\", () => pm.expect(pm.response.text()).to.include(\"chat.completion.chunk\"));",
+                  "pm.test(\"terminator\", () => pm.expect(pm.response.text()).to.include(\"data: [DONE]\"));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "att-002q",
+          "name": "Unknown resource → 400 before the stream starts",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/sse/changes?resource=widgets",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "sse",
+                "changes"
+              ],
+              "query": [
+                {
+                  "key": "resource",
+                  "value": "widgets"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 400', () => pm.response.to.have.status(400));",
+                  "pm.test('problem+json', () => pm.expect(pm.response.headers.get('Content-Type')).to.include('application/problem+json'));",
+                  "pm.test('problem status field', () => pm.expect(pm.response.json().status).to.eql(400));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "att-002u",
+      "name": "Headers & inspector",
+      "item": [
+        {
+          "id": "att-002s",
           "name": "Request id echo",
           "request": {
             "method": "GET",
@@ -3540,7 +3793,7 @@
           ]
         },
         {
-          "id": "att-002m",
+          "id": "att-002t",
           "name": "Inspector catch-all",
           "request": {
             "method": "POST",

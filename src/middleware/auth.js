@@ -10,8 +10,9 @@ function bearerToken(req) {
   const h = req.get('authorization') || '';
   const m = /^bearer\s+(.+)$/i.exec(h);
   if (m) return m[1].trim();
-  // WebSocket upgrades: browsers cannot set headers, so ?access_token= is accepted there (only).
-  if (req.ws && typeof req.query?.access_token === 'string' && req.query.access_token) return req.query.access_token;
+  // WebSocket upgrades and SSE streams: browsers (WebSocket, EventSource) cannot set headers, so
+  // ?access_token= is accepted there (only).
+  if ((req.ws || req.allowQueryToken) && typeof req.query?.access_token === 'string' && req.query.access_token) return req.query.access_token;
   return null;
 }
 

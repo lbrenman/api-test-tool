@@ -241,7 +241,7 @@
     auth: { purpose: 'Choose how /v1 calls must authenticate (none, API key, Basic, Bearer, JWT, OAuth2, HMAC), see the credentials, manage OAuth clients and get test tokens.' },
     chaos: { purpose: 'Make the mock API misbehave on purpose: random errors, latency, timeouts, broken JSON and rate limits, globally or per route, so you can test client error handling.' },
     headers: { purpose: 'Headers added to every response, and headers every /v1 request must carry (missing ones return 400).' },
-    protocols: { purpose: 'The same mock data over other protocols: SOAP 1.1/1.2 services with live WSDLs, and WebSocket channels (echo, JSON-RPC, live change feed) with an AsyncAPI document and a live console. Auth, chaos, rate limits and required headers apply as on /v1.' },
+    protocols: { purpose: 'The same mock data over other protocols: SOAP 1.1/1.2 services with live WSDLs, WebSocket channels (echo, JSON-RPC, live change feed) with an AsyncAPI document and a live console, and Server-Sent Events streams (change feed with replay, ticks, LLM-style streaming) with a live viewer. Auth, chaos, rate limits and required headers apply as on /v1.' },
     openapi: { purpose: 'Two live OpenAPI 3.1 specs: the Mock Data API (/openapi.json) for integrations to import, and the Admin API (/admin/api/openapi.json) for scripting the tool itself.' },
     tester: { purpose: 'Test an API you built: load its OpenAPI spec (REST), WSDL (SOAP) or AsyncAPI document (WebSocket), call your implementation, and check every response or message against the contract.' },
     help: { purpose: 'What this tool does and how to use each page.' },
@@ -452,7 +452,7 @@
     const filterText = h('input', { type: 'text', placeholder: 'Filter path, header, body…', 'aria-label': 'Filter' });
     const filterMethod = h('select', { 'aria-label': 'Method' }, ['', 'GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'].map((m) => h('option', { value: m }, m || 'All methods')));
     const filterSource = h('select', { 'aria-label': 'Source' },
-      [['', 'All sources'], ['catch-all', 'Webhooks / other paths'], ['v1', 'Mock API (/v1)'], ['soap', 'SOAP (/soap)'], ['ws', 'WebSocket (/ws)'], ['oauth', 'OAuth (/oauth)']].map(([v, l]) => h('option', { value: v }, l)));
+      [['', 'All sources'], ['catch-all', 'Webhooks / other paths'], ['v1', 'Mock API (/v1)'], ['soap', 'SOAP (/soap)'], ['ws', 'WebSocket (/ws)'], ['sse', 'SSE (/sse)'], ['oauth', 'OAuth (/oauth)']].map(([v, l]) => h('option', { value: v }, l)));
     const live = h('span', { class: 'live-dot' });
     const count = h('span', { class: 'muted small' });
     const logAll = h('input', { type: 'checkbox', checked: !!sval('inspectorLogAll') });
@@ -766,8 +766,69 @@
     el.append(h('div', { class: 'grid cols-2' }, servicesCard, settingsCard));
 
     if (services.length) soapTry(el, services);
-    return wsSection(el); // cleanup: closes the console's socket when leaving the page
+    const wsCleanup = await wsSection(el);
+    const sseCleanup = await sseSection(el);
+    return () => { wsCleanup?.(); sseCleanup?.(); }; // close the live consoles when leaving the page
   };
+
+  // Server-Sent Events streams, settings and a live viewer (the browser's EventSource).
+  async function sseSection(el) {
+    const on = !!sval('sseEnabled');
+    const listing = on ? await fetch('/sse', { headers: { Accept: 'application/json' } }).then((r) => (r.ok ? r.json() : null)).catch(() => null) : null;
+    el.append(h('div', { class: 'grid cols-2' },
+      h('div', { class: 'card' }, titled('Server-Sent Events streams', 'protocols.sse'),
+        !on ? h('p', { class: 'muted' }, 'The SSE mock is off. Turn on sseEnabled in the settings next to this card.')
+          : h('div', { class: 'table-wrap' }, h('table', null,
+            h('thead', null, h('tr', null, h('th', null, 'Stream'), h('th', null, 'Request'))),
+            h('tbody', null, (listing?.streams || []).map((st) => h('tr', null,
+              h('td', null, h('b', null, st.name), h('div', { class: 'small muted' }, st.description)),
+              h('td', null, method(st.method), ' ', h('code', null, st.url), ' ', h('button', { class: 'small', onclick: () => copy(st.url) }, 'copy'))))))),
+        on && listing ? h('div', { class: 'small muted', style: { marginTop: '8px' } }, `Stream chaos: ${listing.chaos}. Last change event id: ${listing.lastEventId}.`) : null),
+      h('div', { class: 'card' }, titled('SSE settings', 'protocols.sse-settings'),
+        settingsForm(['sseEnabled', 'sseHeartbeatSeconds', 'sseRetryMs', 'sseReplayBuffer', 'sseTickIntervalMs'], { onSaved: () => route() }))));
+    if (!on) return undefined;
+
+    const which = h('select', { 'aria-label': 'Stream' }, h('option', { value: 'changes' }, 'changes'), h('option', { value: 'ticks' }, 'ticks'));
+    const query = h('input', { type: 'text', value: '', placeholder: 'e.g. resource=employees, or interval=500&count=10&dropAfter=3', style: { maxWidth: '360px' } });
+    const log = h('pre', { style: { maxHeight: '360px', minHeight: '120px' } });
+    const status = h('span', { class: 'badge' }, 'closed');
+    let es = null;
+    let t0 = 0;
+    const line = (text) => { log.textContent += `${String(Math.round(performance.now() - t0)).padStart(6)} ms  ${text}\n`; log.scrollTop = log.scrollHeight; };
+    const stop = () => { if (es) { es.close(); es = null; } status.textContent = 'closed'; status.className = 'badge'; btn.textContent = 'Connect'; };
+    const btn = h('button', { class: 'primary', onclick: guard(async () => {
+      if (es) { stop(); line('closed by you'); return; }
+      const params = new URLSearchParams(query.value.trim());
+      const c = CURL?.ctx;
+      if (c?.mode === 'apikey' && c.apiKey.in === 'query') params.set(c.apiKey.name, c.apiKey.value);
+      else if (c?.mode === 'bearer') params.set('access_token', c.bearer);
+      else if (c && (c.mode === 'jwt' || c.mode === 'oauth2')) {
+        const cl = c.client || { clientId: 'demo-client', secret: 'demo-secret' };
+        const r = await fetch('/oauth/token', { method: 'POST', headers: { Authorization: `Basic ${btoa(`${cl.clientId}:${cl.secret}`)}`, 'Content-Type': 'application/x-www-form-urlencoded' }, body: 'grant_type=client_credentials&scope=read%20write' });
+        const tok = await r.json().catch(() => ({}));
+        if (!tok.access_token) throw new Error(`Token request failed (${r.status})`);
+        params.set('access_token', tok.access_token);
+      } else if (c && c.mode !== 'none' && !(c.mode === 'apikey' && c.apiKey.in === 'query')) toast(`Auth mode "${c.mode}" needs request headers, which EventSource cannot send; use the curl from the guide.`, 'err');
+      const qs = params.toString();
+      log.textContent = '';
+      t0 = performance.now();
+      es = new EventSource(`/sse/${which.value}${qs ? `?${qs}` : ''}`);
+      status.textContent = 'connecting'; status.className = 'badge warn';
+      btn.textContent = 'Disconnect';
+      es.onopen = () => { status.textContent = 'open'; status.className = 'badge pass'; line('open'); };
+      es.onerror = () => { line(es && es.readyState === 0 ? 'connection lost: the browser reconnects with Last-Event-ID' : 'error'); };
+      es.onmessage = (e) => line(`message${e.lastEventId ? ` #${e.lastEventId}` : ''}  ${e.data}`);
+      for (const ev of ['subscribed', 'created', 'updated', 'deleted', 'reset', 'tick', 'end']) {
+        es.addEventListener(ev, (e) => { line(`${ev}${e.lastEventId ? ` #${e.lastEventId}` : ''}  ${e.data}`); if (ev === 'end') stop(); });
+      }
+    }) }, 'Connect');
+    el.append(h('div', { class: 'card stack' }, titled('Live SSE viewer', 'protocols.sse-try'),
+      h('div', { class: 'row' }, field('Stream', which), field('Query (optional)', query), status),
+      h('div', { class: 'row' }, btn, h('button', { class: 'small', onclick: () => { log.textContent = ''; } }, 'Clear log'),
+        h('span', { class: 'small muted' }, 'Change a record (Data page, back office, /v1 or /soap) to see /sse/changes events arrive.')),
+      log));
+    return stop;
+  }
 
   function soapTry(el, services) {
 
@@ -1384,6 +1445,7 @@
           ['/v1/files/…', 'File protocols: multipart, raw, base64, tus, presign, download (range), chunked.'],
           ['/soap, /soap/{EmployeeService|ProductService}', 'Mock SOAP 1.1/1.2 services over the same data. ?wsdl returns the WSDL (always open); POST requests use the active auth mode.'],
           ['/ws, /ws/{echo|rpc|changes}, /ws/asyncapi.json', 'Mock WebSocket channels over the same data (the upgrade uses the active auth mode) and their AsyncAPI 3.0 document.'],
+          ['/sse, /sse/changes, /sse/ticks, POST /sse/stream', 'Server-Sent Events: change feed with Last-Event-ID replay, numbered ticks, and LLM-style request/stream (described in /openapi.json).'],
           ['/oauth/token, /oauth/authorize, /oauth/introspect, /oauth/revoke', 'Built-in OAuth 2.0 server.'],
           ['/.well-known/jwks.json, /.well-known/oauth-authorization-server', 'Signing keys and OAuth discovery.'],
           ['/openapi.json, /openapi.yaml', 'Live OpenAPI for the mock data API (for integrations).'],

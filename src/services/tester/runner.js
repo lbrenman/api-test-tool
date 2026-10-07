@@ -74,6 +74,28 @@ function defaultRequest(spec, op, { exampleName, defaultFileId = 'sample-readme-
   return req;
 }
 
+async function readWindow(stream, ms, maxBytes) {
+  const reader = stream.getReader();
+  const chunks = [];
+  let size = 0;
+  const deadline = Date.now() + ms;
+  try {
+    while (size < maxBytes) {
+      const left = deadline - Date.now();
+      if (left <= 0) break;
+      let timer;
+      const r = await Promise.race([reader.read(), new Promise((resolve) => { timer = setTimeout(() => resolve({ timeout: true }), left); })]);
+      clearTimeout(timer);
+      if (r.timeout || r.done) break;
+      chunks.push(Buffer.from(r.value));
+      size += r.value.length;
+    }
+  } catch { /* stream errored or was reset: keep what arrived */ } finally {
+    reader.cancel().catch(() => {});
+  }
+  return Buffer.concat(chunks);
+}
+
 function renderTemplate(value, vars) {
   if (typeof value !== 'string') return value;
   return value.replace(/\{\{\s*([\w.$-]+)\s*\}\}/g, (m, key) => {
@@ -166,7 +188,10 @@ async function execute(ctx, spec, op, request, target = {}, { vars = {}, noAuth 
     const msg = e.name === 'TimeoutError' ? `Timed out after ${target.timeoutMs || 30000} ms` : (e.cause?.message || e.message);
     return { request: reqInfo, error: msg, tokenExchange, checks: [{ name: 'transport', status: 'fail', message: msg }], pass: false };
   }
-  const buf = Buffer.from(await res.arrayBuffer());
+  // Server-Sent Events never end on their own: read a window of the stream, then cancel it.
+  const isStream = /text\/event-stream/i.test(res.headers.get('content-type') || '') && res.body;
+  const streamWindowMs = Number(target.streamReadMs) || 2000;
+  const buf = isStream ? await readWindow(res.body, streamWindowMs, 256 * 1024) : Buffer.from(await res.arrayBuffer());
   const durationMs = Number(process.hrtime.bigint() - started) / 1e6;
   const resHeaders = Object.fromEntries(res.headers.entries());
   const ct = resHeaders['content-type'] || '';
@@ -182,6 +207,7 @@ async function execute(ctx, spec, op, request, target = {}, { vars = {}, noAuth 
     bodyBase64: !textual ? buf.subarray(0, 64 * 1024).toString('base64') : null,
     truncated: buf.length > MAX_BODY_TEXT,
     json, jsonError,
+    ...(isStream ? { streamed: true, streamWindowMs } : {}),
   };
   return { request: reqInfo, response, tokenExchange };
 }

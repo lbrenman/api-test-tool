@@ -652,6 +652,52 @@
         ],
       },
 
+      // ------------------------------------------------------------ protocols: SSE
+      'protocols.sse': {
+        title: 'Server-Sent Events streams',
+        purpose: 'text/event-stream endpoints for integrations that consume streams: a live change feed with Last-Event-ID replay, numbered ticks, and a request that answers with a token stream (LLM-style). They use the active auth mode, rate limit, required headers and chaos like /v1.',
+        steps: [
+          `Subscribe to \`${B}/sse/changes\` (add \`?resource=employees\`), then change a record anywhere: each create, update and delete arrives as an event whose type is the change type.`,
+          'Reconnect with the `Last-Event-ID` header (EventSource does this itself) and missed events are replayed from the buffer; a too-old id gets `event: reset`.',
+          '`/sse/ticks?interval=500&count=10` sends numbered events, then `event: end`. `POST /sse/stream` with `{"prompt": "…", "words": 40, "format": "openai"}` streams chat.completion.chunk objects and `data: [DONE]`.',
+          'Test failure handling with `dropAfter=N` (cut the connection), `malformedAt=N` (a broken frame) and `skipIds=true` on any stream, or with X-Force-Error before the stream starts.',
+          `Credentials: ${C.authLabel}. EventSource cannot set headers, so for Bearer, JWT and OAuth2 \`?access_token=\` is accepted on streams.`,
+        ],
+        curls: [
+          ['Watch the change feed (Ctrl-C to stop)', curl('GET', '/sse/changes?resource=employees', { extra: ['-N'] })],
+          ['Three ticks, then the stream ends', curl('GET', '/sse/ticks?interval=200&count=3', { extra: ['-N'] })],
+          ['Resume ticks after id 5', curl('GET', '/sse/ticks?interval=200&count=8', { headers: { 'Last-Event-ID': '5' }, extra: ['-N'] })],
+          ['Stream an answer (OpenAI chunk format)', curl('POST', '/sse/stream', { json: { prompt: 'Who works in R&D?', words: 30, delayMs: 30, format: 'openai' }, extra: ['-N'] })],
+          ['A connection cut after 3 events', curl('GET', '/sse/ticks?interval=200&dropAfter=3', { extra: ['-N'] })],
+        ],
+      },
+      'protocols.sse-settings': {
+        title: 'SSE settings',
+        purpose: 'Turn the SSE mock on or off and tune heartbeats, the client retry hint, the replay buffer and the default tick interval.',
+        steps: [
+          '`sseHeartbeatSeconds`: a comment line keeps idle streams alive through proxies; 0 turns it off.',
+          '`sseRetryMs`: the `retry:` value sent first on every stream, i.e. how long EventSource waits before reconnecting.',
+          '`sseReplayBuffer`: how many change events are kept for Last-Event-ID resume.',
+          ...pw,
+        ],
+        curls: [
+          ['Heartbeat every 5 seconds', admin('PUT', '/settings', { json: { sseHeartbeatSeconds: 5 } })],
+          ['Back to the defaults', admin('POST', '/settings/reset', { json: { section: 'sse' } })],
+        ],
+      },
+      'protocols.sse-try': {
+        title: 'Live SSE viewer',
+        purpose: 'Open a stream from this page with the browser\'s EventSource and watch the events arrive, including automatic reconnects.',
+        steps: [
+          'Pick changes or ticks, optionally add query parameters, and press Connect.',
+          'Add `dropAfter=3` to see EventSource reconnect on its own and resume from the last id.',
+          'Credentials go in the query string where a browser allows it; for header-based modes use the curl from the streams guide.',
+        ],
+        curls: [
+          ['The same stream from a terminal', curl('GET', '/sse/ticks?interval=500&count=5', { extra: ['-N'] })],
+        ],
+      },
+
       // ------------------------------------------------------------ openapi
       openapi: {
         title: 'Live OpenAPI (two specs)',

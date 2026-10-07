@@ -49,6 +49,7 @@ Ues Cases:
   - [Files](#files)
   - [SOAP services](#soap-services)
   - [WebSocket channels](#websocket-channels)
+  - [Server-Sent Events](#server-sent-events)
   - [Inspector](#inspector)
   - [API tester walkthrough](#api-tester-walkthrough)
     - [SOAP services (WSDL)](#soap-services-wsdl)
@@ -117,11 +118,12 @@ Fly.io, Render and Northflank are covered in [Deployment](#deployment).
 | **Files** | One shared pool (local disk or S3-compatible) behind multipart, raw, base64-in-JSON, tus resumable, presigned URLs, range downloads (206) and chunked downloads. Sample CSV, XLSX, JSON, PNG, JPG, PDF, TXT, ZIP and a 10 MB binary are generated on seed. |
 | **SOAP** | Mock SOAP 1.1 and 1.2 services (`EmployeeService`, `ProductService`) over the same data, with live WSDLs (document/literal, a SOAP 1.1 and a 1.2 binding). Get, List (paging, filters, text search, sort), Create, Update, Delete. Auth mode, chaos, rate limits and required headers apply as on `/v1`; errors are SOAP faults with field-level detail. Optional WS-Security UsernameToken (PasswordText and PasswordDigest) and SOAPAction checking. |
 | **WebSocket** | Mock channels over the same data: `/ws/echo`, `/ws/rpc` (JSON-RPC 2.0: get/list employees, products, departments, categories) and `/ws/changes` (live created/updated/deleted events from any protocol), with an AsyncAPI 3.0 document. The upgrade goes through auth, rate limiting, required headers and chaos. Size limit (1009), idle timeout, keep-alive pings, and a live console in the dashboard. In-house RFC 6455 implementation, no dependency. |
+| **Server-Sent Events** | `/sse/changes` (live change feed from any protocol, Last-Event-ID replay, `event: reset` on gaps), `/sse/ticks` (numbered, resumable) and `POST /sse/stream` (LLM-style token streaming, plain events or OpenAI chunk format with `[DONE]`). Heartbeats, `retry:`, stream chaos (`dropAfter`, `malformedAt`, `skipIds`), documented in `/openapi.json`, with a live viewer in the dashboard. The tester reads SSE responses for a time window. |
 | **Inspector** | Catch-all capture with the actual path, live stream (SSE), detected auth (Basic user, decoded JWT, API keys), pretty bodies and multipart parts, copy as curl, replay, auto-forward, configurable responses and path rules. |
-| **Generated OpenAPI** | Two OAS 3.1 specs, regenerated from the live settings. **Mock Data API** (`/openapi.json`, `/openapi.yaml`) is for integrations: `/v1` resources, every pagination path, the file endpoints and the OAuth token endpoint, reflecting the server URL, date format, auth scheme, required headers and chaos headers. **Admin API** (`/admin/api/openapi.json`, `.yaml`, password protected) is for operators and scripts: settings, seeding, files, OAuth clients, inspector, tester, `/health` and `/ready`. Swagger UI at `/docs` shows both (`/docs?spec=admin` for the admin spec). |
+| **Generated OpenAPI** | Two OAS 3.1 specs, regenerated from the live settings. **Mock Data API** (`/openapi.json`, `/openapi.yaml`) is for integrations: `/v1` resources, every pagination path, the file endpoints, the SSE streams and the OAuth token endpoint, reflecting the server URL, date format, auth scheme, required headers and chaos headers. **Admin API** (`/admin/api/openapi.json`, `.yaml`, password protected) is for operators and scripts: settings, seeding, files, OAuth clients, inspector, tester, `/health` and `/ready`. Swagger UI at `/docs` shows both (`/docs?spec=admin` for the admin spec). |
 | **API tester** | Upload, paste or URL load for OAS 3.0, 3.1 and Swagger 2.0 (REST), WSDL 1.1 (SOAP 1.1/1.2, with XSD validation and WS-Security) and AsyncAPI 2.x/3.0 (WebSocket, with message validation, correlation and scripted scenarios). Spec lint, per-operation "try it" with generated samples that honour `pattern`/`format`/`enum`/limits, auth profiles (none, API key, Basic, Bearer, OAuth2 client credentials), response validation, run-all contract mode with ID chaining and negative tests, run history, and JSON and HTML reports. "Mock from spec" serves a spec's examples from this tool. |
 | **Back office app** | `/app` is a business-style app over the mock data, for demos and non-technical viewers: KPIs (headcount, payroll, stock value, stock health), charts, searchable and sortable lists, record pages with related records, and forms to create, edit and delete employees, products, departments and categories. It reads and writes the same data as `/v1` but through its own backend (`/admin/api/app/*`), so the `/v1` auth mode, chaos, rate limits and required headers never break it. Uses the dashboard password. |
-| **Dashboard** | Overview, Settings (with source badges and resets), Data, Inspector, Files, Auth, Chaos, Headers, Protocols (SOAP services and WebSocket channels: endpoints, settings, a SOAP try-it panel and a live WebSocket console), OpenAPI, API Tester, and About & Help (what each page does, quick starts, reserved paths, handy headers). Every page has a "? Help" link, and every main component has a **"?" guide** (hover, focus or tap) with numbered steps for using it in your integration or tests and copy-ready curl commands. The curls use the resolved base URL, the auth mode that is active right now (from `AUTH_MODE` or a dashboard override — the guides never change it), and any required request headers; in `jwt`/`oauth2` mode they fetch a token first, and in `hmac` mode they sign the request with `openssl`. The tester's **Try it → Request** tab adds "Copy as curl" for the exact call it sent. Responsive, with light and dark themes. |
+| **Dashboard** | Overview, Settings (with source badges and resets), Data, Inspector, Files, Auth, Chaos, Headers, Protocols (SOAP services, WebSocket channels and SSE streams: endpoints, settings, a SOAP try-it panel, a live WebSocket console and a live SSE viewer), OpenAPI, API Tester, and About & Help (what each page does, quick starts, reserved paths, handy headers). Every page has a "? Help" link, and every main component has a **"?" guide** (hover, focus or tap) with numbered steps for using it in your integration or tests and copy-ready curl commands. The curls use the resolved base URL, the auth mode that is active right now (from `AUTH_MODE` or a dashboard override — the guides never change it), and any required request headers; in `jwt`/`oauth2` mode they fetch a token first, and in `hmac` mode they sign the request with `openssl`. The tester's **Try it → Request** tab adds "Copy as curl" for the exact call it sent. Responsive, with light and dark themes. |
 
 ---
 
@@ -182,8 +184,13 @@ Settings marked **restart** can only be set through the environment.
 | `WS_MAX_MESSAGE_KB` | `1024` | Larger messages close the connection with 1009 |
 | `WS_IDLE_TIMEOUT_SECONDS` | `0` | Close connections that send nothing for this long (1001); 0 = never |
 | `WS_PING_INTERVAL_SECONDS` | `30` | Server keep-alive pings; a connection that misses a pong is dropped; 0 = off |
+| `SSE_ENABLED` | `true` | Serve the SSE streams under `/sse` |
+| `SSE_HEARTBEAT_SECONDS` | `15` | Comment heartbeat interval; 0 = off |
+| `SSE_RETRY_MS` | `3000` | `retry:` sent at the start of every stream |
+| `SSE_REPLAY_BUFFER` | `500` | Change events kept for Last-Event-ID resume |
+| `SSE_TICK_INTERVAL_MS` | `1000` | Default `/sse/ticks` interval |
 | `INSPECTOR_RETENTION` | `500` | Captures kept |
-| `INSPECTOR_LOG_ALL` | `true` | Also record `/v1/*`, `/soap/*`, `/ws/*` (upgrades) and `/oauth/*` calls (with their real responses). Toggle on the Inspector page. |
+| `INSPECTOR_LOG_ALL` | `true` | Also record `/v1/*`, `/soap/*`, `/ws/*` (upgrades), `/sse/*` and `/oauth/*` calls (with their real responses). Toggle on the Inspector page. |
 | `INSPECTOR_RESPONSE_STATUS`, `…_CONTENT_TYPE`, `…_BODY`, `…_HEADERS`, `…_DELAY_MS` | `200`, `application/json`, receipt, —, `0` | Default catch-all response |
 | `INSPECTOR_RULES` | — | JSON path rules (first match wins) |
 | `INSPECTOR_FORWARD_ENABLED` / `INSPECTOR_FORWARD_URL` | `false` / — | Auto-forward captures |
@@ -194,7 +201,7 @@ Settings marked **restart** can only be set through the environment.
 
 ## Route map
 
-These prefixes are reserved: `/v1`, `/soap`, `/ws`, `/oauth`, `/.well-known`, `/admin`, `/dashboard`, `/app`, `/docs`, `/openapi.json`, `/openapi.yaml`, `/samples`, `/health`, `/ready`, and `GET /` (which redirects to the dashboard). **Every other path, and every method, is captured by the inspector.** Calls to `/v1`, `/soap`, `/ws` (the upgrade) and `/oauth` are recorded there too (unless `INSPECTOR_LOG_ALL=false`); the dashboard, admin API, docs and health probes never are.
+These prefixes are reserved: `/v1`, `/soap`, `/ws`, `/sse`, `/oauth`, `/.well-known`, `/admin`, `/dashboard`, `/app`, `/docs`, `/openapi.json`, `/openapi.yaml`, `/samples`, `/health`, `/ready`, and `GET /` (which redirects to the dashboard). **Every other path, and every method, is captured by the inspector.** Calls to `/v1`, `/soap`, `/ws` (the upgrade), `/sse` and `/oauth` are recorded there too (unless `INSPECTOR_LOG_ALL=false`); the dashboard, admin API, docs and health probes never are.
 
 | Path | Purpose |
 |---|---|
@@ -212,6 +219,7 @@ These prefixes are reserved: `/v1`, `/soap`, `/ws`, `/oauth`, `/.well-known`, `/
 | `POST /soap/{Service}` | SOAP 1.1 / 1.2 requests (see [SOAP services](#soap-services)) |
 | `GET /ws`, `GET /ws/asyncapi.json` | WebSocket channel list and AsyncAPI 3.0 document (open) |
 | `GET /ws/{echo\|rpc\|changes}` (upgrade) | Mock WebSocket channels (see [WebSocket channels](#websocket-channels)) |
+| `GET /sse`, `GET /sse/changes`, `GET /sse/ticks`, `POST /sse/stream` | Server-Sent Events streams (see [Server-Sent Events](#server-sent-events)) |
 | `/oauth/token`, `/oauth/authorize`, `/oauth/introspect`, `/oauth/revoke` | OAuth 2.0 server |
 | `/.well-known/oauth-authorization-server`, `/.well-known/openid-configuration`, `/.well-known/jwks.json` | Discovery and JWKS |
 | `/samples/*` | Bundled specs (handy for the tester's URL loader) |
@@ -500,6 +508,30 @@ The dashboard's **Protocols** page lists the channels, holds the WebSocket setti
 
 ---
 
+## Server-Sent Events
+
+`text/event-stream` endpoints for integrations that consume streams. They are in `/openapi.json` (tag *Streaming*).
+
+| Stream | Behaviour |
+|---|---|
+| `GET /sse/changes` | `event: subscribed`, then one event per create, update or delete of an employee, product, department or category made through any protocol. `event` is `created`/`updated`/`deleted`, `id` increases, `data` is `{"type","resource","id","at","data"}`. Reconnecting with `Last-Event-ID` (or `?lastEventId=`) replays missed events from a buffer of `SSE_REPLAY_BUFFER`; an id older than the buffer gets `event: reset` first. `?resource=employees,products` filters. |
+| `GET /sse/ticks` | `{"n":1,"time":…}`, `{"n":2,…}` every `interval` ms (default `SSE_TICK_INTERVAL_MS`); with `count=N` it ends with `event: end`. `Last-Event-ID` resumes the numbering. `event=name` renames the events. |
+| `POST /sse/stream` | A request answered with a stream, like LLM APIs: body `{"prompt": "…", "words": 40, "delayMs": 40, "format": "events" \| "openai"}`. `events` sends `event: message` `{"index","delta"}` and a final `event: done`; `openai` sends `chat.completion.chunk` objects and `data: [DONE]`. |
+
+- Every stream starts with `retry: SSE_RETRY_MS` and sends a comment heartbeat every `SSE_HEARTBEAT_SECONDS`.
+- The request goes through `AUTH_MODE` (EventSource cannot set headers, so `?access_token=` works for `bearer`, `jwt` and `oauth2`), `RATE_LIMIT_RPM`, `REQUIRED_HEADERS` and chaos. Errors before the stream starts (401, 400 for an unknown resource, an injected 503) are problem+json.
+- Stream chaos, per request: `dropAfter=N` cuts the connection after N events, `malformedAt=N` sends event N as a broken frame, `skipIds=true` makes ids jump. The response carries `X-Chaos-Injected`.
+
+```bash
+curl -N "$B/sse/changes?resource=employees"          # then change an employee anywhere
+curl -N "$B/sse/ticks?interval=200&count=5" -H 'Last-Event-ID: 2'
+curl -N "$B/sse/stream" -H 'Content-Type: application/json' -d '{"prompt":"Who works in R&D?","format":"openai"}'
+```
+
+The dashboard's **Protocols** page lists the streams, holds the SSE settings, and has a live viewer that uses the browser's EventSource (including its automatic reconnects). In the API tester, a `text/event-stream` response from an OpenAPI operation is read for 2 seconds (`target.streamReadMs`) and then closed, so streaming endpoints do not hang a contract run.
+
+---
+
 ## Inspector
 
 Send anything to any non-reserved path and it shows up live on the dashboard's **Inspector** page with:
@@ -526,7 +558,7 @@ curl -s -X POST "$B/hooks/order-created?env=dev" -H 'Content-Type: application/j
   Available templates: `{{uuid}}`, `{{now}}`, `{{nowEpoch}}`, `{{id}}`, `{{path}}`, `{{method}}`, `{{params.x}}`, `{{query.x}}`, `{{body.x}}`, `{{baseUrl}}`.
 - **Detail pane:** copy as curl, replay (to this server or any URL), and auto-forward every capture to a target URL (the original path is appended).
 - **Housekeeping:** export JSON, delete a single capture (× on its row, or `DELETE /admin/api/inspector/{id}`), or clear all. The last `INSPECTOR_RETENTION` captures are kept.
-- **API traffic:** `/v1/*`, `/soap/*`, `/ws/*` upgrades (recorded as 101 when accepted) and `/oauth/*` calls are recorded with their real responses, including requests rejected early (bad JSON, missing headers, auth, rate limit) and connections dropped by chaos (shown as *dropped*). Filter by source (webhooks / mock API / SOAP / WebSocket / OAuth) or switch it off with **Record /v1 & /oauth** (`INSPECTOR_LOG_ALL`). Streamed file uploads show their size only.
+- **API traffic:** `/v1/*`, `/soap/*`, `/ws/*` upgrades (recorded as 101 when accepted), `/sse/*` streams (recorded when they end) and `/oauth/*` calls are recorded with their real responses, including requests rejected early (bad JSON, missing headers, auth, rate limit) and connections dropped by chaos (shown as *dropped*). Filter by source (webhooks / mock API / SOAP / WebSocket / SSE / OAuth) or switch it off with **Record /v1 & /oauth** (`INSPECTOR_LOG_ALL`). Streamed file uploads show their size only.
 
 ---
 
@@ -596,7 +628,7 @@ For WebSocket APIs you expose, load an **AsyncAPI 2.x or 3.0** document (upload,
 
 ## Postman and Newman
 
-- `postman/API-Test-Tool.postman_collection.json` has 85 requests with test scripts, covering:
+- `postman/API-Test-Tool.postman_collection.json` has 91 requests with test scripts, covering:
   - health, OpenAPI and discovery;
   - OAuth: token, introspect, revoke, error cases;
   - each auth mode (with and without credentials);
@@ -606,9 +638,10 @@ For WebSocket APIs you expose, load an **AsyncAPI 2.x or 3.0** document (upload,
   - every chaos forcing header;
   - every file protocol (multipart, raw, base64, presign round trip, range, chunked, tus);
   - SOAP: WSDL, SOAP 1.1 and 1.2 calls, create/update/delete, faults (Client/Sender, validation detail, SOAPAction mismatch, injected 503);
+  - Server-Sent Events: ticks (count, Last-Event-ID resume), request/stream in both formats, and errors before the stream starts;
   - headers and the inspector.
   - WebSocket channels are not covered (Postman collections cannot drive WebSockets); `npm test` covers them.
-- `postman/API-Test-Tool.postman_environment.json` holds `baseUrl`, `authMode` and credentials. Set `authMode` to the server's `AUTH_MODE`; the collection-level pre-request script then authenticates every `/v1` call and SOAP request, fetching and caching an OAuth token for `jwt` and `oauth2` and signing requests for `hmac`.
+- `postman/API-Test-Tool.postman_environment.json` holds `baseUrl`, `authMode` and credentials. Set `authMode` to the server's `AUTH_MODE`; the collection-level pre-request script then authenticates every `/v1` call, SOAP request and SSE stream, fetching and caching an OAuth token for `jwt` and `oauth2` and signing requests for `hmac`.
 - `npm run postman` boots a fresh server for each auth mode and runs Newman against it. `npm run postman -- --mode hmac` runs one mode, and `npm run postman -- --url https://your-app.fly.dev --mode none` runs against a deployed instance.
 - `.github/workflows/newman.yml` runs `npm test` and then a Newman matrix over all seven auth modes (SQLite + local files) on every push.
 - The collection is generated by `scripts/build-postman.js`. Edit that file and run `npm run postman:build`.

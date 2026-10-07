@@ -349,6 +349,54 @@ async function generateOpenApi(ctx, req) {
   };
 
   // ---- OAuth (token endpoint used by oauth2 / jwt clients)
+  // ---- Server-Sent Events (only while SSE is enabled)
+  if (settings.get('sseEnabled')) {
+    const sseText = { 'text/event-stream': { schema: { type: 'string', description: 'A stream of Server-Sent Events (id, event, data lines). data is JSON unless noted.' } } };
+    const sseChaos = [
+      { name: 'dropAfter', in: 'query', required: false, description: 'Cut the connection after this many events (test reconnect + Last-Event-ID)', schema: { type: 'integer', minimum: 1 } },
+      { name: 'malformedAt', in: 'query', required: false, description: 'Send event N as a broken frame', schema: { type: 'integer', minimum: 1 } },
+      { name: 'skipIds', in: 'query', required: false, description: 'Make event ids jump (test gap handling)', schema: { type: 'boolean' } },
+    ];
+    const lastId = [
+      { name: 'Last-Event-ID', in: 'header', required: false, description: 'Resume after this id (EventSource sends it on reconnect)', schema: { type: 'string' } },
+      { name: 'lastEventId', in: 'query', required: false, description: 'Same as the Last-Event-ID header', schema: { type: 'integer', minimum: 0 } },
+    ];
+    const tokenQ = ['bearer', 'jwt', 'oauth2'].includes(mode) ? [{ name: 'access_token', in: 'query', required: false, description: 'Token in the query string, for EventSource clients that cannot set headers', schema: { type: 'string' } }] : [];
+    paths['/sse/changes'] = {
+      get: {
+        tags: ['Streaming'], operationId: 'streamChanges', summary: 'Live change feed (created / updated / deleted) for the mock data',
+        description: 'Starts with `event: subscribed`, then one event per change made through any protocol (/v1, /soap, the back office). `event` is the change type, `id` increases; reconnecting with Last-Event-ID replays missed events from a buffer (`event: reset` when the id is too old). Comment heartbeats keep the stream open.',
+        security: sec('get'),
+        parameters: [{ name: 'resource', in: 'query', required: false, description: 'Comma list: employees, products, departments, categories', schema: { type: 'string' } }, ...lastId, ...sseChaos, ...tokenQ, ...common],
+        responses: { 200: { description: 'Event stream', content: sseText }, ...errs([400, 401, 403, 429, 500]) },
+      },
+    };
+    paths['/sse/ticks'] = {
+      get: {
+        tags: ['Streaming'], operationId: 'streamTicks', summary: 'Numbered synthetic events',
+        description: 'Sends `{"n": 1, "time": "…"}`, `{"n": 2, …}` every `interval` ms; with `count` it ends with `event: end`. Resumes after Last-Event-ID.',
+        security: sec('get'),
+        parameters: [
+          { name: 'interval', in: 'query', required: false, schema: { type: 'integer', minimum: 50, maximum: 60000, default: settings.get('sseTickIntervalMs') } },
+          { name: 'count', in: 'query', required: false, description: '0 = until the client disconnects', schema: { type: 'integer', minimum: 0, default: 0 } },
+          { name: 'event', in: 'query', required: false, schema: { type: 'string', default: 'tick' } },
+          ...lastId, ...sseChaos, ...tokenQ, ...common,
+        ],
+        responses: { 200: { description: 'Event stream', content: sseText }, ...errs([400, 401, 403, 429, 500]) },
+      },
+    };
+    paths['/sse/stream'] = {
+      post: {
+        tags: ['Streaming'], operationId: 'streamCompletion', summary: 'Request with a streamed answer (LLM-style token streaming)',
+        description: 'Answers with one event per word. `format: "events"` sends `event: message` `{"index", "delta"}` and a final `event: done`; `format: "openai"` sends chat.completion.chunk objects and `data: [DONE]`.',
+        security: sec('post'),
+        parameters: [...sseChaos, ...common],
+        requestBody: { required: false, content: { 'application/json': { schema: { type: 'object', properties: { prompt: { type: 'string' }, words: { type: 'integer', minimum: 1, maximum: 5000, default: 40 }, delayMs: { type: 'integer', minimum: 0, maximum: 5000, default: 40 }, format: { type: 'string', enum: ['events', 'openai'], default: 'events' } } }, example: { prompt: 'Who works in R&D?', words: 30, delayMs: 20 } } } },
+        responses: { 200: { description: 'Event stream', content: sseText }, ...errs([400, 401, 403, 422, 429, 500]) },
+      },
+    };
+  }
+
   paths['/oauth/token'] = {
     post: {
       tags: ['OAuth'], operationId: 'oauthToken', summary: 'Token endpoint (client_credentials, authorization_code + PKCE, refresh_token)', security: [],
@@ -373,7 +421,8 @@ async function generateOpenApi(ctx, req) {
       summary: 'Realistic mock target for integration testing (pagination, errors, files, auth, headers).',
       description: [
         '**For integrations and API clients.** Import this into your integration platform, Postman or a code generator to call the mock',
-        'data API: employees, products, departments, categories, the seven pagination schemes, the file pool and the OAuth token endpoint.',
+        'data API: employees, products, departments, categories, the seven pagination schemes, the file pool, the Server-Sent Events streams and the OAuth token endpoint.',
+        `SOAP is described by WSDLs (\`${base}/soap/EmployeeService?wsdl\`) and WebSockets by AsyncAPI (\`${base}/ws/asyncapi.json\`).`,
         '',
         'Tool administration (settings, seeding, the inspector, the contract tester) and the health probes are not part of this document.',
         `They are described by the admin spec at \`${base}/admin/api/openapi.json\` (requires the dashboard password).`,
@@ -393,6 +442,7 @@ async function generateOpenApi(ctx, req) {
       { name: 'Employees' }, { name: 'Products' }, { name: 'Departments' }, { name: 'Categories' },
       { name: 'Pagination', description: 'Seven pagination schemes, each on its own path' },
       { name: 'Files', description: 'Shared file pool with multiple transfer protocols' },
+      { name: 'Streaming', description: 'Server-Sent Events: change feed, ticks and request/stream' },
       { name: 'OAuth', description: 'Token endpoint for the oauth2 and jwt auth modes' },
     ],
     paths,

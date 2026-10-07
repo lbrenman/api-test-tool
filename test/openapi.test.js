@@ -26,7 +26,7 @@ function declaredAdminRoutes() {
   return out;
 }
 
-test('data spec covers /v1 and OAuth only; admin and health live in the admin spec', async () => {
+test('data spec covers /v1, SSE and OAuth only; admin and health live in the admin spec', async () => {
   const t = await makeApp({ SEED_SAMPLE_FILES: 'false' });
   try {
     const data = (await request(t.app).get('/openapi.json').expect(200)).body;
@@ -34,7 +34,9 @@ test('data spec covers /v1 and OAuth only; admin and health live in the admin sp
     const dataPaths = Object.keys(data.paths);
     assert.ok(dataPaths.includes('/v1/employees'));
     assert.ok(dataPaths.includes('/oauth/token'));
-    assert.ok(dataPaths.every((p) => p.startsWith('/v1/') || p.startsWith('/oauth/')), `unexpected data paths: ${dataPaths.filter((p) => !p.startsWith('/v1/') && !p.startsWith('/oauth/'))}`);
+    const dataPath = (p) => p.startsWith('/v1/') || p.startsWith('/oauth/') || p.startsWith('/sse/');
+    assert.ok(dataPaths.every(dataPath), `unexpected data paths: ${dataPaths.filter((p) => !dataPath(p))}`);
+    assert.ok(dataPaths.includes('/sse/changes'));
     assert.match(data.info.title, /Mock Data API/);
     assert.match(data.info.description, /\/admin\/api\/openapi\.json/);
 

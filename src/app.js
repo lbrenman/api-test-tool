@@ -34,6 +34,7 @@ const filesRouter = require('./routes/files');
 const adminRouter = require('./routes/admin');
 const soapRouter = require('./protocols/soap/router');
 const wsRouter = require('./protocols/ws/router');
+const sseRouter = require('./protocols/sse/router');
 
 const LEVELS = { debug: 10, info: 20, warn: 30, error: 40 };
 
@@ -148,6 +149,8 @@ async function createApp(opts = {}) {
   app.use('/soap', soapRouter(ctx));
   // Mock WebSocket channels; upgrades arrive through handleUpgrade() below.
   app.use('/ws', wsRouter(ctx));
+  // Server-Sent Events streams (change feed with replay, ticks, request/stream).
+  app.use('/sse', sseRouter(ctx));
 
   // Everything else: the inspector
   app.use(catchAll(ctx));

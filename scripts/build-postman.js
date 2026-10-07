@@ -48,7 +48,7 @@ const collectionPreBody = [
   "if (skip) pm.request.headers.remove('X-Skip-Auth');",
   "const resolved = new sdk.Url(pm.variables.replaceIn(pm.request.url.toString()));",
   "const p = resolved.getPath();",
-  "const isApi = (p.indexOf('/v1/') === 0 && p.indexOf('/v1/files/presigned/') !== 0) || (p.indexOf('/soap/') === 0 && pm.request.method === 'POST');",
+  "const isApi = (p.indexOf('/v1/') === 0 && p.indexOf('/v1/files/presigned/') !== 0) || (p.indexOf('/soap/') === 0 && pm.request.method === 'POST') || p.indexOf('/sse/') === 0;",
   "if (!isApi || skip || mode === 'none') return;",
   "const set = (k, v) => pm.request.headers.upsert({ key: k, value: v });",
   "if (mode === 'apikey') {",
@@ -91,7 +91,7 @@ const collectionPreBody = [
 ];
 // The sandbox does not allow top-level return, so the body runs inside a function.
 const collectionPre = [
-  '// Applies the auth mode in {{authMode}} to /v1 requests and SOAP POSTs. Requests with header X-Skip-Auth: 1 go out unauthenticated.',
+  '// Applies the auth mode in {{authMode}} to /v1 requests, SOAP POSTs and SSE streams. Requests with header X-Skip-Auth: 1 go out unauthenticated.',
   '(function applyAuth() {',
   ...collectionPreBody.map((l) => `  ${l}`),
   '})();',
@@ -274,6 +274,16 @@ const soapFolder = folder('SOAP', [
   req('X-Force-Error: 503 → fault with the real status', 'POST', '/soap/EmployeeService', { ...soap11(EMP_NS, 'GetEmployee', '<tns:id>1</tns:id>', { 'X-Force-Error': '503' }), tests: [status(503), has('Server fault', '<faultcode>soap:Server</faultcode>'), "pm.test('X-Chaos-Injected', () => pm.expect(pm.response.headers.get('X-Chaos-Injected')).to.eql('503'));"] }),
 ]);
 
+const sseCount = (event, n) => `pm.test('${n} × event: ${event}', () => pm.expect((pm.response.text().match(/^event: ${event}$/gm) || []).length).to.eql(${n}));`;
+const sseFolder = folder('Server-Sent Events', [
+  req('List streams', 'GET', '/sse', { tests: [status(200), "pm.test('three streams', () => pm.expect(pm.response.json().streams.length).to.eql(3));"] }),
+  req('Ticks: three events then end', 'GET', '/sse/ticks?interval=100&count=3', { tests: [status(200), ctype('text/event-stream'), sseCount('tick', 3), sseCount('end', 1), has('retry line', 'retry: '), has('ids', 'id: 3')] }),
+  req('Ticks resume after Last-Event-ID', 'GET', '/sse/ticks?interval=50&count=4', { headers: { 'Last-Event-ID': '2' }, tests: [status(200), sseCount('tick', 2), has('starts at 3', 'id: 3')] }),
+  req('Stream (event format)', 'POST', '/sse/stream', { headers: { 'Content-Type': 'application/json' }, body: json({ prompt: 'Who is on the team?', words: 8, delayMs: 10 }), tests: [status(200), ctype('text/event-stream'), sseCount('message', 8), sseCount('done', 1)] }),
+  req('Stream (OpenAI chunk format)', 'POST', '/sse/stream', { headers: { 'Content-Type': 'application/json' }, body: json({ words: 5, delayMs: 10, format: 'openai' }), tests: [status(200), has('chunk objects', 'chat.completion.chunk'), has('terminator', 'data: [DONE]')] }),
+  req('Unknown resource → 400 before the stream starts', 'GET', '/sse/changes?resource=widgets', { tests: problem(400) }),
+]);
+
 const misc = folder('Headers & inspector', [
   req('Request id echo', 'GET', '/v1/employees/1', { headers: { 'X-Request-Id': 'postman-req-1', 'X-Correlation-Id': 'postman-corr-1' }, tests: [status(200), "pm.test('echoed', () => { pm.expect(pm.response.headers.get('X-Request-Id')).to.eql('postman-req-1'); pm.expect(pm.response.headers.get('X-Correlation-Id')).to.eql('postman-corr-1'); });"] }),
   req('Inspector catch-all', 'POST', '/hooks/postman?source=newman', { headers: { 'Content-Type': 'application/json' }, body: json({ event: 'order.created', id: 42 }), tests: [status(200), "pm.test('captured with actual path', () => { pm.expect(pm.response.json().status).to.eql('captured'); pm.expect(pm.response.json().path).to.eql('/hooks/postman'); });"] }),
@@ -291,7 +301,7 @@ const collection = {
     { listen: 'test', script: { type: 'text/javascript', exec: collectionTest } },
   ],
   variable: [{ key: 'cachedToken', value: '' }, { key: 'cachedTokenExp', value: '0' }],
-  item: [platform, oauth, authFolder, crud, query, pagination, chaos, files, soapFolder, misc],
+  item: [platform, oauth, authFolder, crud, query, pagination, chaos, files, soapFolder, sseFolder, misc],
 };
 
 const environment = {
