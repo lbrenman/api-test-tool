@@ -1,6 +1,6 @@
 # Multi-protocol support — design
 
-Status: **proposed** (step 1 implemented on branch `feat/protocol-error-renderers`)
+Status: **in progress** — step 1 merged; step 2a (SOAP mock) on branch `feat/soap-mock`
 Date: 2026-10-07
 
 ## Goal
@@ -27,7 +27,7 @@ Add these without turning the codebase into five parallel apps.
    for OData, SDL for GraphQL, AsyncAPI for WebSocket. No forcing everything into OpenAPI.
 5. **Tester = core + adapters.** Proxying, auth profiles, variables/ID chaining, run history and
    reports are shared; parsing, sample generation and validation are per contract type.
-6. **Each protocol can be switched off** (`PROTOCOLS_ENABLED`), and costs nothing when off.
+6. **Each protocol can be switched off** (`SOAP_ENABLED`, later `GRAPHQL_ENABLED`, …), and costs nothing when off.
 
 ## Architecture
 
@@ -177,8 +177,8 @@ The existing OpenAPI code moves into `adapters/openapi` with no behaviour change
 - **Inspector:** reserved-path list gains the new prefixes; `INSPECTOR_LOG_ALL` covers them; detail
   pane pretty-prints XML, shows `SOAPAction`/SOAP version, GraphQL `operationName`, OData system
   query options.
-- **Settings** (DEFS + `.env.example` + README env table): `PROTOCOLS_ENABLED`, `SOAP_WSSE`,
-  `SOAP_DEFAULT_VERSION`, `SSE_TICK_INTERVAL_MS`, `SSE_HEARTBEAT_MS`, `SSE_REPLAY_BUFFER`,
+- **Settings** (DEFS + `.env.example` + README env table): one `<PROTOCOL>_ENABLED` flag per protocol
+  (`SOAP_ENABLED`, …), `SOAP_WSSE`, `SOAP_ACTION_CHECK`, `SSE_TICK_INTERVAL_MS`, `SSE_HEARTBEAT_MS`, `SSE_REPLAY_BUFFER`,
   `GRAPHQL_INTROSPECTION`, `GRAPHQL_MAX_DEPTH`, `ODATA_MAX_PAGE_SIZE`, `WS_MAX_MESSAGE_KB`.
 - **Contracts list:** `/health` and the Overview page list every live contract URL. The data and
   admin OpenAPI specs stay separate and non-overlapping.
@@ -196,14 +196,27 @@ Each step is its own branch, green CI before merge.
 | # | Step | Why this order |
 |---|---|---|
 | 1 | Error-renderer registry + shared `protocolStack` (no behaviour change) | foundation for everything else |
-| 2 | SOAP mock + WSDL tester adapter (incl. tester core/adapter split) | covers SOAP in both directions; forces the adapter seam early |
+| 2a | SOAP mock (`/soap`, WSDL, faults, WS-Security, SOAPAction check, Protocols page) | the platform *calls* SOAP |
+| 2b | Tester core/adapter split + WSDL tester adapter | the platform *exposes* SOAP; forces the adapter seam early |
 | 3 | WebSocket tester adapter + `/ws/echo` | completes everything the platform *exposes* |
 | 4 | SSE mock (change feed + POST streaming) | small; change feed is reused by step 3's `/ws/changes` |
 | 5 | GraphQL mock | |
 | 6 | OData v4 mock (+ v2) | largest parser surface; last |
 
-## Open questions
+## Open questions (and the defaults used until answered)
 
-- OData v2 needed now, or v4 only?
-- SOAP 1.2 needed for exposed services, or 1.1 only?
-- Any WebSocket subprotocols in use (e.g. `graphql-transport-ws`, STOMP) worth first-class support?
+| Question | Default |
+|---|---|
+| OData v2 needed, or v4 only? | Build v4 first; keep the envelope code separate so v2 can be added. |
+| SOAP 1.2 needed for exposed services, or 1.1 only? | Support both; the version is detected per request. |
+| WebSocket subprotocols in use (STOMP, `graphql-transport-ws`, …)? | Generic JSON/text frames, any subprotocol name passed through on the handshake; presets later if needed. |
+
+## Implementation notes
+
+- **XML parsing:** `saxes` (already in the lockfile via `exceljs`, now a direct dependency) behind a
+  tiny DOM in `src/protocols/soap/xml.js`. DOCTYPE is rejected, so no entity expansion or XXE.
+- **One field table per entity** (`src/protocols/soap/model.js`) generates the XSD, the XML output and
+  the XML input parsing, so the three cannot drift. The generated XSD was checked with libxml2: the
+  WSDL schemas compile and sample responses validate.
+- **SOAP faults** distinguish transport-level errors (before the envelope is read: keep the real
+  HTTP status) from envelope-level errors (SOAP binding rules), see `renderer.js`.

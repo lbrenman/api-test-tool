@@ -61,7 +61,7 @@ module.exports = function adminRouter(ctx, { adminAuth, filesApi }) {
     res.json({
       version: pkg.version,
       baseUrl: base,
-      urls: { api: `${base}/v1`, docs: `${base}/docs`, openapi: `${base}/openapi.json`, adminOpenapi: `${base}/admin/api/openapi.json`, app: `${base}/app/`, health: `${base}/health`, inspector: `${base}/<any-other-path>`, token: `${base}/oauth/token` },
+      urls: { api: `${base}/v1`, docs: `${base}/docs`, openapi: `${base}/openapi.json`, adminOpenapi: `${base}/admin/api/openapi.json`, app: `${base}/app/`, health: `${base}/health`, inspector: `${base}/<any-other-path>`, token: `${base}/oauth/token`, ...(settings.get('soapEnabled') ? { soap: `${base}/soap`, soapWsdl: `${base}/soap/EmployeeService?wsdl` } : {}) },
       authMode: mode,
       dateFormat: settings.get('dateFormat'),
       chaos: { errorRate: settings.get('errorRate'), errorTypes: settings.get('errorTypes'), latency: [settings.get('latencyMinMs'), settings.get('latencyMaxMs')] },

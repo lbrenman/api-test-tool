@@ -45,6 +45,17 @@ test('curl examples carry the credentials of the active auth mode', () => {
   assert.doesNotMatch(makeCurl({ ...BASE_CTX, mode: 'bearer' }).curl('POST', '/hooks/x', { json: { a: 1 } }), /Authorization/);
 });
 
+test('SOAP requests carry credentials; the WSDL and service list do not', () => {
+  const C = makeCurl({ ...BASE_CTX, mode: 'bearer' });
+  assert.match(C.curl('POST', '/soap/EmployeeService', { body: '<x/>', contentType: 'text/xml' }), /Authorization: Bearer demo-token/);
+  assert.doesNotMatch(C.curl('GET', '/soap/EmployeeService?wsdl'), /Authorization/);
+  assert.doesNotMatch(C.curl('GET', '/soap/ProductService.wsdl'), /Authorization/);
+  assert.doesNotMatch(C.curl('GET', '/soap'), /Authorization/);
+  const g = build(makeCurl({ ...BASE_CTX, mode: 'basic' }), {});
+  for (const id of ['protocols.soap', 'protocols.soap-settings', 'protocols.soap-try']) assert.ok(g[id], `guide ${id}`);
+  assert.match(g['protocols.soap'].curls.find(([l]) => /GetEmployee/.test(l))[1], /-u 'demo:demo'[\s\S]*SOAPAction/);
+});
+
 test('required request headers are added to /v1 calls only', () => {
   const C = makeCurl({ ...BASE_CTX, mode: 'none', required: [{ name: 'X-Tenant' }, { name: 'X-Env', value: 'demo' }] });
   const cmd = C.curl('GET', '/v1/products');

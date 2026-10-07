@@ -11,7 +11,7 @@
       "script": {
         "type": "text/javascript",
         "exec": [
-          "// Applies the auth mode in {{authMode}} to /v1 requests. Requests with header X-Skip-Auth: 1 go out unauthenticated.",
+          "// Applies the auth mode in {{authMode}} to /v1 requests and SOAP POSTs. Requests with header X-Skip-Auth: 1 go out unauthenticated.",
           "(function applyAuth() {",
           "  const sdk = require('postman-collection');",
           "  const CryptoJS = require('crypto-js');",
@@ -20,7 +20,7 @@
           "  if (skip) pm.request.headers.remove('X-Skip-Auth');",
           "  const resolved = new sdk.Url(pm.variables.replaceIn(pm.request.url.toString()));",
           "  const p = resolved.getPath();",
-          "  const isApi = p.indexOf('/v1/') === 0 && p.indexOf('/v1/files/presigned/') !== 0;",
+          "  const isApi = (p.indexOf('/v1/') === 0 && p.indexOf('/v1/files/presigned/') !== 0) || (p.indexOf('/soap/') === 0 && pm.request.method === 'POST');",
           "  if (!isApi || skip || mode === 'none') return;",
           "  const set = (k, v) => pm.request.headers.upsert({ key: k, value: v });",
           "  if (mode === 'apikey') {",
@@ -2988,11 +2988,519 @@
       ]
     },
     {
-      "id": "att-002a",
-      "name": "Headers & inspector",
+      "id": "att-002k",
+      "name": "SOAP",
       "item": [
         {
           "id": "att-0028",
+          "name": "List services",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/soap",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "soap"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('two services', () => pm.expect(pm.response.json().services.map((s) => s.name)).to.eql(['EmployeeService', 'ProductService']));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "att-0029",
+          "name": "EmployeeService WSDL (always open)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/soap/EmployeeService?wsdl",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "soap",
+                "EmployeeService"
+              ],
+              "query": [
+                {
+                  "key": "wsdl",
+                  "value": ""
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Content-Type text/xml', () => pm.expect(pm.response.headers.get('Content-Type')).to.include('text/xml'));",
+                  "pm.test(\"WSDL\", () => pm.expect(pm.response.text()).to.include(\"<wsdl:definitions\"));",
+                  "pm.test(\"SOAP 1.2 binding\", () => pm.expect(pm.response.text()).to.include(\"EmployeeServiceSoap12\"));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "att-002a",
+          "name": "GetEmployee (SOAP 1.1)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "text/xml; charset=utf-8"
+              },
+              {
+                "key": "SOAPAction",
+                "value": "\"urn:api-test-tool:soap:EmployeeService/GetEmployee\""
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/soap/EmployeeService",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "soap",
+                "EmployeeService"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:tns=\"urn:api-test-tool:soap:EmployeeService\"><soapenv:Body><tns:GetEmployee><tns:id>1</tns:id></tns:GetEmployee></soapenv:Body></soapenv:Envelope>"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Content-Type text/xml', () => pm.expect(pm.response.headers.get('Content-Type')).to.include('text/xml'));",
+                  "pm.test(\"employee 1\", () => pm.expect(pm.response.text()).to.include(\"<tns:id>1</tns:id>\"));",
+                  "pm.test('operation header', () => pm.expect(pm.response.headers.get('X-Soap-Operation')).to.eql('GetEmployee'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "att-002b",
+          "name": "ListProducts page 2 (SOAP 1.2)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/soap+xml; charset=utf-8; action=\"urn:api-test-tool:soap:ProductService/ListProducts\""
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/soap/ProductService",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "soap",
+                "ProductService"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "<soapenv:Envelope xmlns:soapenv=\"http://www.w3.org/2003/05/soap-envelope\" xmlns:tns=\"urn:api-test-tool:soap:ProductService\"><soapenv:Body><tns:ListProducts><tns:page>2</tns:page><tns:pageSize>5</tns:pageSize></tns:ListProducts></soapenv:Body></soapenv:Envelope>"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Content-Type application/soap+xml', () => pm.expect(pm.response.headers.get('Content-Type')).to.include('application/soap+xml'));",
+                  "pm.test(\"page 2\", () => pm.expect(pm.response.text()).to.include(\"<tns:page>2</tns:page>\"));",
+                  "pm.test('five products', () => pm.expect((pm.response.text().match(/<tns:product>/g) || []).length).to.eql(5));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "att-002c",
+          "name": "CreateEmployee",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "text/xml; charset=utf-8"
+              },
+              {
+                "key": "SOAPAction",
+                "value": "\"urn:api-test-tool:soap:EmployeeService/CreateEmployee\""
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/soap/EmployeeService",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "soap",
+                "EmployeeService"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:tns=\"urn:api-test-tool:soap:EmployeeService\"><soapenv:Body><tns:CreateEmployee><tns:employee><tns:firstName>Soap</tns:firstName><tns:lastName>Client</tns:lastName><tns:email>soap.client@example.com</tns:email><tns:departmentId>1</tns:departmentId></tns:employee></tns:CreateEmployee></soapenv:Body></soapenv:Envelope>"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "const m = pm.response.text().match(/<tns:employee><tns:id>(\\d+)<\\/tns:id>/); pm.test('new id', () => pm.expect(m).to.not.eql(null)); if (m) pm.environment.set('soapEmpId', m[1]);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "att-002d",
+          "name": "UpdateEmployee",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "text/xml; charset=utf-8"
+              },
+              {
+                "key": "SOAPAction",
+                "value": "\"urn:api-test-tool:soap:EmployeeService/UpdateEmployee\""
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/soap/EmployeeService",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "soap",
+                "EmployeeService"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:tns=\"urn:api-test-tool:soap:EmployeeService\"><soapenv:Body><tns:UpdateEmployee><tns:id>{{soapEmpId}}</tns:id><tns:employee><tns:title>Integration tester</tns:title></tns:employee></tns:UpdateEmployee></soapenv:Body></soapenv:Envelope>"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test(\"title changed\", () => pm.expect(pm.response.text()).to.include(\"<tns:title>Integration tester</tns:title>\"));",
+                  "pm.test(\"rest kept\", () => pm.expect(pm.response.text()).to.include(\"<tns:firstName>Soap</tns:firstName>\"));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "att-002e",
+          "name": "DeleteEmployee",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "text/xml; charset=utf-8"
+              },
+              {
+                "key": "SOAPAction",
+                "value": "\"urn:api-test-tool:soap:EmployeeService/DeleteEmployee\""
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/soap/EmployeeService",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "soap",
+                "EmployeeService"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:tns=\"urn:api-test-tool:soap:EmployeeService\"><soapenv:Body><tns:DeleteEmployee><tns:id>{{soapEmpId}}</tns:id></tns:DeleteEmployee></soapenv:Body></soapenv:Envelope>"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test(\"deleted\", () => pm.expect(pm.response.text()).to.include(\"<tns:deleted>true</tns:deleted>\"));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "att-002f",
+          "name": "Not found → SOAP 1.1 Client fault (HTTP 500)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "text/xml; charset=utf-8"
+              },
+              {
+                "key": "SOAPAction",
+                "value": "\"urn:api-test-tool:soap:EmployeeService/GetEmployee\""
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/soap/EmployeeService",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "soap",
+                "EmployeeService"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:tns=\"urn:api-test-tool:soap:EmployeeService\"><soapenv:Body><tns:GetEmployee><tns:id>{{soapEmpId}}</tns:id></tns:GetEmployee></soapenv:Body></soapenv:Envelope>"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 500', () => pm.response.to.have.status(500));",
+                  "pm.test(\"Client fault\", () => pm.expect(pm.response.text()).to.include(\"<faultcode>soap:Client</faultcode>\"));",
+                  "pm.test(\"code\", () => pm.expect(pm.response.text()).to.include(\"<f:code>not-found</f:code>\"));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "att-002g",
+          "name": "Not found → SOAP 1.2 Sender fault (HTTP 400)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/soap+xml; charset=utf-8; action=\"urn:api-test-tool:soap:EmployeeService/GetEmployee\""
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/soap/EmployeeService",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "soap",
+                "EmployeeService"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "<soapenv:Envelope xmlns:soapenv=\"http://www.w3.org/2003/05/soap-envelope\" xmlns:tns=\"urn:api-test-tool:soap:EmployeeService\"><soapenv:Body><tns:GetEmployee><tns:id>{{soapEmpId}}</tns:id></tns:GetEmployee></soapenv:Body></soapenv:Envelope>"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 400', () => pm.response.to.have.status(400));",
+                  "pm.test(\"Sender\", () => pm.expect(pm.response.text()).to.include(\"<soap:Value>soap:Sender</soap:Value>\"));",
+                  "pm.test(\"subcode\", () => pm.expect(pm.response.text()).to.include(\"f:NotFound\"));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "att-002h",
+          "name": "Validation errors in the fault detail",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "text/xml; charset=utf-8"
+              },
+              {
+                "key": "SOAPAction",
+                "value": "\"urn:api-test-tool:soap:EmployeeService/CreateEmployee\""
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/soap/EmployeeService",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "soap",
+                "EmployeeService"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:tns=\"urn:api-test-tool:soap:EmployeeService\"><soapenv:Body><tns:CreateEmployee><tns:employee><tns:firstName>Only</tns:firstName></tns:employee></tns:CreateEmployee></soapenv:Body></soapenv:Envelope>"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 500', () => pm.response.to.have.status(500));",
+                  "pm.test(\"validation\", () => pm.expect(pm.response.text()).to.include(\"<f:code>validation-failed</f:code>\"));",
+                  "pm.test(\"field error\", () => pm.expect(pm.response.text()).to.include(\"field=\\\"email\\\"\"));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "att-002i",
+          "name": "Wrong SOAPAction → fault",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "text/xml; charset=utf-8"
+              },
+              {
+                "key": "SOAPAction",
+                "value": "\"urn:api-test-tool:soap:EmployeeService/DeleteEmployee\""
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/soap/EmployeeService",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "soap",
+                "EmployeeService"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:tns=\"urn:api-test-tool:soap:EmployeeService\"><soapenv:Body><tns:GetEmployee><tns:id>1</tns:id></tns:GetEmployee></soapenv:Body></soapenv:Envelope>"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 500', () => pm.response.to.have.status(500));",
+                  "pm.test(\"mismatch\", () => pm.expect(pm.response.text()).to.include(\"soap-action-mismatch\"));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "att-002j",
+          "name": "X-Force-Error: 503 → fault with the real status",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "text/xml; charset=utf-8"
+              },
+              {
+                "key": "SOAPAction",
+                "value": "\"urn:api-test-tool:soap:EmployeeService/GetEmployee\""
+              },
+              {
+                "key": "X-Force-Error",
+                "value": "503"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/soap/EmployeeService",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "soap",
+                "EmployeeService"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:tns=\"urn:api-test-tool:soap:EmployeeService\"><soapenv:Body><tns:GetEmployee><tns:id>1</tns:id></tns:GetEmployee></soapenv:Body></soapenv:Envelope>"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 503', () => pm.response.to.have.status(503));",
+                  "pm.test(\"Server fault\", () => pm.expect(pm.response.text()).to.include(\"<faultcode>soap:Server</faultcode>\"));",
+                  "pm.test('X-Chaos-Injected', () => pm.expect(pm.response.headers.get('X-Chaos-Injected')).to.eql('503'));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "att-002n",
+      "name": "Headers & inspector",
+      "item": [
+        {
+          "id": "att-002l",
           "name": "Request id echo",
           "request": {
             "method": "GET",
@@ -3032,7 +3540,7 @@
           ]
         },
         {
-          "id": "att-0029",
+          "id": "att-002m",
           "name": "Inspector catch-all",
           "request": {
             "method": "POST",

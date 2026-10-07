@@ -78,9 +78,14 @@ const DEFS = [
   { key: 'responseHeaders', env: 'RESPONSE_HEADERS', def: [], type: 'headerList', section: 'headers', desc: 'Name:Value;Name2:Value2' },
   { key: 'requiredHeaders', env: 'REQUIRED_HEADERS', def: [], type: 'requiredHeaders', section: 'headers', desc: 'Name,Name2=expected' },
 
+  // ---- soap ----
+  { key: 'soapEnabled', env: 'SOAP_ENABLED', def: true, type: 'bool', section: 'soap', desc: 'serve the mock SOAP services under /soap' },
+  { key: 'soapWsse', env: 'SOAP_WSSE', def: 'off', type: 'enum', options: ['off', 'optional', 'required'], section: 'soap', desc: 'WS-Security UsernameToken (BASIC_USER / BASIC_PASS; PasswordText or PasswordDigest). Independent of AUTH_MODE' },
+  { key: 'soapActionCheck', env: 'SOAP_ACTION_CHECK', def: 'lenient', type: 'enum', options: ['lenient', 'strict', 'off'], section: 'soap', desc: 'lenient: a wrong SOAPAction is a fault, a missing one is accepted; strict: it must be present and right; off: not checked' },
+
   // ---- inspector ----
   { key: 'inspectorRetention', env: 'INSPECTOR_RETENTION', def: 500, type: 'int', section: 'inspector', min: 1 },
-  { key: 'inspectorLogAll', env: 'INSPECTOR_LOG_ALL', def: true, type: 'bool', section: 'inspector', desc: 'also record /v1/* and /oauth/* calls (the dashboard, docs and health probes are never recorded)' },
+  { key: 'inspectorLogAll', env: 'INSPECTOR_LOG_ALL', def: true, type: 'bool', section: 'inspector', desc: 'also record /v1/*, /soap/* and /oauth/* calls (the dashboard, docs and health probes are never recorded)' },
   { key: 'inspectorResponseStatus', env: 'INSPECTOR_RESPONSE_STATUS', def: 200, type: 'int', section: 'inspector', min: 100, max: 599 },
   { key: 'inspectorResponseContentType', env: 'INSPECTOR_RESPONSE_CONTENT_TYPE', def: 'application/json', type: 'string', section: 'inspector' },
   { key: 'inspectorResponseBody', env: 'INSPECTOR_RESPONSE_BODY', def: '', type: 'string', section: 'inspector', desc: 'blank = JSON receipt with the capture id' },

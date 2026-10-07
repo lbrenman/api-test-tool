@@ -44,6 +44,7 @@ module.exports = function platformRouter(ctx, { adminAuth } = {}) {
         requiredHeaders: settings.get('requiredHeaders').map((h) => h.name),
         responseHeaders: settings.get('responseHeaders').map((h) => h.name),
         inspectorLogAll: settings.get('inspectorLogAll'),
+        soap: settings.get('soapEnabled') ? { wsse: settings.get('soapWsse'), soapActionCheck: settings.get('soapActionCheck') } : false,
         maxFileSizeMb: settings.get('maxFileSizeMb'),
         dashboardProtected: !!settings.get('adminPassword'),
       },

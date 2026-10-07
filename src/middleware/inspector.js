@@ -1,5 +1,5 @@
 'use strict';
-// Catch-all capture for every non-reserved path, plus capture of /v1/* and /oauth/* traffic (INSPECTOR_LOG_ALL).
+// Catch-all capture for every non-reserved path, plus capture of /v1/*, /soap/* and /oauth/* traffic (INSPECTOR_LOG_ALL).
 
 function readRaw(req, limit) {
   return new Promise((resolve, reject) => {
@@ -50,11 +50,12 @@ const MAX_RESPONSE_CAPTURE = 65536;
 // health probes are the tool's own plumbing and are never recorded.
 function apiKind(path) {
   if (path === '/v1' || path.startsWith('/v1/')) return 'v1';
+  if (path === '/soap' || path.startsWith('/soap/')) return 'soap';
   if (path.startsWith('/oauth/') || path.startsWith('/.well-known/')) return 'oauth';
   return null;
 }
 
-// Records /v1/* and /oauth/* calls. Mounted before every router and body parser, so requests that are
+// Records /v1/*, /soap/* and /oauth/* calls. Mounted before every router and body parser, so requests that are
 // rejected early (malformed body, missing headers, auth, rate limit, chaos) are recorded too. The entry is
 // written once the response finishes, or when the connection closes early (chaos drop/timeout, client abort).
 function logAll(ctx) {

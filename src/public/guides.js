@@ -12,7 +12,8 @@
   const EMPTY_SHA256 = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855';
   // Single-quote for POSIX shells (bash, zsh). zsh treats an unquoted "?" in a URL as a glob.
   const q = (s) => `'${String(s).replace(/'/g, "'\\''")}'`;
-  const isApiPath = (p) => p === '/v1' || p.startsWith('/v1/') || p.startsWith('/v1?');
+  // Paths that take API credentials: the /v1 mock API and SOAP requests (the WSDL and /soap listing are open).
+  const isApiPath = (p) => p === '/v1' || p.startsWith('/v1/') || p.startsWith('/v1?') || (p.startsWith('/soap/') && !/[?.]wsdl$/i.test(p));
 
   /**
    * ctx: {
@@ -33,7 +34,7 @@
     };
 
     /**
-     * Call this server. Auth and required headers are added automatically for /v1 paths.
+     * Call this server. Auth and required headers are added automatically for /v1 paths and SOAP requests.
      * o: { json, body, contentType, headers, form: [...-F values], file (path for --data-binary @),
      *      include, head, output, unsigned (HMAC: streamed upload), noAuth, extra: [flags] }
      */
@@ -131,6 +132,10 @@
     const fileId = extra.fileId || 'FILE_ID';
     const specId = extra.specId || 'SPEC_ID';
     const pw = C.ctx.adminPasswordRequired ? ['Admin API calls use the dashboard password: run `export ADMIN_PASSWORD=…` first.'] : [];
+    const EMP_NS = 'urn:api-test-tool:soap:EmployeeService';
+    const PROD_NS = 'urn:api-test-tool:soap:ProductService';
+    const WSSE_NS = 'http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-secext-1.0.xsd';
+    const soapEnv = (version, ns, body, hdr = '') => `<soapenv:Envelope xmlns:soapenv="${version === '1.2' ? 'http://www.w3.org/2003/05/soap-envelope' : 'http://schemas.xmlsoap.org/soap/envelope/'}" xmlns:tns="${ns}">${hdr ? `<soapenv:Header>${hdr}</soapenv:Header>` : ''}<soapenv:Body>${body}</soapenv:Body></soapenv:Envelope>`;
 
     return {
       // ------------------------------------------------------------ overview
@@ -480,6 +485,82 @@
           ['Require X-Tenant', admin('PUT', '/settings', { json: { requiredHeaders: [{ name: 'X-Tenant' }] } })],
           ['A call that includes the required headers', curl('GET', '/v1/employees?limit=1', { include: true })],
           ['A call without them (expect 400 when any are required)', makeCurl({ ...C.ctx, required: [] }).curl('GET', '/v1/employees?limit=1', { include: true })],
+        ],
+      },
+
+      // ------------------------------------------------------------ protocols: SOAP
+      'protocols.soap': {
+        title: 'SOAP services',
+        purpose: 'SOAP 1.1 and 1.2 services over the same mock data as /v1, for integrations that call SOAP. Each service has a live WSDL; auth, chaos, rate limits and required headers work exactly as on /v1, but errors come back as SOAP faults.',
+        steps: [
+          `Import the WSDL into your integration or SOAP client: \`${B}/soap/EmployeeService?wsdl\` or \`${B}/soap/ProductService?wsdl\`. The WSDL is always open.`,
+          'Send `text/xml` with a `SOAPAction` header for SOAP 1.1, or `application/soap+xml; action="…"` for SOAP 1.2. The version of the reply follows the request.',
+          `Requests use the active auth mode (${C.authLabel}) and any required headers, the same as /v1.`,
+          'Faults: SOAP 1.1 faults are HTTP 500 and SOAP 1.2 Sender faults are HTTP 400. Errors before the envelope is read (401, 429, injected chaos statuses) keep their real HTTP status. Every fault carries an `f:faultDetail` with status, code, requestId and field errors.',
+          'Use `X-Force-Error: 503` (or any chaos setting) to test fault handling. Every call shows up on the Inspector page.',
+        ],
+        curls: [
+          ['List the services', plain('GET', '/soap')],
+          ['Download the EmployeeService WSDL', plain('GET', '/soap/EmployeeService?wsdl', { output: 'EmployeeService.wsdl' })],
+          ['GetEmployee (SOAP 1.1)', curl('POST', '/soap/EmployeeService', {
+            body: soapEnv('1.1', EMP_NS, '<tns:GetEmployee><tns:id>1</tns:id></tns:GetEmployee>'),
+            contentType: 'text/xml; charset=utf-8', headers: { SOAPAction: `"${EMP_NS}/GetEmployee"` },
+          })],
+          ['ListProducts, page 2 of 5 (SOAP 1.2)', curl('POST', '/soap/ProductService', {
+            body: soapEnv('1.2', PROD_NS, '<tns:ListProducts><tns:page>2</tns:page><tns:pageSize>5</tns:pageSize></tns:ListProducts>'),
+            contentType: `application/soap+xml; charset=utf-8; action="${PROD_NS}/ListProducts"`,
+          })],
+          ['CreateDepartment is not an operation: see the fault', curl('POST', '/soap/EmployeeService', {
+            include: true,
+            body: soapEnv('1.1', EMP_NS, '<tns:CreateDepartment><tns:name>Ops</tns:name></tns:CreateDepartment>'),
+            contentType: 'text/xml; charset=utf-8',
+          })],
+          ['Force a 503 fault', curl('POST', '/soap/EmployeeService', {
+            include: true,
+            body: soapEnv('1.1', EMP_NS, '<tns:GetEmployee><tns:id>1</tns:id></tns:GetEmployee>'),
+            contentType: 'text/xml; charset=utf-8', headers: { SOAPAction: `"${EMP_NS}/GetEmployee"`, 'X-Force-Error': '503' },
+          })],
+        ],
+      },
+      'protocols.soap-settings': {
+        title: 'SOAP settings',
+        purpose: 'Turn the SOAP mock on or off, require WS-Security, and choose how strictly SOAPAction is checked.',
+        steps: [
+          '`soapWsse`: off ignores the wsse:Security header; optional checks it when present; required rejects requests without a valid UsernameToken. The username and password are BASIC_USER / BASIC_PASS; PasswordText and PasswordDigest both work.',
+          'WS-Security is separate from the auth mode: when both are set, a request needs both.',
+          '`soapActionCheck`: lenient faults on a wrong action but accepts a missing one; strict requires the right one; off ignores it.',
+          ...pw,
+        ],
+        curls: [
+          ['Require WS-Security', admin('PUT', '/settings', { json: { soapWsse: 'required' } })],
+          ['Call with a UsernameToken (PasswordText)', curl('POST', '/soap/EmployeeService', {
+            body: soapEnv('1.1', EMP_NS, '<tns:GetEmployee><tns:id>1</tns:id></tns:GetEmployee>',
+              `<wsse:Security xmlns:wsse="${WSSE_NS}"><wsse:UsernameToken><wsse:Username>${C.ctx.basic.user}</wsse:Username><wsse:Password>${C.ctx.basic.pass}</wsse:Password></wsse:UsernameToken></wsse:Security>`),
+            contentType: 'text/xml; charset=utf-8', headers: { SOAPAction: `"${EMP_NS}/GetEmployee"` },
+          })],
+          ['Strict SOAPAction checking', admin('PUT', '/settings', { json: { soapActionCheck: 'strict' } })],
+          ['Back to the defaults', admin('POST', '/settings/reset', { json: { section: 'soap' } })],
+        ],
+      },
+
+      'protocols.soap-try': {
+        title: 'Try a SOAP request',
+        purpose: 'Send one SOAP request from the browser and see the raw response or fault. The envelope is pre-filled for the chosen operation.',
+        steps: [
+          'Pick a service, an operation and the SOAP version; edit the envelope if you want (ids, fields, a deliberate mistake).',
+          'Credentials for the active auth mode and any required headers are added for you. Tick the WS-Security box when soapWsse is on.',
+          'Put a status or failure type in X-Force-Error to see how faults and broken responses look.',
+          'Use the copied response as a fixture, or compare it with what your integration received on the Inspector page.',
+        ],
+        curls: [
+          ['UpdateEmployee (SOAP 1.1)', curl('POST', '/soap/EmployeeService', {
+            body: soapEnv('1.1', EMP_NS, '<tns:UpdateEmployee><tns:id>1</tns:id><tns:employee><tns:title>Senior Analyst</tns:title></tns:employee></tns:UpdateEmployee>'),
+            contentType: 'text/xml; charset=utf-8', headers: { SOAPAction: `"${EMP_NS}/UpdateEmployee"` },
+          })],
+          ['A broken response to test parsing', curl('POST', '/soap/ProductService', {
+            body: soapEnv('1.2', PROD_NS, '<tns:GetProduct><tns:id>1</tns:id></tns:GetProduct>'),
+            contentType: `application/soap+xml; charset=utf-8; action="${PROD_NS}/GetProduct"`, headers: { 'X-Force-Error': 'truncated-body' },
+          })],
         ],
       },
 

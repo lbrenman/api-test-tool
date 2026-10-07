@@ -47,6 +47,7 @@ Ues Cases:
   - [Pagination](#pagination)
   - [Chaos: errors and latency](#chaos-errors-and-latency)
   - [Files](#files)
+  - [SOAP services](#soap-services)
   - [Inspector](#inspector)
   - [API tester walkthrough](#api-tester-walkthrough)
   - [Postman and Newman](#postman-and-newman)
@@ -111,11 +112,12 @@ Fly.io, Render and Northflank are covered in [Deployment](#deployment).
 | **Auth** | `none`, `apikey` (header or query), `basic`, `bearer`, `jwt` (HS256/RS256, JWKS), `oauth2` (scopes), `hmac` (signed requests). |
 | **OAuth 2.0 server** | client_credentials, authorization_code + PKCE (login/consent page), refresh_token (rotating), introspection (RFC 7662), revocation (RFC 7009), RFC 8414 metadata, JWKS. |
 | **Files** | One shared pool (local disk or S3-compatible) behind multipart, raw, base64-in-JSON, tus resumable, presigned URLs, range downloads (206) and chunked downloads. Sample CSV, XLSX, JSON, PNG, JPG, PDF, TXT, ZIP and a 10 MB binary are generated on seed. |
+| **SOAP** | Mock SOAP 1.1 and 1.2 services (`EmployeeService`, `ProductService`) over the same data, with live WSDLs (document/literal, a SOAP 1.1 and a 1.2 binding). Get, List (paging, filters, text search, sort), Create, Update, Delete. Auth mode, chaos, rate limits and required headers apply as on `/v1`; errors are SOAP faults with field-level detail. Optional WS-Security UsernameToken (PasswordText and PasswordDigest) and SOAPAction checking. |
 | **Inspector** | Catch-all capture with the actual path, live stream (SSE), detected auth (Basic user, decoded JWT, API keys), pretty bodies and multipart parts, copy as curl, replay, auto-forward, configurable responses and path rules. |
 | **Generated OpenAPI** | Two OAS 3.1 specs, regenerated from the live settings. **Mock Data API** (`/openapi.json`, `/openapi.yaml`) is for integrations: `/v1` resources, every pagination path, the file endpoints and the OAuth token endpoint, reflecting the server URL, date format, auth scheme, required headers and chaos headers. **Admin API** (`/admin/api/openapi.json`, `.yaml`, password protected) is for operators and scripts: settings, seeding, files, OAuth clients, inspector, tester, `/health` and `/ready`. Swagger UI at `/docs` shows both (`/docs?spec=admin` for the admin spec). |
 | **API tester** | Upload, paste or URL load for OAS 3.0, 3.1 and Swagger 2.0. Spec lint, per-operation "try it" with generated samples that honour `pattern`/`format`/`enum`/limits, auth profiles (none, API key, Basic, Bearer, OAuth2 client credentials), response validation, run-all contract mode with ID chaining and negative tests, run history, and JSON and HTML reports. "Mock from spec" serves a spec's examples from this tool. |
 | **Back office app** | `/app` is a business-style app over the mock data, for demos and non-technical viewers: KPIs (headcount, payroll, stock value, stock health), charts, searchable and sortable lists, record pages with related records, and forms to create, edit and delete employees, products, departments and categories. It reads and writes the same data as `/v1` but through its own backend (`/admin/api/app/*`), so the `/v1` auth mode, chaos, rate limits and required headers never break it. Uses the dashboard password. |
-| **Dashboard** | Overview, Settings (with source badges and resets), Data, Inspector, Files, Auth, Chaos, Headers, OpenAPI, API Tester, and About & Help (what each page does, quick starts, reserved paths, handy headers). Every page has a "? Help" link, and every main component has a **"?" guide** (hover, focus or tap) with numbered steps for using it in your integration or tests and copy-ready curl commands. The curls use the resolved base URL, the auth mode that is active right now (from `AUTH_MODE` or a dashboard override — the guides never change it), and any required request headers; in `jwt`/`oauth2` mode they fetch a token first, and in `hmac` mode they sign the request with `openssl`. The tester's **Try it → Request** tab adds "Copy as curl" for the exact call it sent. Responsive, with light and dark themes. |
+| **Dashboard** | Overview, Settings (with source badges and resets), Data, Inspector, Files, Auth, Chaos, Headers, Protocols (SOAP services, settings and a try-it panel), OpenAPI, API Tester, and About & Help (what each page does, quick starts, reserved paths, handy headers). Every page has a "? Help" link, and every main component has a **"?" guide** (hover, focus or tap) with numbered steps for using it in your integration or tests and copy-ready curl commands. The curls use the resolved base URL, the auth mode that is active right now (from `AUTH_MODE` or a dashboard override — the guides never change it), and any required request headers; in `jwt`/`oauth2` mode they fetch a token first, and in `hmac` mode they sign the request with `openssl`. The tester's **Try it → Request** tab adds "Copy as curl" for the exact call it sent. Responsive, with light and dark themes. |
 
 ---
 
@@ -168,9 +170,12 @@ Settings marked **restart** can only be set through the environment.
 | `CHAOS_ROUTE_OVERRIDES` | — | JSON, e.g. `[{"path":"/v1/products","errorRate":50,"errorTypes":"503,timeout"}]` |
 | `RATE_LIMIT_RPM` | `0` (off) | Per client IP + credential |
 | `RESPONSE_HEADERS` | — | `Name:Value;Name2:Value2`, added to every response |
-| `REQUIRED_HEADERS` | — | `Name,Name2=expected`. 400 on `/v1/*` when missing or wrong |
+| `REQUIRED_HEADERS` | — | `Name,Name2=expected`. 400 on `/v1/*` (a fault on `/soap`) when missing or wrong |
+| `SOAP_ENABLED` | `true` | Serve the mock SOAP services under `/soap` |
+| `SOAP_WSSE` | `off` | WS-Security UsernameToken: `off`, `optional` (checked when present) or `required`. Uses `BASIC_USER` / `BASIC_PASS`; independent of `AUTH_MODE` |
+| `SOAP_ACTION_CHECK` | `lenient` | `lenient` (a wrong SOAPAction is a fault, a missing one is fine), `strict` (must be present and right) or `off` |
 | `INSPECTOR_RETENTION` | `500` | Captures kept |
-| `INSPECTOR_LOG_ALL` | `true` | Also record `/v1/*` and `/oauth/*` calls (with their real responses). Toggle on the Inspector page. |
+| `INSPECTOR_LOG_ALL` | `true` | Also record `/v1/*`, `/soap/*` and `/oauth/*` calls (with their real responses). Toggle on the Inspector page. |
 | `INSPECTOR_RESPONSE_STATUS`, `…_CONTENT_TYPE`, `…_BODY`, `…_HEADERS`, `…_DELAY_MS` | `200`, `application/json`, receipt, —, `0` | Default catch-all response |
 | `INSPECTOR_RULES` | — | JSON path rules (first match wins) |
 | `INSPECTOR_FORWARD_ENABLED` / `INSPECTOR_FORWARD_URL` | `false` / — | Auto-forward captures |
@@ -181,7 +186,7 @@ Settings marked **restart** can only be set through the environment.
 
 ## Route map
 
-These prefixes are reserved: `/v1`, `/oauth`, `/.well-known`, `/admin`, `/dashboard`, `/app`, `/docs`, `/openapi.json`, `/openapi.yaml`, `/samples`, `/health`, `/ready`, and `GET /` (which redirects to the dashboard). **Every other path, and every method, is captured by the inspector.** Calls to `/v1` and `/oauth` are recorded there too (unless `INSPECTOR_LOG_ALL=false`); the dashboard, admin API, docs and health probes never are.
+These prefixes are reserved: `/v1`, `/soap`, `/oauth`, `/.well-known`, `/admin`, `/dashboard`, `/app`, `/docs`, `/openapi.json`, `/openapi.yaml`, `/samples`, `/health`, `/ready`, and `GET /` (which redirects to the dashboard). **Every other path, and every method, is captured by the inspector.** Calls to `/v1`, `/soap` and `/oauth` are recorded there too (unless `INSPECTOR_LOG_ALL=false`); the dashboard, admin API, docs and health probes never are.
 
 | Path | Purpose |
 |---|---|
@@ -194,6 +199,9 @@ These prefixes are reserved: `/v1`, `/oauth`, `/.well-known`, `/admin`, `/dashbo
 | `GET /v1/departments/{id}/employees`, `GET /v1/categories/{id}/products` | Nested collections |
 | `GET /v1/p/{scheme}/{resource}` | Pagination variants: `offset`, `page`, `cursor`, `keyset`, `link`, `hal`, `token` |
 | `/v1/files/…` | File protocols (see [Files](#files)) |
+| `GET /soap` | SOAP service list (JSON) |
+| `GET /soap/{Service}?wsdl` (or `/soap/{Service}.wsdl`) | WSDL for `EmployeeService` or `ProductService`; always open |
+| `POST /soap/{Service}` | SOAP 1.1 / 1.2 requests (see [SOAP services](#soap-services)) |
 | `/oauth/token`, `/oauth/authorize`, `/oauth/introspect`, `/oauth/revoke` | OAuth 2.0 server |
 | `/.well-known/oauth-authorization-server`, `/.well-known/openid-configuration`, `/.well-known/jwks.json` | Discovery and JWKS |
 | `/samples/*` | Bundled specs (handy for the tester's URL loader) |
@@ -426,6 +434,39 @@ curl -si -X PATCH "$LOC" -H 'Tus-Resumable: 1.0.0' -H 'Upload-Offset: 0' -H 'Con
 
 ---
 
+## SOAP services
+
+The same employees, products, departments and categories are also served as SOAP, for integrations that call SOAP services.
+
+| Service | Operations |
+|---|---|
+| `EmployeeService` | `GetEmployee`, `ListEmployees`, `CreateEmployee`, `UpdateEmployee`, `DeleteEmployee`, `GetDepartment`, `ListDepartments` |
+| `ProductService` | `GetProduct`, `ListProducts`, `CreateProduct`, `UpdateProduct`, `DeleteProduct`, `GetCategory`, `ListCategories` |
+
+- **WSDL:** `GET /soap/EmployeeService?wsdl` (WSDL 1.1, document/literal wrapped, one SOAP 1.1 and one SOAP 1.2 binding on the same address). The address follows `PUBLIC_BASE_URL`. The WSDL is always open, like `/openapi.json`.
+- **Versions:** send `text/xml` + a `SOAPAction` header for SOAP 1.1, or `application/soap+xml; action="…"` for SOAP 1.2. The reply uses the same version. The action for each operation is `urn:api-test-tool:soap:{Service}/{Operation}`.
+- **Data:** `ListEmployees`/`ListProducts` take `page` (from 1), `pageSize` (1–200, default 20), `q` (text search), `sort` (`-hireDate,lastName`) and equality filters (`departmentId`, `isActive`, `level` / `categoryId`, `inStock`, `currency`; a comma list in `level` or `currency` means "any of"). `Create*` uses the same validation as `POST /v1/…`; `Update*` changes only the elements you send. Money is `xsd:decimal` (`salary`, `price`), timestamps are `xsd:dateTime` in UTC (`DATE_FORMAT` applies to `/v1` only), and `xsi:nil="true"` sets a nullable field to null.
+- **Shared behaviour:** `AUTH_MODE` (HMAC signs the raw XML body), chaos (rates, per-route overrides and `X-Force-*` headers), `RATE_LIMIT_RPM` (one budget shared with `/v1`) and `REQUIRED_HEADERS` all apply to SOAP requests.
+- **Faults:** every error is a SOAP fault (`soap:Client`/`soap:Server` in 1.1, `soap:Sender`/`soap:Receiver` with a subcode such as `f:NotFound` in 1.2) carrying an `f:faultDetail` with `status`, `code`, `title`, `detail`, `requestId`, `timestamp` and field `errors`. Errors raised while processing the envelope follow the SOAP bindings: HTTP 500 for SOAP 1.1, 400 (Sender) or 500 (Receiver) for SOAP 1.2. Errors raised before the envelope is read keep their real HTTP status, so clients still see `401` + `WWW-Authenticate`, `429` + `Retry-After`, or an injected `503`. Also covered: `VersionMismatch` (envelope and Content-Type disagree), `MustUnderstand` (unknown header block marked `mustUnderstand`), wrong operation namespace, unknown operation, malformed XML (DOCTYPE is rejected).
+- **WS-Security:** `SOAP_WSSE=optional|required` checks a `wsse:UsernameToken` against `BASIC_USER` / `BASIC_PASS`, with `PasswordText` or `PasswordDigest` (Base64(SHA-1(nonce + created + password)), `wsu:Created` within `HMAC_MAX_SKEW_SECONDS`). Failures are `wsse:InvalidSecurity` / `wsse:FailedAuthentication` faults. It is independent of `AUTH_MODE`.
+- **SOAPAction:** `SOAP_ACTION_CHECK=lenient` (default) faults on a wrong action and accepts a missing one; `strict` requires it; `off` ignores it.
+
+```bash
+# SOAP 1.1
+curl -s "$B/soap/EmployeeService" -H 'Content-Type: text/xml; charset=utf-8' \
+  -H 'SOAPAction: "urn:api-test-tool:soap:EmployeeService/GetEmployee"' \
+  --data-binary '<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:tns="urn:api-test-tool:soap:EmployeeService"><soapenv:Body><tns:GetEmployee><tns:id>1</tns:id></tns:GetEmployee></soapenv:Body></soapenv:Envelope>'
+
+# SOAP 1.2, page 2 of five products
+curl -s "$B/soap/ProductService" \
+  -H 'Content-Type: application/soap+xml; charset=utf-8; action="urn:api-test-tool:soap:ProductService/ListProducts"' \
+  --data-binary '<soapenv:Envelope xmlns:soapenv="http://www.w3.org/2003/05/soap-envelope" xmlns:tns="urn:api-test-tool:soap:ProductService"><soapenv:Body><tns:ListProducts><tns:page>2</tns:page><tns:pageSize>5</tns:pageSize></tns:ListProducts></soapenv:Body></soapenv:Envelope>'
+```
+
+The dashboard's **Protocols** page lists the services and WSDLs, holds the SOAP settings, and has a try-it panel that sends a pre-filled envelope with the active credentials.
+
+---
+
 ## Inspector
 
 Send anything to any non-reserved path and it shows up live on the dashboard's **Inspector** page with:
@@ -452,7 +493,7 @@ curl -s -X POST "$B/hooks/order-created?env=dev" -H 'Content-Type: application/j
   Available templates: `{{uuid}}`, `{{now}}`, `{{nowEpoch}}`, `{{id}}`, `{{path}}`, `{{method}}`, `{{params.x}}`, `{{query.x}}`, `{{body.x}}`, `{{baseUrl}}`.
 - **Detail pane:** copy as curl, replay (to this server or any URL), and auto-forward every capture to a target URL (the original path is appended).
 - **Housekeeping:** export JSON, delete a single capture (× on its row, or `DELETE /admin/api/inspector/{id}`), or clear all. The last `INSPECTOR_RETENTION` captures are kept.
-- **API traffic:** `/v1/*` and `/oauth/*` calls are recorded with their real responses, including requests rejected early (bad JSON, missing headers, auth, rate limit) and connections dropped by chaos (shown as *dropped*). Filter by source (webhooks / mock API / OAuth) or switch it off with **Record /v1 & /oauth** (`INSPECTOR_LOG_ALL`). Streamed file uploads show their size only.
+- **API traffic:** `/v1/*`, `/soap/*` and `/oauth/*` calls are recorded with their real responses, including requests rejected early (bad JSON, missing headers, auth, rate limit) and connections dropped by chaos (shown as *dropped*). Filter by source (webhooks / mock API / SOAP / OAuth) or switch it off with **Record /v1 & /oauth** (`INSPECTOR_LOG_ALL`). Streamed file uploads show their size only.
 
 ---
 

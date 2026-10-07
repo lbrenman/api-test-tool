@@ -30,6 +30,7 @@ const oauthRouter = require('./routes/oauth');
 const resourcesRouter = require('./routes/resources');
 const filesRouter = require('./routes/files');
 const adminRouter = require('./routes/admin');
+const soapRouter = require('./protocols/soap/router');
 
 const LEVELS = { debug: 10, info: 20, warn: 30, error: 40 };
 
@@ -136,6 +137,9 @@ async function createApp(opts = {}) {
   v1.use(resourcesRouter(ctx));
   v1.use((req, res) => sendProblem(req, res, 404, { detail: `No route ${req.method} /v1${req.path}`, code: 'route-not-found' }));
   app.use('/v1', v1);
+
+  // Mock SOAP 1.1/1.2 services over the same data (WSDL open; requests go through the same protocol stack).
+  app.use('/soap', soapRouter(ctx));
 
   // Everything else: the inspector
   app.use(catchAll(ctx));

@@ -224,7 +224,7 @@
   // ---------------------------------------------------------------- shell & routing
   const PAGES = [
     ['overview', 'Overview'], ['settings', 'Settings'], ['data', 'Data'], ['inspector', 'Inspector'], ['files', 'Files'],
-    ['auth', 'Auth'], ['chaos', 'Chaos'], ['headers', 'Headers'], ['openapi', 'OpenAPI'], ['tester', 'API Tester'],
+    ['auth', 'Auth'], ['chaos', 'Chaos'], ['headers', 'Headers'], ['protocols', 'Protocols'], ['openapi', 'OpenAPI'], ['tester', 'API Tester'],
     ['help', 'About & Help'],
   ];
   // One-line purpose of each page; shown in the Help guide and as the tooltip of each page's help link.
@@ -232,11 +232,12 @@
     overview: { purpose: 'Your starting point: the URLs to give integrations, current auth mode, health, data counts and copy-ready curl commands.' },
     settings: { purpose: 'Every setting in one place. Environment variables set defaults; changes here override them and survive restarts. Badges show where each value comes from.' },
     data: { purpose: 'The seeded mock data (employees, products, departments, categories): counts, a preview, re-seed with different sizes, or clear it.' },
-    inspector: { purpose: 'Every call made to this server shows up here live, with headers, auth, body and the response that was returned: webhooks and other calls to unreserved paths, plus mock API (/v1) and OAuth (/oauth) calls. Filter by source, or switch API recording off with the checkbox at the top of the page.' },
+    inspector: { purpose: 'Every call made to this server shows up here live, with headers, auth, body and the response that was returned: webhooks and other calls to unreserved paths, plus mock API (/v1), SOAP (/soap) and OAuth (/oauth) calls. Filter by source, or switch API recording off with the checkbox at the top of the page.' },
     files: { purpose: 'The shared file pool used by every file protocol (multipart, raw, base64, tus, presigned, range, chunked). Upload, download, delete or regenerate samples.' },
     auth: { purpose: 'Choose how /v1 calls must authenticate (none, API key, Basic, Bearer, JWT, OAuth2, HMAC), see the credentials, manage OAuth clients and get test tokens.' },
     chaos: { purpose: 'Make the mock API misbehave on purpose: random errors, latency, timeouts, broken JSON and rate limits, globally or per route, so you can test client error handling.' },
     headers: { purpose: 'Headers added to every response, and headers every /v1 request must carry (missing ones return 400).' },
+    protocols: { purpose: 'The same mock data over other protocols. SOAP 1.1/1.2 services with live WSDLs today; auth, chaos, rate limits and required headers apply as on /v1, with errors returned as SOAP faults.' },
     openapi: { purpose: 'Two live OpenAPI 3.1 specs: the Mock Data API (/openapi.json) for integrations to import, and the Admin API (/admin/api/openapi.json) for scripting the tool itself.' },
     tester: { purpose: 'Test an API you built: load its OpenAPI spec, call your implementation, and check every response against the spec.' },
     help: { purpose: 'What this tool does and how to use each page.' },
@@ -447,7 +448,7 @@
     const filterText = h('input', { type: 'text', placeholder: 'Filter path, header, body…', 'aria-label': 'Filter' });
     const filterMethod = h('select', { 'aria-label': 'Method' }, ['', 'GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'].map((m) => h('option', { value: m }, m || 'All methods')));
     const filterSource = h('select', { 'aria-label': 'Source' },
-      [['', 'All sources'], ['catch-all', 'Webhooks / other paths'], ['v1', 'Mock API (/v1)'], ['oauth', 'OAuth (/oauth)']].map(([v, l]) => h('option', { value: v }, l)));
+      [['', 'All sources'], ['catch-all', 'Webhooks / other paths'], ['v1', 'Mock API (/v1)'], ['soap', 'SOAP (/soap)'], ['oauth', 'OAuth (/oauth)']].map(([v, l]) => h('option', { value: v }, l)));
     const live = h('span', { class: 'live-dot' });
     const count = h('span', { class: 'muted small' });
     const logAll = h('input', { type: 'checkbox', checked: !!sval('inspectorLogAll') });
@@ -686,6 +687,139 @@
     el.append(h('div', { class: 'grid cols-2' },
       h('div', { class: 'card' }, titled('Response headers', 'headers.response'), settingsForm(['responseHeaders']), h('div', { class: 'small muted' }, 'JSON list: [{"name":"X-Env","value":"demo"}]. Env format: Name:Value;Name2:Value2')),
       h('div', { class: 'card' }, titled('Required request headers', 'headers.required'), settingsForm(['requiredHeaders']), h('div', { class: 'small muted' }, 'JSON list: [{"name":"X-Tenant"},{"name":"X-Env","value":"demo"}]. Missing or wrong values return 400 problem+json. Env format: X-Tenant,X-Env=demo'))));
+  };
+
+  // ---------------------------------------------------------------- protocols
+  // Indent XML for display (responses are single-line).
+  function prettyXml(xml) {
+    let depth = 0;
+    return String(xml).replace(/>\s*</g, '>\n<').split('\n').map((line) => {
+      if (/^<\//.test(line)) depth = Math.max(0, depth - 1);
+      const out = '  '.repeat(depth) + line;
+      if (/^<[^!?/][^>]*[^/]>$/.test(line)) depth += 1;
+      return out;
+    }).join('\n');
+  }
+
+  // Credentials for a call from the browser, following the active auth mode (as the guides do for curl).
+  async function protocolAuthHeaders(methodName, path, bodyText) {
+    const c = CURL?.ctx;
+    const hdrs = {};
+    if (!c) return hdrs;
+    for (const r of c.required || []) hdrs[r.name] = r.value ?? 'test';
+    switch (c.mode) {
+      case 'apikey':
+        if (c.apiKey.in === 'header') hdrs[c.apiKey.name] = c.apiKey.value;
+        break;
+      case 'basic': hdrs.Authorization = `Basic ${btoa(`${c.basic.user}:${c.basic.pass}`)}`; break;
+      case 'bearer': hdrs.Authorization = `Bearer ${c.bearer}`; break;
+      case 'jwt':
+      case 'oauth2': {
+        const cl = c.client || { clientId: 'demo-client', secret: 'demo-secret' };
+        const r = await fetch('/oauth/token', { method: 'POST', headers: { Authorization: `Basic ${btoa(`${cl.clientId}:${cl.secret}`)}`, 'Content-Type': 'application/x-www-form-urlencoded' }, body: 'grant_type=client_credentials&scope=read%20write' });
+        const tok = await r.json().catch(() => ({}));
+        if (!tok.access_token) throw new Error(`Token request failed (${r.status})`);
+        hdrs.Authorization = `Bearer ${tok.access_token}`;
+        break;
+      }
+      case 'hmac': {
+        if (!window.crypto?.subtle) throw new Error('HMAC signing needs a secure context (https or localhost); use the curl from the guide instead');
+        const enc = new TextEncoder();
+        const hex = (buf) => [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, '0')).join('');
+        const ts = String(Math.floor(Date.now() / 1000));
+        const bodyHash = hex(await crypto.subtle.digest('SHA-256', enc.encode(bodyText || '')));
+        const key = await crypto.subtle.importKey('raw', enc.encode(c.hmac.secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+        const sig = await crypto.subtle.sign('HMAC', key, enc.encode([methodName, path, ts, bodyHash].join('\n')));
+        hdrs.Authorization = `HMAC ${c.hmac.keyId}:${btoa(String.fromCharCode(...new Uint8Array(sig)))}`;
+        hdrs['X-Timestamp'] = ts;
+        break;
+      }
+      default: break;
+    }
+    return hdrs;
+  }
+
+  VIEWS.protocols = async (el) => {
+    await loadSettings();
+    el.append(header('Protocols', 'The same mock data over other protocols. Auth, chaos, rate limits and required headers work as on /v1.'));
+    const soapOn = !!sval('soapEnabled');
+    const listing = soapOn ? await fetch('/soap', { headers: { Accept: 'application/json' } }).then((r) => (r.ok ? r.json() : null)).catch(() => null) : null;
+    const services = listing?.services || [];
+
+    const servicesCard = h('div', { class: 'card' }, titled('SOAP services', 'protocols.soap'),
+      !soapOn ? h('p', { class: 'muted' }, 'The SOAP mock is off. Turn on soapEnabled in the settings next to this card.')
+        : h('div', { class: 'table-wrap' }, h('table', null,
+          h('thead', null, h('tr', null, h('th', null, 'Service'), h('th', null, 'Endpoint'), h('th', null, 'WSDL'), h('th', null, 'Operations'))),
+          h('tbody', null, services.map((sv) => h('tr', null,
+            h('td', null, h('b', null, sv.name), h('div', { class: 'small muted' }, sv.title)),
+            h('td', null, h('code', null, sv.endpoint), ' ', h('button', { class: 'small', onclick: () => copy(sv.endpoint) }, 'copy')),
+            h('td', null, h('a', { href: sv.wsdl, target: '_blank', rel: 'noopener' }, 'open ↗'), ' ', h('button', { class: 'small', onclick: () => copy(sv.wsdl) }, 'copy')),
+            h('td', null, h('span', { title: sv.operations.map((o) => o.name).join(', ') }, String(sv.operations.length)))))))),
+      soapOn ? h('div', { class: 'small muted', style: { marginTop: '8px' } }, 'SOAP 1.1: text/xml + SOAPAction header. SOAP 1.2: application/soap+xml; action="…". Faults carry an f:faultDetail with status, code, requestId and field errors.') : null);
+
+    const settingsCard = h('div', { class: 'card' }, titled('SOAP settings', 'protocols.soap-settings'),
+      settingsForm(['soapEnabled', 'soapWsse', 'soapActionCheck'], { onSaved: () => route() }));
+    el.append(h('div', { class: 'grid cols-2' }, servicesCard, settingsCard));
+
+    if (!services.length) return;
+
+    // ---- try a request
+    const svcSel = h('select', { 'aria-label': 'Service' }, services.map((sv) => h('option', { value: sv.name }, sv.name)));
+    const opSel = h('select', { 'aria-label': 'Operation' });
+    const verSel = h('select', { 'aria-label': 'SOAP version' }, h('option', { value: '1.1' }, 'SOAP 1.1'), h('option', { value: '1.2' }, 'SOAP 1.2'));
+    const wsse = h('input', { type: 'checkbox', checked: sval('soapWsse') !== 'off' });
+    const forceErr = h('input', { type: 'text', placeholder: 'e.g. 503 or malformed-json', style: { maxWidth: '220px' } });
+    const bodyIn = h('textarea', { rows: 12, class: 'mono', spellcheck: 'false', 'aria-label': 'SOAP envelope' });
+    const out = h('div', { class: 'stack' });
+    const svc = () => services.find((sv) => sv.name === svcSel.value);
+    const op = () => svc().operations.find((o) => o.name === opSel.value);
+
+    const fillOps = () => { clear(opSel); for (const o of svc().operations) opSel.append(h('option', { value: o.name }, o.name)); };
+    const buildEnvelope = () => {
+      const v = verSel.value;
+      const envNs = v === '1.2' ? 'http://www.w3.org/2003/05/soap-envelope' : 'http://schemas.xmlsoap.org/soap/envelope/';
+      const c = CURL?.ctx;
+      const sec = wsse.checked && c
+        ? `\n  <soapenv:Header>\n    <wsse:Security xmlns:wsse="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-secext-1.0.xsd">\n      <wsse:UsernameToken><wsse:Username>${c.basic.user}</wsse:Username><wsse:Password>${c.basic.pass}</wsse:Password></wsse:UsernameToken>\n    </wsse:Security>\n  </soapenv:Header>`
+        : '';
+      bodyIn.value = `<soapenv:Envelope xmlns:soapenv="${envNs}" xmlns:tns="${svc().namespace}">${sec}\n  <soapenv:Body>\n    ${op().sampleBody}\n  </soapenv:Body>\n</soapenv:Envelope>`;
+    };
+    svcSel.addEventListener('change', () => { fillOps(); buildEnvelope(); });
+    opSel.addEventListener('change', buildEnvelope);
+    verSel.addEventListener('change', buildEnvelope);
+    wsse.addEventListener('change', buildEnvelope);
+    fillOps();
+    buildEnvelope();
+
+    const send = guard(async () => {
+      const v = verSel.value;
+      const path = `/soap/${svc().name}`;
+      const action = op().soapAction;
+      const hdrs = { ...(await protocolAuthHeaders('POST', path, bodyIn.value)) };
+      if (v === '1.2') hdrs['Content-Type'] = `application/soap+xml; charset=utf-8; action="${action}"`;
+      else { hdrs['Content-Type'] = 'text/xml; charset=utf-8'; hdrs.SOAPAction = `"${action}"`; }
+      if (forceErr.value.trim()) hdrs['X-Force-Error'] = forceErr.value.trim();
+      const url = CURL?.ctx?.mode === 'apikey' && CURL.ctx.apiKey.in === 'query' ? `${path}?${encodeURIComponent(CURL.ctx.apiKey.name)}=${encodeURIComponent(CURL.ctx.apiKey.value)}` : path;
+      const started = performance.now();
+      const res = await fetch(url, { method: 'POST', headers: hdrs, body: bodyIn.value, credentials: 'omit' });
+      const text = await res.text();
+      const ms = Math.round(performance.now() - started);
+      const shown = ['content-type', 'x-soap-operation', 'x-chaos-injected', 'www-authenticate', 'retry-after', 'x-request-id'];
+      clear(out).append(
+        h('div', { class: 'row' }, h('span', { class: statusClass(res.status) }, String(res.status)), h('span', { class: 'muted small' }, `${ms} ms · ${fmtBytes(text.length)}`),
+          /<(\w+:)?Fault[\s>]/.test(text) ? h('span', { class: 'badge' }, 'SOAP fault') : null),
+        kv(Object.fromEntries(shown.filter((k) => res.headers.get(k)).map((k) => [k, res.headers.get(k)]))),
+        h('div', { class: 'row between' }, h('span', { class: 'small muted' }, 'Response'), h('button', { class: 'small', onclick: () => copy(text) }, 'copy')),
+        codeBlock(prettyXml(text), { maxHeight: '480px' }));
+    });
+
+    el.append(h('div', { class: 'card stack' }, titled('Try a SOAP request', 'protocols.soap-try'),
+      h('div', { class: 'row' }, field('Service', svcSel), field('Operation', opSel), field('Version', verSel), field('X-Force-Error (optional)', forceErr)),
+      h('label', { class: 'check' }, wsse, h('span', null, 'Add a WS-Security UsernameToken (BASIC_USER / BASIC_PASS)')),
+      bodyIn,
+      h('div', { class: 'row' }, h('button', { class: 'primary', onclick: send }, 'Send'), h('button', { onclick: buildEnvelope }, 'Reset envelope'),
+        h('span', { class: 'small muted' }, `Sent from your browser with the active auth mode (${CURL?.mode || 'none'}). The call also appears on the Inspector page.`)),
+      out));
   };
 
   // ---------------------------------------------------------------- openapi
@@ -1097,6 +1231,7 @@
           ['/v1/p/{offset|page|cursor|keyset|link|hal|token}/{resource}', 'The same lists with each pagination style.'],
           ['/v1/departments/{id}/employees, /v1/categories/{id}/products', 'Nested collections.'],
           ['/v1/files/…', 'File protocols: multipart, raw, base64, tus, presign, download (range), chunked.'],
+          ['/soap, /soap/{EmployeeService|ProductService}', 'Mock SOAP 1.1/1.2 services over the same data. ?wsdl returns the WSDL (always open); POST requests use the active auth mode.'],
           ['/oauth/token, /oauth/authorize, /oauth/introspect, /oauth/revoke', 'Built-in OAuth 2.0 server.'],
           ['/.well-known/jwks.json, /.well-known/oauth-authorization-server', 'Signing keys and OAuth discovery.'],
           ['/openapi.json, /openapi.yaml', 'Live OpenAPI for the mock data API (for integrations).'],

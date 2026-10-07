@@ -48,7 +48,7 @@ const collectionPreBody = [
   "if (skip) pm.request.headers.remove('X-Skip-Auth');",
   "const resolved = new sdk.Url(pm.variables.replaceIn(pm.request.url.toString()));",
   "const p = resolved.getPath();",
-  "const isApi = p.indexOf('/v1/') === 0 && p.indexOf('/v1/files/presigned/') !== 0;",
+  "const isApi = (p.indexOf('/v1/') === 0 && p.indexOf('/v1/files/presigned/') !== 0) || (p.indexOf('/soap/') === 0 && pm.request.method === 'POST');",
   "if (!isApi || skip || mode === 'none') return;",
   "const set = (k, v) => pm.request.headers.upsert({ key: k, value: v });",
   "if (mode === 'apikey') {",
@@ -91,7 +91,7 @@ const collectionPreBody = [
 ];
 // The sandbox does not allow top-level return, so the body runs inside a function.
 const collectionPre = [
-  '// Applies the auth mode in {{authMode}} to /v1 requests. Requests with header X-Skip-Auth: 1 go out unauthenticated.',
+  '// Applies the auth mode in {{authMode}} to /v1 requests and SOAP POSTs. Requests with header X-Skip-Auth: 1 go out unauthenticated.',
   '(function applyAuth() {',
   ...collectionPreBody.map((l) => `  ${l}`),
   '})();',
@@ -249,6 +249,31 @@ const files = folder('Files', [
   req('Delete raw file', 'DELETE', '/v1/files/{{rawFileId}}', { tests: [status(204)] }),
 ]);
 
+const EMP_NS = 'urn:api-test-tool:soap:EmployeeService';
+const PROD_NS = 'urn:api-test-tool:soap:ProductService';
+const soapEnv = (version, ns, inner) => `<soapenv:Envelope xmlns:soapenv="${version === '1.2' ? 'http://www.w3.org/2003/05/soap-envelope' : 'http://schemas.xmlsoap.org/soap/envelope/'}" xmlns:tns="${ns}"><soapenv:Body>${inner}</soapenv:Body></soapenv:Envelope>`;
+const soap11 = (ns, op, inner, extraHeaders = {}) => ({ headers: { 'Content-Type': 'text/xml; charset=utf-8', SOAPAction: `"${ns}/${op}"`, ...extraHeaders }, body: rawText(soapEnv('1.1', ns, `<tns:${op}>${inner}</tns:${op}>`)) });
+const soap12 = (ns, op, inner) => ({ headers: { 'Content-Type': `application/soap+xml; charset=utf-8; action="${ns}/${op}"` }, body: rawText(soapEnv('1.2', ns, `<tns:${op}>${inner}</tns:${op}>`)) });
+const has = (label, text) => `pm.test(${JSON.stringify(label)}, () => pm.expect(pm.response.text()).to.include(${JSON.stringify(text)}));`;
+const ctype = (t) => `pm.test('Content-Type ${t}', () => pm.expect(pm.response.headers.get('Content-Type')).to.include('${t}'));`;
+const soapFolder = folder('SOAP', [
+  req('List services', 'GET', '/soap', { tests: [status(200), "pm.test('two services', () => pm.expect(pm.response.json().services.map((s) => s.name)).to.eql(['EmployeeService', 'ProductService']));"] }),
+  req('EmployeeService WSDL (always open)', 'GET', '/soap/EmployeeService?wsdl', { tests: [status(200), ctype('text/xml'), has('WSDL', '<wsdl:definitions'), has('SOAP 1.2 binding', 'EmployeeServiceSoap12')] }),
+  req('GetEmployee (SOAP 1.1)', 'POST', '/soap/EmployeeService', { ...soap11(EMP_NS, 'GetEmployee', '<tns:id>1</tns:id>'), tests: [status(200), ctype('text/xml'), has('employee 1', '<tns:id>1</tns:id>'), "pm.test('operation header', () => pm.expect(pm.response.headers.get('X-Soap-Operation')).to.eql('GetEmployee'));"] }),
+  req('ListProducts page 2 (SOAP 1.2)', 'POST', '/soap/ProductService', { ...soap12(PROD_NS, 'ListProducts', '<tns:page>2</tns:page><tns:pageSize>5</tns:pageSize>'), tests: [status(200), ctype('application/soap+xml'), has('page 2', '<tns:page>2</tns:page>'), "pm.test('five products', () => pm.expect((pm.response.text().match(/<tns:product>/g) || []).length).to.eql(5));"] }),
+  req('CreateEmployee', 'POST', '/soap/EmployeeService', {
+    ...soap11(EMP_NS, 'CreateEmployee', '<tns:employee><tns:firstName>Soap</tns:firstName><tns:lastName>Client</tns:lastName><tns:email>soap.client@example.com</tns:email><tns:departmentId>1</tns:departmentId></tns:employee>'),
+    tests: [status(200), "const m = pm.response.text().match(/<tns:employee><tns:id>(\\d+)<\\/tns:id>/); pm.test('new id', () => pm.expect(m).to.not.eql(null)); if (m) pm.environment.set('soapEmpId', m[1]);"],
+  }),
+  req('UpdateEmployee', 'POST', '/soap/EmployeeService', { ...soap11(EMP_NS, 'UpdateEmployee', '<tns:id>{{soapEmpId}}</tns:id><tns:employee><tns:title>Integration tester</tns:title></tns:employee>'), tests: [status(200), has('title changed', '<tns:title>Integration tester</tns:title>'), has('rest kept', '<tns:firstName>Soap</tns:firstName>')] }),
+  req('DeleteEmployee', 'POST', '/soap/EmployeeService', { ...soap11(EMP_NS, 'DeleteEmployee', '<tns:id>{{soapEmpId}}</tns:id>'), tests: [status(200), has('deleted', '<tns:deleted>true</tns:deleted>')] }),
+  req('Not found → SOAP 1.1 Client fault (HTTP 500)', 'POST', '/soap/EmployeeService', { ...soap11(EMP_NS, 'GetEmployee', '<tns:id>{{soapEmpId}}</tns:id>'), tests: [status(500), has('Client fault', '<faultcode>soap:Client</faultcode>'), has('code', '<f:code>not-found</f:code>')] }),
+  req('Not found → SOAP 1.2 Sender fault (HTTP 400)', 'POST', '/soap/EmployeeService', { ...soap12(EMP_NS, 'GetEmployee', '<tns:id>{{soapEmpId}}</tns:id>'), tests: [status(400), has('Sender', '<soap:Value>soap:Sender</soap:Value>'), has('subcode', 'f:NotFound')] }),
+  req('Validation errors in the fault detail', 'POST', '/soap/EmployeeService', { ...soap11(EMP_NS, 'CreateEmployee', '<tns:employee><tns:firstName>Only</tns:firstName></tns:employee>'), tests: [status(500), has('validation', '<f:code>validation-failed</f:code>'), has('field error', 'field="email"')] }),
+  req('Wrong SOAPAction → fault', 'POST', '/soap/EmployeeService', { ...soap11(EMP_NS, 'GetEmployee', '<tns:id>1</tns:id>', { SOAPAction: `"${EMP_NS}/DeleteEmployee"` }), tests: [status(500), has('mismatch', 'soap-action-mismatch')] }),
+  req('X-Force-Error: 503 → fault with the real status', 'POST', '/soap/EmployeeService', { ...soap11(EMP_NS, 'GetEmployee', '<tns:id>1</tns:id>', { 'X-Force-Error': '503' }), tests: [status(503), has('Server fault', '<faultcode>soap:Server</faultcode>'), "pm.test('X-Chaos-Injected', () => pm.expect(pm.response.headers.get('X-Chaos-Injected')).to.eql('503'));"] }),
+]);
+
 const misc = folder('Headers & inspector', [
   req('Request id echo', 'GET', '/v1/employees/1', { headers: { 'X-Request-Id': 'postman-req-1', 'X-Correlation-Id': 'postman-corr-1' }, tests: [status(200), "pm.test('echoed', () => { pm.expect(pm.response.headers.get('X-Request-Id')).to.eql('postman-req-1'); pm.expect(pm.response.headers.get('X-Correlation-Id')).to.eql('postman-corr-1'); });"] }),
   req('Inspector catch-all', 'POST', '/hooks/postman?source=newman', { headers: { 'Content-Type': 'application/json' }, body: json({ event: 'order.created', id: 42 }), tests: [status(200), "pm.test('captured with actual path', () => { pm.expect(pm.response.json().status).to.eql('captured'); pm.expect(pm.response.json().path).to.eql('/hooks/postman'); });"] }),
@@ -266,7 +291,7 @@ const collection = {
     { listen: 'test', script: { type: 'text/javascript', exec: collectionTest } },
   ],
   variable: [{ key: 'cachedToken', value: '' }, { key: 'cachedTokenExp', value: '0' }],
-  item: [platform, oauth, authFolder, crud, query, pagination, chaos, files, misc],
+  item: [platform, oauth, authFolder, crud, query, pagination, chaos, files, soapFolder, misc],
 };
 
 const environment = {
