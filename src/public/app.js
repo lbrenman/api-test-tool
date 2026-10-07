@@ -465,6 +465,17 @@
       if (!q) return true;
       return JSON.stringify(it).toLowerCase().includes(q);
     };
+    // Delete one capture. The SSE 'delete' event updates every open dashboard; dropping it locally keeps this one snappy.
+    const dropLocal = (id) => {
+      items = items.filter((x) => x.id !== id);
+      if (selected === id) { selected = null; history.replaceState(null, '', '#/inspector'); showDetail(null); }
+      renderList();
+    };
+    const removeCapture = guard(async (id) => {
+      await api('DELETE', `/inspector/${encodeURIComponent(id)}`);
+      dropLocal(id);
+      toast('Capture deleted', 'ok');
+    });
     const renderList = () => {
       clear(listEl);
       const shown = items.filter(matches);
@@ -477,7 +488,8 @@
             h('div', { class: 'small muted' }, `${fmtTime(it.ts)} · ${it.ip || ''} · ${fmtBytes(it.size)}${it.durationMs != null ? ` · ${it.durationMs} ms` : ''}${it.rule ? ` · ${it.rule}` : ''}`)),
           h('div', { class: 'row', style: { gap: '6px', flexWrap: 'nowrap' } },
             SOURCE_LABEL[it.kind] ? h('span', { class: 'badge' }, SOURCE_LABEL[it.kind]) : null,
-            h('span', { class: statusClass(it.aborted ? null : it.status), title: it.aborted ? 'The connection closed before the response finished' : '' }, it.aborted ? `${it.status ?? ''} dropped`.trim() : (it.status ?? '…')))));
+            h('span', { class: statusClass(it.aborted ? null : it.status), title: it.aborted ? 'The connection closed before the response finished' : '' }, it.aborted ? `${it.status ?? ''} dropped`.trim() : (it.status ?? '…')),
+            h('button', { class: 'icon-btn del', title: 'Delete this capture', 'aria-label': 'Delete this capture', onclick: (ev) => { ev.stopPropagation(); removeCapture(it.id); } }, '×'))));
       }
     };
     const showBody = (b, title) => {
@@ -523,7 +535,8 @@
       };
       const draw = (k) => { clear(pane).append(views[k]()); };
       detailEl.append(h('div', { class: 'card' },
-        h('div', { class: 'row between' }, h('div', { class: 'row' }, method(e.method), h('code', null, e.path)), h('span', { class: 'muted small' }, fmtDate(e.ts))),
+        h('div', { class: 'row between' }, h('div', { class: 'row' }, method(e.method), h('code', null, e.path)),
+          h('div', { class: 'row' }, h('span', { class: 'muted small' }, fmtDate(e.ts)), h('button', { class: 'danger small', onclick: () => removeCapture(e.id) }, 'Delete'))),
         h('div', { style: { marginTop: '10px' } }, tabs([{ id: 'request', label: 'Request' }, { id: 'auth', label: 'Auth' }, { id: 'response', label: 'Response' }, { id: 'curl', label: 'curl' }, { id: 'replay', label: 'Replay' }], draw)),
         pane));
       draw('request');
@@ -541,6 +554,7 @@
       renderList();
       if (it.id === selected) showDetail(selected);
     });
+    es.addEventListener('delete', (ev) => { const { id } = JSON.parse(ev.data); if (items.some((x) => x.id === id) || selected === id) dropLocal(id); });
     es.addEventListener('clear', () => { items = []; selected = null; renderList(); showDetail(null); });
 
     filterText.addEventListener('input', renderList);

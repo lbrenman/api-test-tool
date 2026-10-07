@@ -190,3 +190,26 @@ test('generated OpenAPI reflects auth mode and required headers', async () => {
     assert.match(yaml.text, /openapi: 3\.1\.0/);
   } finally { await t.close(); }
 });
+
+test('a single capture can be deleted without touching the others', async () => {
+  const t = await makeApp({ SEED_SAMPLE_FILES: 'false' });
+  try {
+    await request(t.app).post('/hooks/keep').send({ a: 1 }).expect(200);
+    await request(t.app).post('/hooks/drop').send({ b: 2 }).expect(200);
+    const before = (await request(t.app).get('/admin/api/inspector').expect(200)).body;
+    const drop = before.find((x) => x.path === '/hooks/drop');
+    const events = [];
+    t.ctx.inspector.on('delete', (e) => events.push(e));
+    await request(t.app).delete(`/admin/api/inspector/${drop.id}`).expect(204);
+    assert.deepEqual(events, [{ id: drop.id }]);
+    const after = (await request(t.app).get('/admin/api/inspector').expect(200)).body;
+    assert.equal(after.length, before.length - 1);
+    assert.ok(after.some((x) => x.path === '/hooks/keep'));
+    assert.ok(!after.some((x) => x.id === drop.id));
+    await request(t.app).get(`/admin/api/inspector/${drop.id}`).expect(404);
+    const nf = await request(t.app).delete(`/admin/api/inspector/${drop.id}`).expect(404);
+    assert.match(nf.headers['content-type'], /problem\+json/);
+  } finally {
+    await t.close();
+  }
+});

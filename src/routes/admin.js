@@ -166,15 +166,18 @@ module.exports = function adminRouter(ctx, { adminAuth, filesApi }) {
     const onReq = send('request');
     const onUpd = send('update');
     const onClear = send('clear');
+    const onDel = send('delete');
     inspector.on('request', onReq);
     inspector.on('update', onUpd);
     inspector.on('clear', onClear);
+    inspector.on('delete', onDel);
     const ping = setInterval(() => res.write(': ping\n\n'), 20000);
     req.on('close', () => {
       clearInterval(ping);
       inspector.off('request', onReq);
       inspector.off('update', onUpd);
       inspector.off('clear', onClear);
+      inspector.off('delete', onDel);
     });
   });
   r.get('/inspector/export', async (req, res) => {
@@ -186,6 +189,10 @@ module.exports = function adminRouter(ctx, { adminAuth, filesApi }) {
     const e = await inspector.get(req.params.id);
     if (!e) throw new HttpError(404, 'Capture not found');
     res.json({ ...e, curl: inspector.toCurl(e) });
+  });
+  r.delete('/inspector/:id', async (req, res) => {
+    if (!(await inspector.remove(req.params.id))) throw new HttpError(404, 'Capture not found');
+    res.status(204).end();
   });
   r.get('/inspector/:id/body', async (req, res) => {
     const e = await inspector.get(req.params.id);

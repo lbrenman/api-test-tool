@@ -451,7 +451,7 @@ curl -s -X POST "$B/hooks/order-created?env=dev" -H 'Content-Type: application/j
 
   Available templates: `{{uuid}}`, `{{now}}`, `{{nowEpoch}}`, `{{id}}`, `{{path}}`, `{{method}}`, `{{params.x}}`, `{{query.x}}`, `{{body.x}}`, `{{baseUrl}}`.
 - **Detail pane:** copy as curl, replay (to this server or any URL), and auto-forward every capture to a target URL (the original path is appended).
-- **Housekeeping:** export JSON, clear. The last `INSPECTOR_RETENTION` captures are kept.
+- **Housekeeping:** export JSON, delete a single capture (× on its row, or `DELETE /admin/api/inspector/{id}`), or clear all. The last `INSPECTOR_RETENTION` captures are kept.
 - **API traffic:** `/v1/*` and `/oauth/*` calls are recorded with their real responses, including requests rejected early (bad JSON, missing headers, auth, rate limit) and connections dropped by chaos (shown as *dropped*). Filter by source (webhooks / mock API / OAuth) or switch it off with **Record /v1 & /oauth** (`INSPECTOR_LOG_ALL`). Streamed file uploads show their size only.
 
 ---

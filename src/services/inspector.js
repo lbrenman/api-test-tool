@@ -239,6 +239,13 @@ class InspectorService extends EventEmitter {
     this.emit('clear', {});
   }
 
+  // Delete one capture. Returns false when it does not exist.
+  async remove(id) {
+    const removed = await this.ctx.repo.del('inspector', id);
+    if (removed) this.emit('delete', { id });
+    return removed;
+  }
+
   // Decide the catch-all response: first matching rule, else the configured default.
   resolveResponse(req, entry) {
     const s = this.ctx.settings;

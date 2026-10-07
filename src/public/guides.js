@@ -239,11 +239,13 @@
           'Trigger the event. The request appears here live — click it to see Request, Auth, Response and a ready-made curl.',
           'Filter by source, method or any text to find a specific call.',
           'Use Replay to resend a captured call to this server or to another URL, and Export JSON to keep the evidence.',
+          'Remove a single capture with the × on its row (or Delete in the detail pane); Clear removes them all.',
         ],
         curls: [
           ['Send a JSON webhook', plain('POST', '/hooks/orders', { json: { event: 'order.created', orderId: 'PO-4500123456' } })],
           ['Send a form-encoded callback', plain('POST', '/callbacks/payment', { body: 'status=paid&amount=19.99', contentType: 'application/x-www-form-urlencoded' })],
           ['Export every capture', admin('GET', '/inspector/export', { output: 'inspector.json' })],
+          ['Delete one capture', admin('DELETE', '/inspector/CAPTURE_ID')],
         ],
       },
       'inspector.rules': {

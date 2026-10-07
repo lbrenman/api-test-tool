@@ -136,12 +136,15 @@ async function generateAdminOpenApi(ctx, req) {
     responses: { ...ok('Captures', { type: 'array', items: S('Capture') }), ...AUTHED },
   }));
   add(`${A}/inspector`, 'delete', op('Inspector', 'clearCaptures', 'Delete every capture', { responses: { ...noContent('Cleared'), ...AUTHED } }));
-  add(`${A}/inspector/stream`, 'get', op('Inspector', 'streamCaptures', 'Live captures (Server-Sent Events: request, update, clear)', {
+  add(`${A}/inspector/stream`, 'get', op('Inspector', 'streamCaptures', 'Live captures (Server-Sent Events: request, update, delete, clear)', {
     responses: { 200: { description: 'text/event-stream', content: { 'text/event-stream': { schema: { type: 'string' } } } }, ...AUTHED },
   }));
   add(`${A}/inspector/export`, 'get', op('Inspector', 'exportCaptures', 'Export every capture as a JSON download', { responses: { ...ok('Captures', { type: 'array', items: S('Capture') }), ...AUTHED } }));
   add(`${A}/inspector/{id}`, 'get', op('Inspector', 'getCapture', 'One capture, with a curl reproduction', {
     parameters: [capId], responses: { ...ok('Capture', S('Capture')), ...AUTHED, ...NF },
+  }));
+  add(`${A}/inspector/{id}`, 'delete', op('Inspector', 'deleteCapture', 'Delete one capture', {
+    parameters: [capId], responses: { ...noContent('Deleted'), ...AUTHED, ...NF },
   }));
   add(`${A}/inspector/{id}/body`, 'get', op('Inspector', 'getCaptureBody', 'Raw captured request body', {
     parameters: [capId], responses: { 200: { description: 'Body bytes', content: { '*/*': { schema: { type: 'string', format: 'binary' } } } }, ...AUTHED, ...NF },
