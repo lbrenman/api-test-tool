@@ -1,6 +1,6 @@
 # Multi-protocol support — design
 
-Status: **steps 1–5 merged; step 6 (OData v4) on branch `feat/odata`**. OData v2 not built yet.
+Status: **all six steps merged to master** (2026-10-07). OData v2 not built yet.
 Date: 2026-10-07
 
 ## Goal
