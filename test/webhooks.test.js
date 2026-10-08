@@ -45,7 +45,7 @@ test('definitions: validation, defaults, write-only secret, PATCH, 404', async (
   const h = await hook({ url: `${rx}/defaults`, secret: 'a-long-enough-secret' });
   assert.deepEqual([h.resources, h.events, h.enabled, h.includeData, h.hasSecret, h.secretHint], [['*'], ['created', 'updated'], true, false, true, '…cret']);
   assert.equal(h.secret, undefined);
-  assert.equal(h.name, 'all resources created/updated');
+  assert.equal(h.name, 'all data created/updated');
   const p = (await api().patch(`/admin/api/webhooks/${h.id}`).send({ name: 'Renamed', secret: null, events: ['deleted', 'created'] }).expect(200)).body;
   assert.deepEqual([p.name, p.hasSecret, p.events, p.url], ['Renamed', false, ['created', 'deleted'], `${rx}/defaults`]);
   assert.equal((await api().get(`/admin/api/webhooks/${h.id}`).expect(200)).body.name, 'Renamed');
@@ -174,4 +174,94 @@ test('webhooks survive a restart', async () => {
     assert.deepEqual(calls.map((c) => [c.path, c.body.event, c.body.resourceId]), [['/persist', 'products.updated', 1]]);
     assert.equal(calls[0].headers['x-webhook-signature'], `sha256=${crypto.createHmac('sha256', 'kept-across-restarts').update(`${calls[0].headers['x-webhook-timestamp']}.${calls[0].raw}`).digest('hex')}`);
   } finally { await b.close(); }
+});
+
+test('file webhooks: every upload, download and delete path; validation; no events for failures or samples', async () => {
+  // Validation: events must fit the resources; defaults follow the resources.
+  const def = await hook({ url: `${rx}/files-default`, resources: ['files'] });
+  assert.deepEqual([def.resources, def.events, def.name], [['files'], ['uploaded'], 'files uploaded']);
+  await del(def.id);
+  await api().post('/admin/api/webhooks').send({ url: `${rx}/x`, resources: ['files'], events: ['created'] }).expect(400);
+  await api().post('/admin/api/webhooks').send({ url: `${rx}/x`, resources: ['employees'], events: ['uploaded'] }).expect(400);
+  const both = await hook({ url: `${rx}/x`, resources: ['*', 'files'], events: ['created', 'uploaded', 'deleted'] });
+  assert.deepEqual(both.resources, ['*', 'files']);
+  await del(both.id);
+
+  const fh = await hook({ name: 'Files', url: `${rx}/files`, resources: ['files'], events: ['uploaded', 'downloaded', 'deleted'], secret: 'file-webhook-secret' });
+  const dataOnly = await hook({ url: `${rx}/data-only`, resources: ['*'], events: ['created', 'updated', 'deleted'] }); // must not get file events
+  take();
+  // Download events fire when the server finishes the response, which can land just after the client
+  // has it: wait (briefly) for the number of deliveries expected, then settle.
+  const ev = async (n = 0) => {
+    for (let i = 0; i < 100 && got.length < n; i++) await new Promise((r) => setTimeout(r, 20));
+    await new Promise((r) => setTimeout(r, 30));
+    await drain();
+    return take();
+  };
+
+  // Uploads: multipart (two parts), raw, base64, dashboard
+  const mp = (await api().post('/v1/files/multipart').attach('a', Buffer.from('hello'), 'a.txt').attach('b', Buffer.from('world!'), 'b.txt').expect(201)).body;
+  let calls = (await ev(2)).sort((x, y) => x.body.file.name.localeCompare(y.body.file.name)); // two parts, delivered concurrently
+  assert.deepEqual(calls.map((c) => [c.path, c.body.event, c.body.via, c.body.file.name, c.body.file.size]), [['/files', 'files.uploaded', 'multipart', 'a.txt', 5], ['/files', 'files.uploaded', 'multipart', 'b.txt', 6]]);
+  const f1 = mp.files[0].id;
+  assert.equal(calls[0].body.resourceId, f1);
+  assert.equal(calls[0].body.href, `http://localhost/v1/files/${f1}`);
+  assert.ok(calls[0].headers['x-webhook-signature'].startsWith('sha256='));
+  await api().put('/v1/files/raw/raw.bin').set('Content-Type', 'application/octet-stream').send(Buffer.from([1, 2, 3])).expect(201);
+  await api().post('/v1/files/base64').send({ name: 'b64.txt', data: Buffer.from('base64!').toString('base64') }).expect(201);
+  await api().post('/admin/api/files/upload').set('Content-Type', 'application/octet-stream').set('X-Filename', 'dash.txt').send(Buffer.from('dashboard')).expect(201);
+  assert.deepEqual((await ev()).map((c) => [c.body.via, c.body.file.name]), [['raw', 'raw.bin'], ['base64', 'b64.txt'], ['dashboard', 'dash.txt']]);
+
+  // tus: no event until the last chunk
+  const loc = (await api().post('/v1/files/tus').set('Tus-Resumable', '1.0.0').set('Upload-Length', '10').set('Upload-Metadata', `filename ${Buffer.from('tus.txt').toString('base64')}`).expect(201)).headers.location;
+  const tusPath = new URL(loc, 'http://x').pathname;
+  await api().patch(tusPath).set('Tus-Resumable', '1.0.0').set('Content-Type', 'application/offset+octet-stream').set('Upload-Offset', '0').send(Buffer.from('12345')).expect(204);
+  assert.equal((await ev()).length, 0);
+  await api().patch(tusPath).set('Tus-Resumable', '1.0.0').set('Content-Type', 'application/offset+octet-stream').set('Upload-Offset', '5').send(Buffer.from('67890')).expect(204);
+  assert.deepEqual((await ev()).map((c) => [c.body.via, c.body.file.name, c.body.file.size]), [['tus', 'tus.txt', 10]]);
+
+  // Presigned PUT then GET
+  const ps = (await api().post('/v1/files/presign').send({ name: 'pre.txt', method: 'PUT', contentType: 'text/plain' }).expect(201)).body;
+  await api().put(new URL(ps.url).pathname).set('Content-Type', 'text/plain').send('presigned upload').expect(200);
+  assert.deepEqual((await ev()).map((c) => [c.body.via, c.body.file.name]), [['presigned', 'pre.txt']]);
+  const pg = (await api().post('/v1/files/presign').send({ fileId: ps.fileId, method: 'GET' }).expect(201)).body;
+  await api().get(new URL(pg.url).pathname).expect(200);
+
+  // Downloads: full, range, chunked, base64, dashboard; HEAD and 304 do not count
+  await api().get(`/v1/files/${f1}/download`).expect(200);
+  await api().get(`/v1/files/${f1}/download`).set('Range', 'bytes=0-1').expect(206);
+  await api().get(`/v1/files/${f1}/chunked`).expect(200);
+  await api().get(`/v1/files/${f1}/base64`).expect(200);
+  await api().get(`/admin/api/files/${f1}/download`).expect(200);
+  const etag = (await api().head(`/v1/files/${f1}/download`).expect(200)).headers.etag;
+  await api().get(`/v1/files/${f1}/download`).set('If-None-Match', etag).expect(304);
+  calls = await ev(6);
+  assert.deepEqual(calls.map((c) => [c.body.event, c.body.via, c.body.status, c.body.bytes]), [
+    ['files.downloaded', 'presigned', 200, 16],
+    ['files.downloaded', 'download', 200, 5],
+    ['files.downloaded', 'download', 206, 2],
+    ['files.downloaded', 'chunked', 200, 5],
+    ['files.downloaded', 'base64', 200, 5],
+    ['files.downloaded', 'dashboard', 200, 5],
+  ]);
+  assert.equal(calls[2].body.range, 'bytes 0-1/5');
+
+  // Deletes through the API and the dashboard; a missing file fires nothing
+  await api().delete(`/v1/files/${f1}`).expect(204);
+  await api().delete(`/admin/api/files/${mp.files[1].id}`).expect(204);
+  await api().delete('/v1/files/f_missing').expect(404);
+  assert.deepEqual((await ev()).map((c) => [c.body.event, c.body.via, c.body.resourceId]), [['files.deleted', 'api', f1], ['files.deleted', 'dashboard', mp.files[1].id]]);
+
+  // Failed uploads and regenerated samples fire nothing
+  await api().post('/v1/files/raw').set('Content-Type', 'application/octet-stream').set('X-Filename', 'empty.bin').send(Buffer.alloc(0)).expect(400);
+  await api().post('/admin/api/files/regenerate').expect(200);
+  assert.equal((await ev()).length, 0);
+
+  // Test deliveries pick a file event for a files-only webhook
+  const tst = (await api().post(`/admin/api/webhooks/${fh.id}/test`).send({ type: 'downloaded' }).expect(200)).body;
+  assert.deepEqual([tst.event, tst.test, tst.request.body.via, typeof tst.request.body.file.name], ['files.downloaded', true, 'test', 'string']);
+  await api().post(`/admin/api/webhooks/${fh.id}/test`).send({ type: 'created' }).expect(400);
+  assert.equal((await ev()).filter((c) => c.path === '/data-only').length, 0);
+  await del(fh.id);
+  await del(dataOnly.id);
 });

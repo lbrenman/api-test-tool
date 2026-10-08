@@ -176,7 +176,7 @@ async function generateAdminOpenApi(ctx, req) {
   }));
   add(`${A}/webhooks/{id}`, 'delete', op('Webhooks', 'deleteWebhook', 'Delete a webhook (its logged deliveries stay until trimmed)', { parameters: [whId], responses: { ...noContent('Deleted'), ...AUTHED, ...NF } }));
   add(`${A}/webhooks/{id}/test`, 'post', op('Webhooks', 'testWebhook', 'Send a test delivery now (the first record of the webhook\'s first resource, marked "test": true) and return the result', {
-    parameters: [whId], requestBody: body(obj({ type: { type: 'string', enum: ['created', 'updated', 'deleted'] } }), { type: 'created' }, false),
+    parameters: [whId], requestBody: body(obj({ type: { type: 'string', enum: ['created', 'updated', 'deleted', 'uploaded', 'downloaded'] } }), { type: 'created' }, false),
     responses: { ...ok('Delivery', S('WebhookDelivery')), ...BAD, ...AUTHED, ...NF },
   }));
   add(`${A}/webhooks/deliveries`, 'get', op('Webhooks', 'listWebhookDeliveries', 'Logged deliveries, newest first', {
@@ -328,7 +328,7 @@ async function generateAdminOpenApi(ctx, req) {
       { name: 'Files', description: 'Manage the shared file pool' },
       { name: 'Auth', description: '/v1 auth configuration and OAuth clients' },
       { name: 'Inspector', description: 'Captured requests (webhook-style catch-all)' },
-      { name: 'Webhooks', description: 'Outgoing webhooks: POST to your URL when mock data is created, updated or deleted through any protocol' },
+      { name: 'Webhooks', description: 'Outgoing webhooks: POST to your URL when mock data is created, updated or deleted, or a file is uploaded, downloaded or deleted, through any protocol' },
       { name: 'Tester', description: 'Contract tester for APIs you implemented (OpenAPI, WSDL/SOAP, AsyncAPI/WebSocket)' },
       { name: 'App', description: 'Backend for the back-office app at /app (bypasses /v1 auth, chaos and rate limits)' },
     ],
@@ -363,8 +363,8 @@ async function generateAdminOpenApi(ctx, req) {
         WebhookInput: obj({
           name: { type: 'string', maxLength: 120 },
           url: { type: 'string', format: 'uri', description: 'http(s) URL that receives the POST' },
-          resources: { type: 'array', items: { type: 'string', enum: ['*', 'employees', 'products', 'departments', 'categories'] }, default: ['*'] },
-          events: { type: 'array', items: { type: 'string', enum: ['created', 'updated', 'deleted'] }, default: ['created', 'updated'] },
+          resources: { type: 'array', items: { type: 'string', enum: ['*', 'employees', 'products', 'departments', 'categories', 'files'] }, default: ['*'], description: '"*" = every data resource; add "files" for the file pool' },
+          events: { type: 'array', items: { type: 'string', enum: ['created', 'updated', 'deleted', 'uploaded', 'downloaded'] }, description: 'created/updated apply to data, uploaded/downloaded to files, deleted to both. Default: created + updated for data, uploaded for files' },
           enabled: { type: 'boolean', default: true },
           includeData: { type: 'boolean', default: false, description: 'Add the record as "data" (never for deletes)' },
           secret: { type: ['string', 'null'], maxLength: 256, description: 'Signs each delivery: X-Webhook-Signature: sha256=hex(HMAC-SHA256(secret, "<X-Webhook-Timestamp>.<raw body>"))' },
@@ -380,9 +380,13 @@ async function generateAdminOpenApi(ctx, req) {
         }, ['id', 'url', 'resources', 'events', 'enabled']),
         WebhookPayload: obj({
           id: { type: 'string', description: 'Delivery id (also X-Webhook-Delivery)' }, event: { type: 'string', examples: ['employees.created'] },
-          type: { type: 'string', enum: ['created', 'updated', 'deleted'] }, resource: { type: 'string' }, resourceId: { type: 'integer' },
+          type: { type: 'string', enum: ['created', 'updated', 'deleted', 'uploaded', 'downloaded'] }, resource: { type: 'string' }, resourceId: { type: ['integer', 'string'], description: 'Integer for data, "f_…" for files' },
           href: { type: 'string', format: 'uri', description: 'GET it from /v1 for the full record' }, occurredAt: { type: 'string', format: 'date-time' },
           webhookId: { type: 'string' }, test: { type: 'boolean' }, data: anyObj('The record (includeData only)'),
+          via: { type: 'string', description: 'Files: multipart, raw, base64, tus, presigned, download, chunked, api or dashboard' },
+          file: anyObj('Files: id, name, contentType, size, sha256, source, createdAt, updatedAt'),
+          status: { type: 'integer', description: 'Downloads: 200 or 206' }, range: { type: ['string', 'null'], description: 'Downloads: Content-Range of a 206' },
+          bytes: { type: 'integer', description: 'Downloads: bytes of the file sent' },
         }, ['id', 'event', 'type', 'resource', 'resourceId', 'href', 'occurredAt', 'webhookId'], { description: 'The JSON body POSTed to the webhook URL' }),
         WebhookDelivery: obj({
           id: { type: 'string' }, webhookId: { type: 'string' }, webhookName: { type: 'string' }, event: { type: 'string' }, resource: { type: 'string' }, resourceId: { type: 'integer' },

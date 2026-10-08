@@ -1,9 +1,11 @@
 'use strict';
-// Outgoing webhooks: subscriptions to created / updated / deleted events on the mock data, stored in the
-// database (collection "webhooks", so they survive restarts), delivered as a JSON POST.
+// Outgoing webhooks: subscriptions to created / updated / deleted events on the mock data, and to
+// uploaded / downloaded / deleted events on the file pool, stored in the database (collection "webhooks",
+// so they survive restarts), delivered as a JSON POST.
 //
 // Every write through ResourceService emits ctx.events 'change' (whatever the protocol: /v1, SOAP, GraphQL,
-// OData, the back office), and each enabled matching webhook gets one delivery:
+// OData, the back office); the file routes emit ctx.events 'file' once an upload, download or delete has
+// completed (any file protocol, and the dashboard). Each enabled matching webhook gets one delivery:
 //
 //   POST <url>
 //   Content-Type: application/json
@@ -14,6 +16,9 @@
 //   {"id": "<delivery id>", "event": "employees.created", "type": "created", "resource": "employees",
 //    "resourceId": 42, "href": "<base>/v1/employees/42", "occurredAt": "…", "webhookId": "…",
 //    "data": {…} (only with includeData; never for deletes)}
+//   File events: "resource": "files", "resourceId": "f_…", "href": "<base>/v1/files/f_…", plus "via"
+//   (multipart, raw, base64, tus, presigned, download, chunked, api, dashboard), "file" {name, contentType,
+//   size, sha256, …} and, for downloads, "status" (200/206), "range" and "bytes".
 //
 // One attempt per event, no automatic retries; every delivery is logged (collection "webhook_deliveries",
 // trimmed to WEBHOOK_DELIVERY_RETENTION) and can be resent from the dashboard or the admin API.
@@ -22,7 +27,11 @@ const { HttpError } = require('../util/problem');
 const { NAMES } = require('./resources');
 const pkg = require('../../package.json');
 
-const EVENTS = ['created', 'updated', 'deleted'];
+const EVENTS = ['created', 'updated', 'deleted', 'uploaded', 'downloaded'];
+const DATA_EVENTS = ['created', 'updated', 'deleted'];
+const FILE_EVENTS = ['uploaded', 'downloaded', 'deleted'];
+const RESOURCES = [...NAMES, 'files']; // "*" means every data resource; the file pool is opted into as "files"
+const hasData = (resources) => resources.some((r) => r !== 'files');
 const COLL = 'webhooks';
 const DELIVERIES = 'webhook_deliveries';
 const MAX_BODY_LOG = 8192;
@@ -38,7 +47,7 @@ function sign(secret, timestamp, body) {
 // Validate and normalise a webhook definition. partial: only the fields given are checked (PATCH).
 function normalize(input, existing = null) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) throw bad('The body must be a JSON object');
-  const out = existing ? { ...existing } : { enabled: true, includeData: false, resources: ['*'], events: ['created', 'updated'], headers: {}, secret: '' };
+  const out = existing ? { ...existing } : { enabled: true, includeData: false, resources: ['*'], events: null, headers: {}, secret: '' };
   const has = (k) => Object.hasOwn(input, k);
   if (has('name')) {
     if (typeof input.name !== 'string' || input.name.length > 120) throw bad('name must be a string of at most 120 characters', 'name');
@@ -52,15 +61,21 @@ function normalize(input, existing = null) {
   }
   if (has('resources')) {
     const list = [].concat(input.resources).map((x) => String(x).trim()).filter(Boolean);
-    const wrong = list.filter((x) => x !== '*' && !NAMES.includes(x));
-    if (!list.length || wrong.length) throw bad(`resources must be "*" or any of ${NAMES.join(', ')}${wrong.length ? ` (unknown: ${wrong.join(', ')})` : ''}`, 'resources');
-    out.resources = list.includes('*') ? ['*'] : [...new Set(list)];
+    const wrong = list.filter((x) => x !== '*' && !RESOURCES.includes(x));
+    if (!list.length || wrong.length) throw bad(`resources must be "*" (every data resource) and/or any of ${RESOURCES.join(', ')}${wrong.length ? ` (unknown: ${wrong.join(', ')})` : ''}`, 'resources');
+    out.resources = list.includes('*') ? ['*', ...(list.includes('files') ? ['files'] : [])] : RESOURCES.filter((r) => list.includes(r));
   }
   if (has('events')) {
     const list = [].concat(input.events).map((x) => String(x).trim()).filter(Boolean);
     const wrong = list.filter((x) => !EVENTS.includes(x));
     if (!list.length || wrong.length) throw bad(`events must be one or more of ${EVENTS.join(', ')}${wrong.length ? ` (unknown: ${wrong.join(', ')})` : ''}`, 'events');
     out.events = EVENTS.filter((e) => list.includes(e));
+  }
+  // Default events follow the resources: data -> created + updated, files -> uploaded.
+  if (!out.events) out.events = EVENTS.filter((e) => (hasData(out.resources) && ['created', 'updated'].includes(e)) || (out.resources.includes('files') && e === 'uploaded'));
+  const useless = out.events.filter((e) => !(hasData(out.resources) && DATA_EVENTS.includes(e)) && !(out.resources.includes('files') && FILE_EVENTS.includes(e)));
+  if (useless.length) {
+    throw bad(`${useless.join(', ')} never happen${useless.length === 1 ? 's' : ''} for ${out.resources.join(', ').replace('*', 'the data resources')}: created/updated are data events, uploaded/downloaded are file events (deleted is both)`, 'events');
   }
   for (const k of ['enabled', 'includeData']) {
     if (has(k)) {
@@ -84,7 +99,7 @@ function normalize(input, existing = null) {
     }
     out.headers = clean;
   }
-  if (!out.name) out.name = `${out.resources.join(', ')} ${out.events.join('/')}`.replace('*', 'all resources');
+  if (!out.name) out.name = `${out.resources.join(', ')} ${out.events.join('/')}`.replace('*', 'all data');
   return out;
 }
 
@@ -104,6 +119,7 @@ class WebhookService {
   async init() {
     for (const h of await this.ctx.repo.list(COLL)) this.hooks.set(h.id, h);
     this.ctx.events.on('change', (e) => this.onChange(e));
+    this.ctx.events.on('file', (e) => this.onChange(e));
   }
 
   list() { return [...this.hooks.values()].sort((a, b) => a.createdAt.localeCompare(b.createdAt)).map(publicView); }
@@ -137,7 +153,9 @@ class WebhookService {
   }
 
   matches(hook, e) {
-    return hook.enabled && hook.events.includes(e.type) && (hook.resources.includes('*') || hook.resources.includes(e.resource));
+    if (!hook.enabled || !hook.events.includes(e.type)) return false;
+    if (e.resource === 'files') return hook.resources.includes('files');
+    return hook.resources.includes('*') || hook.resources.includes(e.resource);
   }
 
   onChange(e) {
@@ -173,6 +191,11 @@ class WebhookService {
       occurredAt: e.at,
       webhookId: hook.id,
       ...(test ? { test: true } : {}),
+      ...(e.resource === 'files' ? {
+        via: e.via,
+        file: e.file,
+        ...(e.type === 'downloaded' ? { status: e.status, range: e.range ?? null, bytes: e.bytes } : {}),
+      } : {}),
       ...(hook.includeData && e.data && e.type !== 'deleted' ? { data: this.ctx.dates.formatDoc(e.data) } : {}),
     };
   }
@@ -246,11 +269,21 @@ class WebhookService {
   // A test delivery: a real-looking event for the first record of the webhook's first resource.
   async test(id, { type } = {}) {
     const hook = this.get(id);
-    const resource = hook.resources[0] === '*' ? 'employees' : hook.resources[0];
     const evType = type || hook.events[0];
     if (!EVENTS.includes(evType)) throw bad(`type must be one of ${EVENTS.join(', ')}`, 'type');
+    const at = new Date().toISOString();
+    const fileEvent = evType === 'uploaded' || evType === 'downloaded' || (evType === 'deleted' && !hasData(hook.resources));
+    if (fileEvent) {
+      if (!hook.resources.includes('files')) throw bad(`${evType} is a file event; this webhook does not watch files`, 'type');
+      const f = (await this.ctx.files.list())[0] || { id: 'f_example', name: 'example.txt', contentType: 'text/plain', size: 0 };
+      const file = { id: f.id, name: f.name, contentType: f.contentType, size: f.size, sha256: f.sha256 || null, source: f.source, createdAt: f.createdAt, updatedAt: f.updatedAt };
+      const extra = evType === 'downloaded' ? { status: 200, range: null, bytes: f.size } : {};
+      return this.track(this.deliver(hook, { type: evType, resource: 'files', id: f.id, at, via: 'test', file, ...extra }, { test: true }));
+    }
+    if (!hasData(hook.resources)) throw bad(`${evType} is a data event; this webhook only watches files`, 'type');
+    const resource = hook.resources[0] === '*' ? 'employees' : hook.resources[0];
     const doc = (await this.ctx.resources.all(resource))[0] || { id: 1 };
-    return this.track(this.deliver(hook, { type: evType, resource, id: doc.id, at: new Date().toISOString(), data: doc }, { test: true }));
+    return this.track(this.deliver(hook, { type: evType, resource, id: doc.id, at, data: doc }, { test: true }));
   }
 
   // Send a logged delivery again (same payload and delivery id, fresh timestamp and signature).
@@ -261,4 +294,4 @@ class WebhookService {
   }
 }
 
-module.exports = { WebhookService, normalize, sign, EVENTS, publicView };
+module.exports = { WebhookService, normalize, sign, EVENTS, RESOURCES, publicView };

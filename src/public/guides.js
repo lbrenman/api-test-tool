@@ -347,7 +347,7 @@
       // ------------------------------------------------------------ webhooks (outgoing)
       'webhooks.list': {
         title: 'Webhooks',
-        purpose: 'Every outgoing webhook: which resources and events it watches, where it posts, and how its last delivery went. Changes made through any protocol (/v1, SOAP, GraphQL, OData, the back office) trigger them.',
+        purpose: 'Every outgoing webhook: which resources and events it watches, where it posts, and how its last delivery went. Data changes through any protocol (/v1, SOAP, GraphQL, OData, the back office) and file uploads, downloads and deletes through any file protocol trigger them.',
         steps: [
           'Untick On to pause one webhook; turn off webhooksEnabled (settings card) to pause them all. Definitions are kept either way.',
           'Test sends a delivery now for the first record of the webhook\'s first resource, marked `"test": true`, so you can check your receiver without changing data.',
@@ -366,12 +366,14 @@
         purpose: 'Choose the resources and events to watch and the URL that receives a JSON POST with the event, the resource type and the record id.',
         steps: [
           'URL: your integration\'s endpoint. "Use this tool\'s inspector" points it at this server so you can see a delivery first.',
-          'Resources: all, or any of employees, products, departments, categories. Events: created, updated, deleted.',
+          'Data resources: all, or any of employees, products, departments, categories, with created / updated / deleted. File pool: files, with uploaded / downloaded / deleted (multipart, raw, base64, tus, presigned, range and chunked downloads, the Files page). One webhook can watch both.',
+          'File events also carry `via` (how it happened), `file` (name, type, size, sha256) and, for downloads, `status`, `range` and `bytes`. Failed uploads and regenerated sample files do not fire.',
           `The body is \`{"id", "event": "employees.created", "type", "resource", "resourceId", "href", "occurredAt", "webhookId"}\`; \`href\` is the record on \`${B}/v1\`. Tick "Include the record" to add it as \`data\`.`,
           'Signing secret: each delivery gets `X-Webhook-Signature: sha256=` + hex HMAC-SHA256(secret, `<X-Webhook-Timestamp>.<raw body>`). Extra headers carry credentials your receiver needs (e.g. an API key).',
         ],
         curls: [
           ['Webhook for new employees', admin('POST', '/webhooks', { json: { name: 'New employees', url: 'https://example.com/hooks/employees', resources: ['employees'], events: ['created'] } })],
+          ['Every file upload and delete', admin('POST', '/webhooks', { json: { name: 'File pool', url: 'https://example.com/hooks/files', resources: ['files'], events: ['uploaded', 'deleted'] } })],
           ['Signed, with a header and the record', admin('POST', '/webhooks', { json: { name: 'Products to integration', url: 'https://example.com/hooks/products', resources: ['products'], events: ['created', 'updated'], includeData: true, secret: 'change-me', headers: { 'X-API-Key': 'integration-key' } } })],
           ['Check a signature on the receiving side', "BODY='<raw request body>'; TS='<X-Webhook-Timestamp>'\nprintf '%s.%s' \"$TS\" \"$BODY\" | openssl dgst -sha256 -hmac 'change-me' | sed 's/^.* /sha256=/'"],
         ],

@@ -124,7 +124,7 @@ Fly.io, Render and Northflank are covered in [Deployment](#deployment).
 | **Server-Sent Events** | `/sse/changes` (live change feed from any protocol, Last-Event-ID replay, `event: reset` on gaps), `/sse/ticks` (numbered, resumable) and `POST /sse/stream` (LLM-style token streaming, plain events or OpenAI chunk format with `[DONE]`). Heartbeats, `retry:`, stream chaos (`dropAfter`, `malformedAt`, `skipIds`), documented in `/openapi.json`, with a live viewer in the dashboard. The tester reads SSE responses for a time window. |
 | **OData v4** | `/odata/v4` over the same data: service document, CSDL `$metadata`, `$filter` (comparison, logical, arithmetic, `in`, string/date/math functions, `any`/`all` lambdas, navigation paths), `$select`, `$expand` with nested options, `$orderby`, `$top`, `$skip`, `$count`, `$search`, server-driven paging with `@odata.nextLink` and `Prefer: odata.maxpagesize`, key/property/`$value`/navigation addressing, and create/update/delete with `@odata.bind`, `Prefer: return=…` and If-Match ETags. OData error format, `odata.metadata=none/minimal/full`, a query console in the dashboard. |
 | **GraphQL** | `/graphql` over the same data: queries with offset pages and Relay connections (filters, sort, search), nested department/category/manager resolvers, CRUD mutations with merge-patch updates, and a live `changes` subscription over WebSocket (graphql-transport-ws). Field errors come back as HTTP 200 with partial data and `extensions.code`; auth, rate-limit and chaos errors keep their HTTP status. GraphQL-over-HTTP media types, introspection on/off, depth limit, injected field errors (`X-Force-GraphQL-Error`), SDL at `/graphql/schema.graphql`, GraphiQL in the browser and a query console in the dashboard. |
-| **Outgoing webhooks** | Any number of webhooks that POST `{event, resource, resourceId, href, …}` to your URL when an employee, product, department or category is created, updated or deleted, through any protocol. Per webhook: resources, events, optional record data, HMAC signing secret and extra headers. Stored in the database (they survive restarts); every delivery is logged with the response, with Test and Resend buttons. |
+| **Outgoing webhooks** | Any number of webhooks that POST `{event, resource, resourceId, href, …}` to your URL when an employee, product, department or category is created, updated or deleted, or a file is uploaded, downloaded or deleted, through any protocol. Per webhook: resources, events, optional record data, HMAC signing secret and extra headers. Stored in the database (they survive restarts); every delivery is logged with the response, with Test and Resend buttons. |
 | **Inspector** | Catch-all capture with the actual path, live stream (SSE), detected auth (Basic user, decoded JWT, API keys), pretty bodies and multipart parts, copy as curl, replay, auto-forward, configurable responses and path rules. |
 | **Generated OpenAPI** | Two OAS 3.1 specs, regenerated from the live settings. **Mock Data API** (`/openapi.json`, `/openapi.yaml`) is for integrations: `/v1` resources, every pagination path, the file endpoints, the SSE streams and the OAuth token endpoint, reflecting the server URL, date format, auth scheme, required headers and chaos headers. **Admin API** (`/admin/api/openapi.json`, `.yaml`, password protected) is for operators and scripts: settings, seeding, files, OAuth clients, inspector, tester, `/health` and `/ready`. Swagger UI at `/docs` shows both (`/docs?spec=admin` for the admin spec). |
 | **API tester** | Upload, paste or URL load for OAS 3.0, 3.1 and Swagger 2.0 (REST), WSDL 1.1 (SOAP 1.1/1.2, with XSD validation and WS-Security) and AsyncAPI 2.x/3.0 (WebSocket, with message validation, correlation and scripted scenarios). Spec lint, per-operation "try it" with generated samples that honour `pattern`/`format`/`enum`/limits, auth profiles (none, API key, Basic, Bearer, OAuth2 client credentials), response validation, run-all contract mode with ID chaining and negative tests, run history, and JSON and HTML reports. "Mock from spec" serves a spec's examples from this tool. |
@@ -638,19 +638,29 @@ curl -s -X POST "$B/hooks/order-created?env=dev" -H 'Content-Type: application/j
 
 ## Outgoing webhooks
 
-The **Webhooks** page sends a POST to your integration whenever mock data changes, so you can test flows that start from an event. Add as many webhooks as you like; each one has:
+The **Webhooks** page sends a POST to your integration whenever mock data changes or something happens to a file in the pool, so you can test flows that start from an event. Add as many webhooks as you like; each one has:
 
 | Field | Meaning |
 |---|---|
 | URL | The http(s) endpoint that receives the POST. "Use this tool's inspector" points it at this server so the delivery shows up on the Inspector page. |
-| Resources | All, or any of `employees`, `products`, `departments`, `categories` |
-| Events | Any of `created`, `updated`, `deleted` (default: created and updated) |
+| Resources | Data: all (`*`), or any of `employees`, `products`, `departments`, `categories`. Files: `files` (the shared file pool). One webhook can watch both. |
+| Events | `created`, `updated` (data), `uploaded`, `downloaded` (files), `deleted` (both). Default: created and updated for data, uploaded for files. Events that cannot happen for the chosen resources are rejected. |
 | Include the record | Adds the record as `data` (never on deletes) |
 | Signing secret | Adds `X-Webhook-Signature: sha256=<hex HMAC-SHA256(secret, "<X-Webhook-Timestamp>.<raw body>")>` |
 | Extra headers | Credentials your receiver expects, e.g. `X-API-Key` (`X-Webhook-*`, `Content-Type` and `Host` are reserved) |
 | Enabled | Pause one webhook without deleting it |
 
-Changes through every protocol fire them: `/v1`, SOAP, GraphQL, OData and the back office. Seeding does not. Webhooks are stored in the database, so they survive restarts and re-seeding.
+Changes through every protocol fire them: `/v1`, SOAP, GraphQL, OData and the back office. Seeding does not.
+
+File events fire once the operation has completed, whatever the file protocol: uploads by multipart, raw, base64, tus (on the last chunk), presigned PUT (for S3, when the tool next sees the object) and the Files page; downloads (200 or 206) by download, range, chunked, base64, presigned GET and the Files page (`HEAD` and `304` do not count); deletes through `/v1/files/{id}` and the Files page. Failed or rolled-back uploads and regenerated sample files do not fire. A file event adds:
+
+```json
+{"event": "files.downloaded", "resource": "files", "resourceId": "f_Xq3…", "href": "https://your-app.fly.dev/v1/files/f_Xq3…",
+ "via": "download", "file": {"id": "f_Xq3…", "name": "report.pdf", "contentType": "application/pdf", "size": 48213, "sha256": "…"},
+ "status": 206, "range": "bytes 0-1023/48213", "bytes": 1024}
+```
+
+`via` is one of `multipart`, `raw`, `base64`, `tus`, `presigned`, `download`, `chunked`, `api` (a `/v1` delete) or `dashboard`; `status`, `range` and `bytes` are only on downloads. Webhooks are stored in the database, so they survive restarts and re-seeding.
 
 ```http
 POST https://your-integration.example.com/hooks/employees

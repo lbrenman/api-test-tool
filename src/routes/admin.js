@@ -114,13 +114,16 @@ module.exports = function adminRouter(ctx, { adminAuth, filesApi }) {
     // The dashboard sends application/octet-stream (so no body parser touches it) and the real type in X-Content-Type.
     const contentType = (req.get('x-content-type') || req.get('content-type') || 'application/octet-stream').split(';')[0];
     const meta = await files.saveStream({ name, contentType, source: 'uploaded', stream: req });
+    files.emit('uploaded', meta, 'dashboard');
     res.status(201).json(filesApi.present(req, meta));
   });
   r.delete('/files/:id', async (req, res) => {
-    if (!(await files.remove(req.params.id))) throw new HttpError(404, 'File not found');
+    const doc = await files.get(req.params.id);
+    if (!doc || !(await files.remove(req.params.id))) throw new HttpError(404, 'File not found');
+    files.emit('deleted', doc, 'dashboard');
     res.status(204).end();
   });
-  r.get('/files/:id/download', async (req, res) => filesApi.sendFile(req, res, await files.mustGet(req.params.id), { inline: req.query.inline === 'true' }));
+  r.get('/files/:id/download', async (req, res) => filesApi.sendFile(req, res, await files.mustGet(req.params.id), { inline: req.query.inline === 'true', via: 'dashboard' }));
 
   // ---- auth / oauth
   r.get('/auth', async (req, res) => {

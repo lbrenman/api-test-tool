@@ -46,6 +46,31 @@ class FileService {
 
   newId() { return `f_${crypto.randomBytes(9).toString('base64url')}`; }
 
+  // File events for outgoing webhooks: 'file' { type: uploaded|downloaded|deleted, resource: 'files', id, at,
+  // via, file, ...extra }. Emitted by the routes once an operation has really completed (not for
+  // rolled-back uploads or regenerated samples). this.events is set by the app (ctx.events).
+  emit(type, doc, via, extra = {}) {
+    if (!this.events || !doc) return;
+    try {
+      this.events.emit('file', {
+        type, resource: 'files', id: doc.id, at: new Date().toISOString(), via,
+        file: { id: doc.id, name: doc.name, contentType: doc.contentType, size: doc.size, sha256: doc.sha256 || null, source: doc.source, createdAt: doc.createdAt, updatedAt: doc.updatedAt },
+        ...extra,
+      });
+    } catch { /* a listener must never break a file operation */ }
+  }
+
+  // Emit 'downloaded' when a GET that sends the file's bytes finishes successfully (200 or 206).
+  trackDownload(req, res, doc, via) {
+    if (req.method !== 'GET') return;
+    res.once('finish', () => {
+      if (res.statusCode !== 200 && res.statusCode !== 206) return;
+      const partial = res.statusCode === 206;
+      // bytes of the file sent: the range length for 206, else the whole file (a base64 JSON body is larger)
+      this.emit('downloaded', doc, via, { status: res.statusCode, range: partial ? (res.getHeader('content-range') || null) : null, bytes: partial ? Number(res.getHeader('content-length')) : doc.size });
+    });
+  }
+
   async list() {
     const docs = await this.repo.list('files');
     for (const d of docs) if (d.status === 'pending') await this.reconcile(d);
@@ -73,6 +98,7 @@ class FileService {
     const done = { ...doc, size: st.size, sha256: doc.sha256 || null, status: undefined, updatedAt: now };
     delete done.status;
     await this.repo.put('files', doc.id, done);
+    this.emit('uploaded', done, 'presigned'); // a presigned PUT straight to S3 is noticed here
     return true;
   }
 

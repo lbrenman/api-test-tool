@@ -237,7 +237,7 @@
     settings: { purpose: 'Every setting in one place. Environment variables set defaults; changes here override them and survive restarts. Badges show where each value comes from.' },
     data: { purpose: 'The seeded mock data (employees, products, departments, categories): counts, a preview, re-seed with different sizes, or clear it.' },
     inspector: { purpose: 'Every call made to this server shows up here live, with headers, auth, body and the response that was returned: webhooks and other calls to unreserved paths, plus mock API (/v1), SOAP (/soap) and OAuth (/oauth) calls. Filter by source, or switch API recording off with the checkbox at the top of the page.' },
-    webhooks: { purpose: 'Outgoing webhooks: when an employee, product, department or category is created, updated or deleted (through any protocol), POST its type and id to URLs you choose. Stored in the database, so they survive restarts; every delivery is logged with the response.' },
+    webhooks: { purpose: 'Outgoing webhooks: when an employee, product, department or category is created, updated or deleted, or a file is uploaded, downloaded or deleted (through any protocol), POST its type and id to URLs you choose. Stored in the database, so they survive restarts; every delivery is logged with the response.' },
     files: { purpose: 'The shared file pool used by every file protocol (multipart, raw, base64, tus, presigned, range, chunked). Upload, download, delete or regenerate samples.' },
     auth: { purpose: 'Choose how /v1 calls must authenticate (none, API key, Basic, Bearer, JWT, OAuth2, HMAC), see the credentials, manage OAuth clients and get test tokens.' },
     chaos: { purpose: 'Make the mock API misbehave on purpose: random errors, latency, timeouts, broken JSON and rate limits, globally or per route, so you can test client error handling.' },
@@ -670,10 +670,10 @@
   VIEWS.webhooks = async (el) => {
     await loadSettings();
     const RES = ['employees', 'products', 'departments', 'categories'];
-    const EVS = ['created', 'updated', 'deleted'];
+    const EVS = ['created', 'updated', 'deleted', 'uploaded', 'downloaded'];
     const data = await api('GET', '/webhooks');
     const hooks = data.items;
-    el.append(header('Webhooks', 'POST to your URLs when mock data is created, updated or deleted, through any protocol.'));
+    el.append(header('Webhooks', 'POST to your URLs when mock data is created, updated or deleted, or a file is uploaded, downloaded or deleted, through any protocol.'));
     if (!data.enabled) el.append(h('div', { class: 'card', style: { borderColor: 'var(--warn)' } }, h('b', null, 'Deliveries are paused'), ' — webhooksEnabled is off in the settings below. Definitions are kept.'));
 
     // ---- form (add or edit)
@@ -682,7 +682,9 @@
     const url = h('input', { type: 'text', class: 'mono', placeholder: 'https://your-integration.example.com/hooks/employees' });
     const allRes = h('input', { type: 'checkbox', checked: true });
     const resBoxes = Object.fromEntries(RES.map((r) => [r, h('input', { type: 'checkbox' })]));
-    const evBoxes = Object.fromEntries(EVS.map((e) => [e, h('input', { type: 'checkbox', checked: e !== 'deleted' })]));
+    const filesBox = h('input', { type: 'checkbox' });
+    const DEFAULT_EVS = ['created', 'updated'];
+    const evBoxes = Object.fromEntries(EVS.map((e) => [e, h('input', { type: 'checkbox', checked: DEFAULT_EVS.includes(e) })]));
     const includeData = h('input', { type: 'checkbox' });
     const enabled = h('input', { type: 'checkbox', checked: true });
     const secret = h('input', { type: 'text', class: 'mono', placeholder: 'optional: signs each delivery (X-Webhook-Signature)' });
@@ -697,8 +699,8 @@
     const reset = () => {
       editing = null;
       name.value = ''; url.value = ''; secret.value = ''; headersIn.value = '';
-      allRes.checked = true; for (const b of Object.values(resBoxes)) b.checked = false;
-      for (const [e, b] of Object.entries(evBoxes)) b.checked = e !== 'deleted';
+      allRes.checked = true; filesBox.checked = false; for (const b of Object.values(resBoxes)) b.checked = false;
+      for (const [e, b] of Object.entries(evBoxes)) b.checked = DEFAULT_EVS.includes(e);
       includeData.checked = false; enabled.checked = true;
       secret.placeholder = 'optional: signs each delivery (X-Webhook-Signature)';
       formTitle.textContent = 'Add a webhook'; saveBtn.textContent = 'Add webhook'; cancelBtn.style.display = 'none';
@@ -709,6 +711,7 @@
       name.value = hk.name || ''; url.value = hk.url;
       allRes.checked = hk.resources.includes('*');
       for (const [r, b] of Object.entries(resBoxes)) b.checked = hk.resources.includes(r);
+      filesBox.checked = hk.resources.includes('files');
       for (const [e, b] of Object.entries(evBoxes)) b.checked = hk.events.includes(e);
       includeData.checked = hk.includeData; enabled.checked = hk.enabled;
       secret.value = '';
@@ -729,7 +732,7 @@
       const body = {
         name: name.value.trim() || undefined,
         url: url.value.trim(),
-        resources: allRes.checked ? ['*'] : RES.filter((r) => resBoxes[r].checked),
+        resources: [...(allRes.checked ? ['*'] : RES.filter((r) => resBoxes[r].checked)), ...(filesBox.checked ? ['files'] : [])],
         events: EVS.filter((e) => evBoxes[e].checked),
         includeData: includeData.checked,
         enabled: enabled.checked,
@@ -745,8 +748,10 @@
       h('div', { class: 'row' }, h('button', { class: 'small', onclick: () => { url.value = `${location.origin}/hooks/webhook-test`; } }, 'Use this tool\'s inspector as the receiver'),
         h('span', { class: 'small muted' }, 'Handy for a first look: deliveries then appear on the Inspector page.')),
       h('div', { class: 'grid cols-2' },
-        h('div', null, h('div', { class: 'small muted' }, 'Resources'), h('div', { class: 'row' }, check(allRes, 'All'), RES.map((r) => check(resBoxes[r], r)))),
-        h('div', null, h('div', { class: 'small muted' }, 'Events'), h('div', { class: 'row' }, EVS.map((e) => check(evBoxes[e], e))))),
+        h('div', null, h('div', { class: 'small muted' }, 'Data resources'), h('div', { class: 'row' }, check(allRes, 'All'), RES.map((r) => check(resBoxes[r], r))),
+          h('div', { class: 'small muted', style: { marginTop: '6px' } }, 'File pool'), h('div', { class: 'row' }, check(filesBox, 'files'))),
+        h('div', null, h('div', { class: 'small muted' }, 'Events'), h('div', { class: 'row' }, EVS.map((e) => check(evBoxes[e], e))),
+          h('div', { class: 'small muted' }, 'created and updated apply to data, uploaded and downloaded to files, deleted to both.'))),
       h('div', { class: 'row' }, check(includeData, 'Include the record as "data"'), check(enabled, 'Enabled')),
       h('div', { class: 'grid cols-2' }, field('Signing secret', secret), field('Extra headers', headersIn)),
       h('div', { class: 'row' }, saveBtn, cancelBtn));
@@ -761,7 +766,7 @@
           h('tbody', null, hooks.map((hk) => h('tr', null,
             h('td', null, h('b', null, hk.name), hk.hasSecret ? h('div', { class: 'small muted' }, 'signed') : null),
             h('td', null, h('input', { type: 'checkbox', checked: hk.enabled, 'aria-label': 'Enabled', onchange: guard(async (e) => { await api('PATCH', `/webhooks/${hk.id}`, { enabled: e.target.checked }); toast(e.target.checked ? 'Enabled' : 'Disabled', 'ok'); }) })),
-            h('td', null, hk.resources.includes('*') ? 'all' : hk.resources.join(', ')),
+            h('td', null, hk.resources.map((r) => (r === '*' ? 'all data' : r)).join(', ')),
             h('td', null, hk.events.join(', '), hk.includeData ? h('div', { class: 'small muted' }, '+ data') : null),
             h('td', { class: 'mono small', style: { wordBreak: 'break-all', minWidth: '180px' } }, hk.url),
             h('td', null, lastBadge(hk.lastDelivery)),
@@ -774,7 +779,9 @@
     el.append(h('div', { class: 'grid cols-2' }, formCard,
       h('div', { class: 'card' }, titled('Webhook settings', 'webhooks.settings'), settingsForm(['webhooksEnabled', 'webhookTimeoutMs', 'webhookDeliveryRetention'], { onSaved: () => route() }),
         h('h3', null, 'What your URL receives'),
-        codeBlock(`POST <your URL>\nContent-Type: application/json\nX-Webhook-Event: employees.created\nX-Webhook-Delivery: dlv_…\nX-Webhook-Timestamp: 1767225600\nX-Webhook-Signature: sha256=…   (with a secret)\n\n${JSON.stringify({ id: 'dlv_…', event: 'employees.created', type: 'created', resource: 'employees', resourceId: 42, href: `${location.origin}/v1/employees/42`, occurredAt: '2026-01-01T00:00:00.000Z', webhookId: 'wh_…' }, null, 2)}`))));
+        codeBlock(`POST <your URL>\nContent-Type: application/json\nX-Webhook-Event: employees.created\nX-Webhook-Delivery: dlv_…\nX-Webhook-Timestamp: 1767225600\nX-Webhook-Signature: sha256=…   (with a secret)\n\n${JSON.stringify({ id: 'dlv_…', event: 'employees.created', type: 'created', resource: 'employees', resourceId: 42, href: `${location.origin}/v1/employees/42`, occurredAt: '2026-01-01T00:00:00.000Z', webhookId: 'wh_…' }, null, 2)}`),
+        h('div', { class: 'small muted' }, 'A file event (resource "files") also says how it happened and describes the file:'),
+        codeBlock(JSON.stringify({ event: 'files.downloaded', resource: 'files', resourceId: 'f_Xq3…', href: `${location.origin}/v1/files/f_Xq3…`, via: 'download', file: { name: 'report.pdf', contentType: 'application/pdf', size: 48213 }, status: 206, range: 'bytes 0-1023/48213', bytes: 1024 }, null, 2)))));
 
     // ---- deliveries
     const filter = h('select', { 'aria-label': 'Webhook' }, h('option', { value: '' }, 'All webhooks'), hooks.map((hk) => h('option', { value: hk.id }, hk.name)));

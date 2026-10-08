@@ -56,6 +56,7 @@ async function createContext({ env = process.env, overrides = {} } = {}) {
   ctx.wsHub = new Set(); // open mock WebSocket connections
   ctx.resources = new ResourceService(repo, ctx.dates, ctx.events);
   ctx.files = new FileService(repo, await createStore(settings), settings);
+  ctx.files.events = ctx.events; // 'file' events (uploaded/downloaded/deleted) for outgoing webhooks
   ctx.keys = new KeyService(repo, settings);
   await ctx.keys.init();
   ctx.oauth = new OAuthService(ctx);

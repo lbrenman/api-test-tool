@@ -83,7 +83,7 @@ module.exports = function filesRouter(ctx) {
   }
 
   // ---------- download helper (range, etag, conditional) ----------
-  async function sendFile(req, res, f, { inline, attachment = true } = {}) {
+  async function sendFile(req, res, f, { inline, attachment = true, via = 'download' } = {}) {
     const size = f.size;
     const etag = `"${f.sha256 || `${f.id}-${size}`}"`;
     res.setHeader('Accept-Ranges', 'bytes');
@@ -119,6 +119,7 @@ module.exports = function filesRouter(ctx) {
       res.setHeader('Content-Length', String(size));
     }
     if (req.method === 'HEAD') return res.end();
+    files.trackDownload(req, res, f, via);
     const stream = await files.read(f, start !== undefined ? { start, end } : undefined);
     await pipeline(stream, res);
   }
@@ -160,6 +161,7 @@ module.exports = function filesRouter(ctx) {
       throw failure;
     }
     if (!saved.length) throw new HttpError(400, 'No file parts found in the multipart body', { code: 'no-files' });
+    for (const s of saved) files.emit('uploaded', s.meta, 'multipart');
     res.setHeader('Location', `${baseUrl(req)}/v1/files/${saved[0].meta.id}`);
     res.status(201).json({
       files: saved.map((s) => ({ field: s.field, ...present(req, s.meta) })),
@@ -180,6 +182,7 @@ module.exports = function filesRouter(ctx) {
       await files.remove(meta.id);
       throw new HttpError(400, 'Empty request body', { code: 'empty-body' });
     }
+    files.emit('uploaded', meta, 'raw');
     res.setHeader('Location', `${baseUrl(req)}/v1/files/${meta.id}`);
     res.status(201).json(present(req, meta));
   }
@@ -202,6 +205,7 @@ module.exports = function filesRouter(ctx) {
     if (!/^[A-Za-z0-9+/_-]*={0,2}$/.test(clean)) throw new HttpError(422, 'data is not valid base64', { errors: [{ field: 'data', message: 'not valid base64' }] });
     const buffer = Buffer.from(clean.replace(/-/g, '+').replace(/_/g, '/'), 'base64');
     const meta = await files.saveBuffer({ name: b.name, contentType, source: 'uploaded', buffer });
+    files.emit('uploaded', meta, 'base64');
     res.setHeader('Location', `${baseUrl(req)}/v1/files/${meta.id}`);
     res.status(201).json(present(req, meta));
   });
@@ -244,6 +248,7 @@ module.exports = function filesRouter(ctx) {
       });
       upload.fileId = meta.id;
       await fsp.rm(file, { force: true });
+      files.emit('uploaded', meta, 'tus');
     }
     await repo.put('tus_uploads', upload.id, upload);
     return upload;
@@ -377,13 +382,16 @@ module.exports = function filesRouter(ctx) {
   });
 
   r.delete('/:id', async (req, res) => {
-    if (!(await files.remove(req.params.id))) throw new HttpError(404, `File ${req.params.id} not found`);
+    const doc = await files.get(req.params.id);
+    if (!doc || !(await files.remove(req.params.id))) throw new HttpError(404, `File ${req.params.id} not found`);
+    files.emit('deleted', doc, 'api');
     res.status(204).end();
   });
 
   r.get('/:id/base64', async (req, res) => {
     const f = await files.mustGet(req.params.id);
     const buf = await files.readBuffer(f);
+    files.trackDownload(req, res, f, 'base64');
     res.json({ ...present(req, f), encoding: 'base64', data: buf.toString('base64') });
   });
 
@@ -399,6 +407,7 @@ module.exports = function filesRouter(ctx) {
     res.setHeader('X-File-Size', String(f.size));
     res.removeHeader('Content-Length');
     if (req.method === 'HEAD') return res.end();
+    files.trackDownload(req, res, f, 'chunked');
     const stream = await files.read(f);
     for await (const chunk of stream) {
       // Write in 64 KiB pieces so even small files produce multiple chunks.
@@ -420,7 +429,7 @@ module.exports.presignedRouter = function presignedRouter(ctx, filesApi) {
     const p = await filesApi.verifyToken(req.params.token);
     if (p.m !== 'GET') throw new HttpError(403, 'This presigned URL does not allow GET');
     const f = await files.mustGet(p.f);
-    await filesApi.sendFile(req, res, f, { inline: req.query.inline === 'true' });
+    await filesApi.sendFile(req, res, f, { inline: req.query.inline === 'true', via: 'presigned' });
   });
   r.put('/v1/files/presigned/:token', async (req, res) => {
     const p = await filesApi.verifyToken(req.params.token);
@@ -428,6 +437,7 @@ module.exports.presignedRouter = function presignedRouter(ctx, filesApi) {
     const meta = await files.saveStream({
       id: p.f, name: p.n, contentType: (req.get('content-type') || p.c || 'application/octet-stream').split(';')[0], source: 'uploaded', stream: req,
     });
+    files.emit('uploaded', meta, 'presigned');
     res.setHeader('Location', `${baseUrl(req)}/v1/files/${meta.id}`);
     res.status(200).json(filesApi.present(req, meta));
   });
