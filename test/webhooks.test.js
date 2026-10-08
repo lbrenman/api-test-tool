@@ -222,10 +222,20 @@ test('file webhooks: every upload, download and delete path; validation; no even
 
   // Presigned PUT then GET
   const ps = (await api().post('/v1/files/presign').send({ name: 'pre.txt', method: 'PUT', contentType: 'text/plain' }).expect(201)).body;
-  await api().put(new URL(ps.url).pathname).set('Content-Type', 'text/plain').send('presigned upload').expect(200);
-  assert.deepEqual((await ev()).map((c) => [c.body.via, c.body.file.name]), [['presigned', 'pre.txt']]);
+  if (t.ctx.files.store.name === 's3') {
+    // The PUT goes straight to the bucket; the event fires when the tool next sees the object.
+    const put = await fetch(ps.url, { method: 'PUT', headers: ps.headers || { 'Content-Type': 'text/plain' }, body: 'presigned upload' });
+    assert.ok(put.ok, `S3 PUT ${put.status}`);
+    assert.equal((await ev()).length, 0);
+    await api().get(`/v1/files/${ps.fileId}`).expect(200);
+  } else {
+    await api().put(new URL(ps.url).pathname).set('Content-Type', 'text/plain').send('presigned upload').expect(200);
+  }
+  assert.deepEqual((await ev(1)).map((c) => [c.body.via, c.body.file.name]), [['presigned', 'pre.txt']]);
+  const s3 = t.ctx.files.store.name === 's3';
   const pg = (await api().post('/v1/files/presign').send({ fileId: ps.fileId, method: 'GET' }).expect(201)).body;
-  await api().get(new URL(pg.url).pathname).expect(200);
+  if (s3) assert.ok((await fetch(pg.url)).ok); // served by the bucket: the tool never sees it, so no event
+  else await api().get(new URL(pg.url).pathname).expect(200);
 
   // Downloads: full, range, chunked, base64, dashboard; HEAD and 304 do not count
   await api().get(`/v1/files/${f1}/download`).expect(200);
@@ -235,16 +245,18 @@ test('file webhooks: every upload, download and delete path; validation; no even
   await api().get(`/admin/api/files/${f1}/download`).expect(200);
   const etag = (await api().head(`/v1/files/${f1}/download`).expect(200)).headers.etag;
   await api().get(`/v1/files/${f1}/download`).set('If-None-Match', etag).expect(304);
-  calls = await ev(6);
-  assert.deepEqual(calls.map((c) => [c.body.event, c.body.via, c.body.status, c.body.bytes]), [
-    ['files.downloaded', 'presigned', 200, 16],
+  calls = await ev(s3 ? 5 : 6);
+  const key = (c) => JSON.stringify(c);
+  // Deliveries are sent concurrently, so compare without regard to arrival order.
+  assert.deepEqual(calls.map((c) => [c.body.event, c.body.via, c.body.status, c.body.bytes]).sort((a, b) => key(a).localeCompare(key(b))), [
+    ...(s3 ? [] : [['files.downloaded', 'presigned', 200, 16]]),
     ['files.downloaded', 'download', 200, 5],
     ['files.downloaded', 'download', 206, 2],
     ['files.downloaded', 'chunked', 200, 5],
     ['files.downloaded', 'base64', 200, 5],
     ['files.downloaded', 'dashboard', 200, 5],
-  ]);
-  assert.equal(calls[2].body.range, 'bytes 0-1/5');
+  ].sort((a, b) => key(a).localeCompare(key(b))), JSON.stringify(calls.map((c) => [c.body.via, c.body.status])));
+  assert.equal(calls.find((c) => c.body.status === 206).body.range, 'bytes 0-1/5');
 
   // Deletes through the API and the dashboard; a missing file fires nothing
   await api().delete(`/v1/files/${f1}`).expect(204);

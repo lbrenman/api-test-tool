@@ -652,7 +652,7 @@ The **Webhooks** page sends a POST to your integration whenever mock data change
 
 Changes through every protocol fire them: `/v1`, SOAP, GraphQL, OData and the back office. Seeding does not.
 
-File events fire once the operation has completed, whatever the file protocol: uploads by multipart, raw, base64, tus (on the last chunk), presigned PUT (for S3, when the tool next sees the object) and the Files page; downloads (200 or 206) by download, range, chunked, base64, presigned GET and the Files page (`HEAD` and `304` do not count); deletes through `/v1/files/{id}` and the Files page. Failed or rolled-back uploads and regenerated sample files do not fire. A file event adds:
+File events fire once the operation has completed, whatever the file protocol: uploads by multipart, raw, base64, tus (on the last chunk), presigned PUT (for S3, when the tool next sees the object) and the Files page; downloads (200 or 206) by download, range, chunked, base64, presigned GET and the Files page (`HEAD` and `304` do not count; with `FILE_STORE=s3` a presigned GET is served by the bucket, so the tool cannot see it); deletes through `/v1/files/{id}` and the Files page. Failed or rolled-back uploads and regenerated sample files do not fire. A file event adds:
 
 ```json
 {"event": "files.downloaded", "resource": "files", "resourceId": "f_Xq3…", "href": "https://your-app.fly.dev/v1/files/f_Xq3…",

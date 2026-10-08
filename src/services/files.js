@@ -60,15 +60,31 @@ class FileService {
     } catch { /* a listener must never break a file operation */ }
   }
 
-  // Emit 'downloaded' when a GET that sends the file's bytes finishes successfully (200 or 206).
+  // Emit 'downloaded' when a GET that sends the file's bytes completes (200 or 206). A client may read the
+  // whole body and hang up before the response's 'finish' event, so success is also judged on 'close':
+  // every byte of a Content-Length body was written, or the response was ended.
   trackDownload(req, res, doc, via) {
     if (req.method !== 'GET') return;
-    res.once('finish', () => {
+    let written = 0;
+    const count = (chunk, enc) => { if (chunk && typeof chunk !== 'function') written += Buffer.isBuffer(chunk) ? chunk.length : Buffer.byteLength(String(chunk), typeof enc === 'string' ? enc : 'utf8'); };
+    const origWrite = res.write;
+    const origEnd = res.end;
+    res.write = function w(chunk, ...rest) { count(chunk, rest[0]); return origWrite.call(this, chunk, ...rest); };
+    res.end = function e(chunk, ...rest) { count(chunk, rest[0]); return origEnd.call(this, chunk, ...rest); };
+    let done = false;
+    const settle = () => {
+      if (done) return;
+      done = true;
       if (res.statusCode !== 200 && res.statusCode !== 206) return;
+      const cl = Number(res.getHeader('content-length'));
+      const complete = res.writableFinished || (Number.isFinite(cl) && cl > 0 ? written >= cl : res.writableEnded);
+      if (!complete) return;
       const partial = res.statusCode === 206;
       // bytes of the file sent: the range length for 206, else the whole file (a base64 JSON body is larger)
-      this.emit('downloaded', doc, via, { status: res.statusCode, range: partial ? (res.getHeader('content-range') || null) : null, bytes: partial ? Number(res.getHeader('content-length')) : doc.size });
-    });
+      this.emit('downloaded', doc, via, { status: res.statusCode, range: partial ? (res.getHeader('content-range') || null) : null, bytes: partial ? cl : doc.size });
+    };
+    res.once('finish', settle);
+    res.once('close', settle);
   }
 
   async list() {
