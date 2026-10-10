@@ -803,6 +803,8 @@ fly secrets set FILE_STORE=s3 S3_BUCKET=<bucket-name> S3_REGION=auto \
 
 `fly storage create` sets `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_ENDPOINT_URL_S3` and `BUCKET_NAME` on the app. The tool reads the bucket and endpoint from `S3_BUCKET` and `S3_ENDPOINT`, not from those names, so set them as above. The `AWS_*` keys can stay as they are: when `S3_ACCESS_KEY_ID` is empty, the S3 client falls back to the standard AWS credential variables.
 
+> **Not yet verified on Fly.** `FILE_STORE=s3` is tested in CI against MinIO, but the Fly deploy and this Tigris setup (including `S3_REGION=auto` and the `AWS_*` credential fallback) have not been tried on a real Fly app yet.
+
 ### Render
 
 `render.yaml` deploys the Dockerfile. Render's free plan has no persistent disk, so either:
