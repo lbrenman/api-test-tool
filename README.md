@@ -217,8 +217,8 @@ Settings marked **restart** can only be set through the environment.
 | `WEBHOOK_TIMEOUT_MS` | `10000` | How long a delivery waits for the receiver (100–60000) |
 | `WEBHOOK_DELIVERY_RETENTION` | `200` | Deliveries kept in the log, all webhooks together (10–10000) |
 | `INSPECTOR_RETENTION` | `500` | Captures kept |
-| `INSPECTOR_LOG_ALL` | `true` | Also record `/v1/*`, `/soap/*`, `/ws/*` (upgrades), `/sse/*`, `/graphql`, `/odata/*` and `/oauth/*` calls (with their real responses). Toggle on the Inspector page. |
-| `INSPECTOR_RESPONSE_STATUS`, `…_CONTENT_TYPE`, `…_BODY`, `…_HEADERS`, `…_DELAY_MS` | `200`, `application/json`, receipt, —, `0` | Default catch-all response |
+| `INSPECTOR_LOG_ALL` | `true` | Also record `/v1/*`, `/soap/*`, `/ws/*` (upgrades), `/sse/*`, `/graphql`, `/odata/*`, S3 API and `/oauth/*` calls (with their real responses). Toggle with **Record API calls** on the Inspector page. |
+| `INSPECTOR_RESPONSE_STATUS`, `INSPECTOR_RESPONSE_CONTENT_TYPE`, `INSPECTOR_RESPONSE_BODY`, `INSPECTOR_RESPONSE_HEADERS`, `INSPECTOR_RESPONSE_DELAY_MS` | `200`, `application/json`, receipt, —, `0` | Default catch-all response |
 | `INSPECTOR_RULES` | — | JSON path rules (first match wins) |
 | `INSPECTOR_FORWARD_ENABLED` / `INSPECTOR_FORWARD_URL` | `false` / — | Auto-forward captures |
 
