@@ -525,12 +525,15 @@
           'Add a client per integration you test, with the scopes it should get (e.g. `read` only, to test 403 on writes).',
           'Leave the secret blank to generate one; add redirect URIs for the authorization code flow.',
           'Use the new id and secret in your platform\'s OAuth connection.',
-          'Delete removes a dashboard-added or registered client; env clients change only through OAUTH_CLIENTS.',
+          'Edit changes a client in place: add or remove redirect URIs (handy while developing: loopback http URIs match on any port, custom schemes like `myapp://callback` work), change scopes or grant types, set or regenerate the secret. Fields you leave alone are kept.',
+          'Editing an env client (OAUTH_CLIENTS) stores an edited copy that wins over the env entry; Revert removes the copy. Delete removes a dashboard-added or registered client.',
           ...pw,
         ],
         curls: [
           ['Add a read-only client', admin('POST', '/oauth/clients', { json: { clientId: 'read-only-app', scopes: 'read' } })],
           ['Get a token for it', `curl -s -u 'read-only-app:SECRET' -d grant_type=client_credentials ${q(C.ctx.tokenUrl)}`],
+          ['Add a redirect URI to an existing client', admin('PATCH', `/oauth/clients/${encodeURIComponent(c.clientId)}`, { json: { redirectUris: ['https://oauth.pstmn.io/v1/callback', 'http://localhost:8080/callback'] } })],
+          ['Regenerate its secret', admin('PATCH', `/oauth/clients/${encodeURIComponent(c.clientId)}`, { json: { secret: '' } })],
         ],
       },
       'auth.registration': {

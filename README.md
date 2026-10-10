@@ -386,6 +386,14 @@ curl -s "$B/oauth/register" -H 'Content-Type: application/json' \
 
 The dashboard's **Auth** page has a "Get a test token" button, an OAuth client manager, the registration settings, and an HMAC signer that produces a ready-to-run curl.
 
+**Editing clients.** Every client in the Auth page's table has an **Edit** button: add or remove redirect URIs (typical while developing a callback; loopback `http://127.0.0.1|localhost` URIs match on any port), change scopes or grant types, set or regenerate the secret, rename it. Fields you don't touch are kept. Editing a client from `OAUTH_CLIENTS` stores an edited copy in the database that takes precedence over the env entry; **Revert** removes the copy. The same through the admin API:
+
+```bash
+curl -s -X PATCH "$B/admin/api/oauth/clients/demo-client" -u "admin:$ADMIN_PASSWORD" \
+  -H 'Content-Type: application/json' -d '{"redirectUris":["https://oauth.pstmn.io/v1/callback","http://localhost:8080/callback"]}'
+# {"secret": ""} generates a new secret; "scopes", "grantTypes" and "clientName" work the same way
+```
+
 ---
 
 ## Mock API conventions

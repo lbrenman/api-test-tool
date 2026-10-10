@@ -116,7 +116,12 @@ async function generateAdminOpenApi(ctx, req) {
     requestBody: body(obj({ clientId: { type: 'string' }, secret: { type: 'string' }, scopes: { description: 'Space/comma-separated string or array', anyOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }] }, redirectUris: { anyOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }] } }), { clientId: 'fusion', secret: 's3cret', scopes: 'read write' }),
     responses: { ...created('Client created', S('OAuthClient')), ...BAD, ...AUTHED },
   }));
-  add(`${A}/oauth/clients/{id}`, 'delete', op('Auth', 'deleteOAuthClient', 'Delete a dashboard-added OAuth client (env clients cannot be deleted)', {
+  add(`${A}/oauth/clients/{id}`, 'patch', op('Auth', 'updateOAuthClient', 'Edit a client: secret ("" = generate a new one), scopes, redirect URIs, grant types, name. Omitted fields are kept. Editing an env client stores a copy that overrides OAUTH_CLIENTS; deleting the copy reverts it.', {
+    parameters: [pathParam('id', 'Client id')],
+    requestBody: body(obj({ secret: { type: 'string' }, scopes: { anyOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }] }, redirectUris: { anyOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }] }, grantTypes: { anyOf: [{ type: 'string' }, { type: 'array', items: { type: 'string', enum: ['authorization_code', 'refresh_token', 'client_credentials'] } }] }, clientName: { type: 'string' } }), { redirectUris: ['https://oauth.pstmn.io/v1/callback', 'http://localhost:8080/callback'] }),
+    responses: { ...ok('Updated client', S('OAuthClient')), ...BAD, ...AUTHED, ...NF },
+  }));
+  add(`${A}/oauth/clients/{id}`, 'delete', op('Auth', 'deleteOAuthClient', 'Delete a dashboard-added, edited or registered OAuth client (deleting an edited env client reverts it to OAUTH_CLIENTS)', {
     parameters: [pathParam('id', 'Client id')],
     responses: { ...noContent('Deleted'), ...AUTHED, ...NF },
   }));

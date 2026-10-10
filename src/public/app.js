@@ -646,6 +646,33 @@
           }) }, 'Issue token'), tokenOut,
           h('div', { class: 'small muted' }, 'curl:'), codeBlock(`curl -s -u '${a.clients[0]?.clientId || 'demo-client'}:${a.clients[0]?.secret || 'demo-secret'}' -d grant_type=client_credentials -d scope="read write" '${a.oauth.tokenUrl}'`)),
         h('div', { class: 'card' }, titled('OAuth server', 'auth.server'), kv({ token: a.oauth.tokenUrl, authorize: a.oauth.authorizeUrl, metadata: a.oauth.metadata, jwks: a.jwt.jwks, issuer: a.jwt.issuer, audience: a.jwt.audience, alg: a.jwt.alg, 'demo users': a.oauth.users.join(', ') })))));
+    // Inline editor for one client (redirect URIs, scopes, secret, grants, name).
+    const editBox = h('div');
+    function editClient(c) {
+      const lines = (arr) => (arr || []).join('\n');
+      const redirects = h('textarea', { rows: 4, class: 'mono', placeholder: 'one redirect URI per line (empty = any http/https URL)' }, lines(c.redirectUris));
+      const scopesIn = h('input', { type: 'text', value: c.scopes.join(' ') });
+      const grants = h('input', { type: 'text', value: (c.grantTypes || []).join(' '), placeholder: 'empty = any grant' });
+      const nameIn = h('input', { type: 'text', value: c.clientName || '' });
+      const secretIn = h('input', { type: 'text', placeholder: c.public ? 'public client: no secret' : 'leave blank to keep the current secret', disabled: !!c.public });
+      const regen = h('input', { type: 'checkbox', disabled: !!c.public });
+      clear(editBox).append(h('div', { class: 'card stack', style: { marginTop: '12px' } },
+        h('div', { class: 'row between' }, h('b', null, `Edit ${c.clientId}`), h('button', { class: 'small', onclick: () => clear(editBox) }, 'Cancel')),
+        c.source === 'env' ? h('div', { class: 'small muted' }, 'This client comes from OAUTH_CLIENTS. Saving stores an edited copy that takes precedence; Revert goes back to the env values.') : null,
+        field('Redirect URIs', redirects, 'Exact match; loopback http URIs (127.0.0.1, localhost) also match on any port. Custom schemes such as myapp://callback are allowed.'),
+        h('div', { class: 'grid cols-3' }, field('Scopes', scopesIn), field('Grant types', grants, 'authorization_code refresh_token client_credentials'), field('Name', nameIn)),
+        h('div', { class: 'grid cols-2' }, field('New secret', secretIn), h('label', { class: 'check', style: { alignSelf: 'end' } }, regen, 'Generate a new secret')),
+        h('div', { class: 'row' }, h('button', { class: 'primary', onclick: guard(async () => {
+          const body = { redirectUris: redirects.value.split(/\s+/).filter(Boolean), scopes: scopesIn.value, grantTypes: grants.value, clientName: nameIn.value };
+          if (!c.public && regen.checked) body.secret = '';
+          else if (!c.public && secretIn.value) body.secret = secretIn.value;
+          const updated = await api('PATCH', `/oauth/clients/${encodeURIComponent(c.clientId)}`, body);
+          toast(body.secret !== undefined ? `Saved ${updated.clientId} (secret ${updated.secret})` : `Saved ${updated.clientId}`, 'ok');
+          route();
+        }) }, 'Save'))));
+      editBox.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+
     const regUrl = a.oauth.registration;
     el.append(h('div', { class: 'grid cols-2' },
       h('div', { class: 'card stack' }, titled('Dynamic client registration', 'auth.registration'),
@@ -659,8 +686,14 @@
       h('div', { class: 'table-wrap' }, h('table', null, h('thead', null, h('tr', null, ['Client id', 'Secret', 'Scopes', 'Grants', 'Redirect URIs', 'Source', ''].map((x) => h('th', null, x)))),
         h('tbody', null, a.clients.map((c) => h('tr', null, h('td', { class: 'mono' }, c.clientId, c.clientName ? h('div', { class: 'small muted' }, c.clientName) : null), h('td', { class: 'mono' }, c.secret || '(public)'), h('td', null, c.scopes.join(' ')),
           h('td', { class: 'small' }, (c.grantTypes || ['any']).join(' ')), h('td', { class: 'small' }, (c.redirectUris || []).join(' ') || 'any http(s)'),
-          h('td', null, h('span', { class: 'badge' }, c.source)),
-          h('td', null, c.source !== 'env' ? h('button', { class: 'small danger', onclick: guard(async () => { if (!confirm(`Delete client ${c.clientId}?`)) return; await api('DELETE', `/oauth/clients/${encodeURIComponent(c.clientId)}`); route(); }) }, 'Delete') : null)))))),
+          h('td', null, h('span', { class: 'badge' }, c.source), c.overridesEnv ? h('div', { class: 'small muted' }, 'edited (overrides env)') : null),
+          h('td', null, h('div', { class: 'row', style: { flexWrap: 'nowrap' } },
+            h('button', { class: 'small', onclick: () => editClient(c) }, 'Edit'),
+            c.source !== 'env' ? h('button', { class: 'small danger', onclick: guard(async () => {
+              if (!confirm(c.overridesEnv ? `Revert ${c.clientId} to its OAUTH_CLIENTS values?` : `Delete client ${c.clientId}?`)) return;
+              await api('DELETE', `/oauth/clients/${encodeURIComponent(c.clientId)}`); route();
+            }) }, c.overridesEnv ? 'Revert' : 'Delete') : null))))))),
+      editBox,
       h('h3', null, 'Add client'), h('div', { class: 'grid cols-4' }, newId, newSecret, newScopes, newRedirects),
       h('div', { class: 'row', style: { marginTop: '8px' } }, h('button', { onclick: guard(async () => {
         const c = await api('POST', '/oauth/clients', { clientId: newId.value, secret: newSecret.value || undefined, scopes: newScopes.value, redirectUris: newRedirects.value });

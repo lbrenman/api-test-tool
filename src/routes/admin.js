@@ -143,8 +143,14 @@ module.exports = function adminRouter(ctx, { adminAuth, filesApi }) {
     });
   });
   r.post('/oauth/clients', async (req, res) => res.status(201).json(await oauth.addClient(req.body || {})));
+  r.patch('/oauth/clients/:id', async (req, res) => {
+    const doc = await oauth.updateClient(req.params.id, req.body || {});
+    if (!doc) throw new HttpError(404, `No OAuth client ${req.params.id}`);
+    const { registrationTokenHash, ...c } = doc; // eslint-disable-line no-unused-vars
+    res.json(c);
+  });
   r.delete('/oauth/clients/:id', async (req, res) => {
-    if (!(await oauth.removeClient(req.params.id))) throw new HttpError(404, 'Only dashboard-added clients can be deleted (env clients come from OAUTH_CLIENTS)');
+    if (!(await oauth.removeClient(req.params.id))) throw new HttpError(404, 'Only dashboard-added, edited or registered clients can be deleted (env clients come from OAUTH_CLIENTS)');
     res.status(204).end();
   });
   r.post('/auth/test-token', async (req, res) => {

@@ -41,7 +41,8 @@ class OAuthService {
   }
 
   async clients() {
-    const extra = (await this.ctx.repo.list('oauth_clients')).map((c) => ({ ...c, source: c.source || 'dashboard' }));
+    const envIds = new Set(this.envClients().map((c) => c.clientId));
+    const extra = (await this.ctx.repo.list('oauth_clients')).map((c) => ({ ...c, source: c.source || 'dashboard', ...(envIds.has(c.clientId) ? { overridesEnv: true } : {}) }));
     const env = this.envClients().filter((c) => !extra.some((x) => x.clientId === c.clientId));
     return [...env, ...extra];
   }
@@ -54,7 +55,7 @@ class OAuthService {
       clientId,
       secret: secret === undefined ? crypto.randomBytes(18).toString('base64url') : String(secret),
       scopes: (Array.isArray(scopes) ? scopes : String(scopes || 'read write').split(/[\s,]+/)).filter(Boolean),
-      redirectUris: (Array.isArray(redirectUris) ? redirectUris : String(redirectUris || '').split(/[\s,]+/)).filter(Boolean),
+      redirectUris: OAuthService.checkRedirectUris((Array.isArray(redirectUris) ? redirectUris : String(redirectUris || '').split(/[\s,]+/)).filter(Boolean)),
       createdAt: new Date().toISOString(),
     };
     await this.ctx.repo.put('oauth_clients', clientId, doc);
@@ -62,6 +63,58 @@ class OAuthService {
   }
 
   async removeClient(clientId) { return this.ctx.repo.del('oauth_clients', clientId); }
+
+  /** Check redirect URIs: absolute, no fragment, no script/data/file schemes. Throws OAuthError(code). */
+  static checkRedirectUris(uris, code = 'invalid_request') {
+    for (const u of uris) {
+      let url;
+      try { url = new URL(u); } catch { throw new OAuthError(code, `"${u}" is not an absolute URI`); }
+      if (url.hash) throw new OAuthError(code, `"${u}" must not contain a fragment`);
+      if (/^(javascript|data|vbscript|file):$/i.test(url.protocol)) throw new OAuthError(code, `The ${url.protocol} scheme is not allowed in a redirect URI`);
+    }
+    return uris;
+  }
+
+  /**
+   * Edit a client from the dashboard: secret, scopes, redirect URIs, grant types, name. Fields left out are kept.
+   * A dashboard or registered client is updated in place; an env client (OAUTH_CLIENTS) gets a stored copy that
+   * takes precedence over the env entry (deleting the copy reverts to the env values).
+   */
+  async updateClient(clientId, patch = {}) {
+    const current = await this.client(clientId);
+    if (!current) return null;
+    const list = (v) => (Array.isArray(v) ? v : String(v ?? '').split(/[\s,]+/)).map((x) => String(x).trim()).filter(Boolean);
+    const { source, ...base } = current;
+    const doc = { ...base, source: source === 'env' ? 'dashboard' : source };
+    if (source === 'env') { doc.overridesEnv = true; doc.createdAt = new Date().toISOString(); }
+    if (patch.secret !== undefined) {
+      if (doc.public) throw new OAuthError('invalid_request', 'A public client has no secret');
+      doc.secret = patch.secret === '' || patch.secret === null ? crypto.randomBytes(18).toString('base64url') : String(patch.secret);
+    }
+    if (patch.scopes !== undefined) {
+      const scopes = list(patch.scopes);
+      if (!scopes.length) throw new OAuthError('invalid_request', 'A client needs at least one scope');
+      doc.scopes = scopes;
+    }
+    if (patch.redirectUris !== undefined) doc.redirectUris = OAuthService.checkRedirectUris(list(patch.redirectUris));
+    if (patch.grantTypes !== undefined) {
+      const grants = list(patch.grantTypes);
+      const bad = grants.find((g) => !['authorization_code', 'refresh_token', 'client_credentials'].includes(g));
+      if (bad) throw new OAuthError('invalid_request', `Unsupported grant type "${bad}"`);
+      if (doc.public && grants.includes('client_credentials')) throw new OAuthError('invalid_request', 'A public client cannot use client_credentials');
+      doc.grantTypes = grants.length ? grants : undefined;
+      if (!grants.length) delete doc.grantTypes;
+    }
+    if (patch.clientName !== undefined) {
+      if (patch.clientName) doc.clientName = String(patch.clientName).slice(0, 200); else delete doc.clientName;
+    }
+    if (doc.grantTypes?.includes('authorization_code') && doc.source === 'registered' && !doc.redirectUris?.length) {
+      throw new OAuthError('invalid_request', 'A registered client with the authorization_code grant needs at least one redirect URI');
+    }
+    doc.updatedAt = new Date().toISOString();
+    await this.ctx.repo.put('oauth_clients', clientId, doc);
+    return doc;
+  }
 
   // ---- Dynamic client registration (RFC 7591) and its management endpoint (RFC 7592: read, delete) ----
 
@@ -97,12 +150,7 @@ class OAuthService {
     if (authMethod === 'none' && grantTypes.includes('client_credentials')) throw bad('A public client (token_endpoint_auth_method "none") cannot use client_credentials');
     const redirectUris = list(meta.redirect_uris, 'redirect_uris') || [];
     if (grantTypes.includes('authorization_code') && !redirectUris.length) throw new OAuthError('invalid_redirect_uri', 'redirect_uris is required for the authorization_code grant');
-    for (const u of redirectUris) {
-      let url;
-      try { url = new URL(u); } catch { throw new OAuthError('invalid_redirect_uri', `"${u}" is not an absolute URI`); }
-      if (url.hash) throw new OAuthError('invalid_redirect_uri', `"${u}" must not contain a fragment`);
-      if (/^(javascript|data|vbscript|file):$/i.test(url.protocol)) throw new OAuthError('invalid_redirect_uri', `The ${url.protocol} scheme is not allowed in a redirect URI`);
-    }
+    OAuthService.checkRedirectUris(redirectUris, 'invalid_redirect_uri');
     const allowed = this.registrationScopes();
     let scopes = allowed;
     if (meta.scope !== undefined && meta.scope !== null && String(meta.scope).trim()) {
