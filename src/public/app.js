@@ -237,12 +237,12 @@
     overview: { purpose: 'Your starting point: the URLs to give integrations, current auth mode, health, data counts and copy-ready curl commands.' },
     settings: { purpose: 'Every setting in one place. Environment variables set defaults; changes here override them and survive restarts. Badges show where each value comes from.' },
     data: { purpose: 'The seeded mock data (employees, products, departments, categories): counts, a preview, re-seed with different sizes, or clear it.' },
-    inspector: { purpose: 'Every call made to this server shows up here live, with headers, auth, body and the response that was returned: webhooks and other calls to unreserved paths, plus mock API (/v1), SOAP (/soap) and OAuth (/oauth) calls. Filter by source, or switch API recording off with the checkbox at the top of the page.' },
+    inspector: { purpose: 'Every call made to this server shows up here live, with headers, auth, body and the response that was returned: webhooks and other calls to unreserved paths, plus calls to every API the tool serves (/v1, SOAP, WebSocket upgrades, SSE, GraphQL, OData, the S3 API and OAuth). Filter by source, or switch API recording off with the checkbox at the top of the page.' },
     webhooks: { purpose: 'Outgoing webhooks: when an employee, product, department or category is created, updated or deleted, or a file is uploaded, downloaded or deleted (through any protocol), POST its type and id to URLs you choose. Stored in the database, so they survive restarts; every delivery is logged with the response.' },
-    files: { purpose: 'The shared file pool used by every file protocol (multipart, raw, base64, tus, presigned, range, chunked). Upload, download, delete or regenerate samples.' },
-    auth: { purpose: 'Choose how /v1 calls must authenticate (none, API key, Basic, Bearer, JWT, OAuth2, HMAC), see the credentials, manage OAuth clients and get test tokens.' },
+    files: { purpose: 'The shared file pool used by every file protocol (multipart, raw, base64, tus, presigned, range, chunked) and by the S3-compatible API, where it is a bucket. Upload, download, delete or regenerate samples.' },
+    auth: { purpose: 'Choose how API calls must authenticate (none, API key, Basic, Bearer, JWT, OAuth2, HMAC) on /v1, SOAP, WebSocket, SSE, GraphQL and OData; see the credentials, manage OAuth clients and get test tokens. The S3 API signs with its own keys (Protocols page).' },
     chaos: { purpose: 'Make the mock API misbehave on purpose: random errors, latency, timeouts, broken JSON and rate limits, globally or per route, so you can test client error handling.' },
-    headers: { purpose: 'Headers added to every response, and headers every /v1 request must carry (missing ones return 400).' },
+    headers: { purpose: 'Headers added to every response, and headers every API request must carry on every protocol (missing ones are rejected with 400 in that protocol\'s error format).' },
     protocols: { purpose: 'The same mock data over other protocols: SOAP 1.1/1.2 services with live WSDLs, WebSocket channels (echo, JSON-RPC, live change feed) with an AsyncAPI document and a live console, Server-Sent Events streams (change feed with replay, ticks, LLM-style streaming) with a live viewer, GraphQL (queries, mutations, subscriptions), OData v4, and the file pool as an S3-compatible bucket (AWS Signature V4), each with a console. Auth (the S3 API uses its own keys), chaos, rate limits and required headers apply as on /v1.' },
     openapi: { purpose: 'Two live OpenAPI 3.1 specs: the Mock Data API (/openapi.json) for integrations to import, and the Admin API (/admin/api/openapi.json) for scripting the tool itself.' },
     tester: { purpose: 'Test an API you built: load its OpenAPI spec (REST), WSDL (SOAP) or AsyncAPI document (WebSocket), call your implementation, and check every response or message against the contract.' },
@@ -571,9 +571,9 @@
     const fwdEnabled = h('input', { type: 'checkbox', checked: sval('inspectorForwardEnabled') });
     const fwdUrl = h('input', { type: 'url', value: sval('inspectorForwardUrl') || '', placeholder: 'https://example.com/webhooks' });
 
-    el.append(header('Inspector', 'Every call to this server, live: webhooks to any unreserved path, plus mock API (/v1) and OAuth calls.',
+    el.append(header('Inspector', 'Every call to this server, live: webhooks to any unreserved path, plus calls to every API the tool serves (/v1, SOAP, WebSocket, SSE, GraphQL, OData, S3, OAuth).',
       live, count,
-      h('label', { class: 'check', title: 'INSPECTOR_LOG_ALL' }, logAll, 'Record /v1 & /oauth'),
+      h('label', { class: 'check', title: 'INSPECTOR_LOG_ALL' }, logAll, 'Record API calls'),
       h('a', { class: 'btn', href: '/admin/api/inspector/export' }, 'Export JSON'),
       h('button', { class: 'danger', onclick: guard(async () => { if (!confirm('Clear all captured requests?')) return; await api('DELETE', '/inspector'); }) }, 'Clear')));
     el.append(h('div', { class: 'card' }, h('div', { class: 'row', style: { flexWrap: 'nowrap' } }, tip('inspector.capture'), filterSource, filterMethod, filterText),
@@ -842,7 +842,7 @@
   // ---------------------------------------------------------------- headers
   VIEWS.headers = async (el) => {
     await loadSettings();
-    el.append(header('Headers', 'Custom response headers on every response; required request headers on /v1/*.'));
+    el.append(header('Headers', 'Custom response headers on every response; required request headers on every API protocol.'));
     el.append(h('div', { class: 'grid cols-2' },
       h('div', { class: 'card' }, titled('Response headers', 'headers.response'), settingsForm(['responseHeaders']), h('div', { class: 'small muted' }, 'JSON list: [{"name":"X-Env","value":"demo"}]. Env format: Name:Value;Name2:Value2')),
       h('div', { class: 'card' }, titled('Required request headers', 'headers.required'), settingsForm(['requiredHeaders']), h('div', { class: 'small muted' }, 'JSON list: [{"name":"X-Tenant"},{"name":"X-Env","value":"demo"}]. Missing or wrong values return 400 problem+json. Env format: X-Tenant,X-Env=demo'))));
@@ -1798,16 +1798,19 @@
             h('li', null, 'Seeded employees and products with every JSON type worth parsing (decimals as strings, nulls, nested objects, unicode).'),
             h('li', null, 'Seven pagination styles side by side, so you can test each one.'),
             h('li', null, 'Seven auth modes and a built-in OAuth 2.0 server.'),
-            h('li', null, 'Files over every common HTTP protocol.'),
-            h('li', null, 'Errors and slowness on demand (Chaos).'),
-            h('li', null, 'An Inspector that catches webhooks and any other call your integration makes.'))),
+            h('li', null, 'Files over every common HTTP protocol, and the same file pool as an S3-compatible bucket.'),
+            h('li', null, 'The same data over SOAP, WebSocket, Server-Sent Events, GraphQL and OData (Protocols page).'),
+            h('li', null, 'Outgoing webhooks to your endpoints when data or files change.'),
+            h('li', null, 'Errors and slowness on demand (Chaos), on every protocol.'),
+            h('li', null, 'An Inspector that catches webhooks and any other call your integration makes.'),
+            h('li', null, 'A back office app (/app) that shows the data the way a business user would.'))),
         h('div', { class: 'help-box' }, h('h3', null, '2. Incoming testing — check an API you built'),
-          h('p', null, 'Load the OpenAPI spec you implemented and the API Tester:'),
+          h('p', null, 'Load the contract you implemented (OpenAPI 3.0/3.1 or Swagger 2.0 for REST, WSDL 1.1 for SOAP, AsyncAPI or a scenario for WebSocket) and the API Tester:'),
           h('ul', null,
-            h('li', null, 'Lints the spec for problems that break validation.'),
+            h('li', null, 'Lints the contract for problems that break validation.'),
             h('li', null, 'Builds sample requests from the spec, including its examples and regex patterns.'),
             h('li', null, 'Calls your implementation through this server (no CORS issues).'),
-            h('li', null, 'Validates status codes, headers and bodies against the spec.'),
+            h('li', null, 'Validates status codes, headers, bodies and messages against the contract.'),
             h('li', null, 'Runs the whole contract with ID chaining and negative tests, and saves reports.'))))));
 
     el.append(section('quick-outgoing', 'Quick start: outgoing testing',
@@ -1817,7 +1820,8 @@
         h('span', null, 'Pick a pagination style by path, e.g. ', code('/v1/p/cursor/employees'), ' or ', code('/v1/p/link/products'), '. All seven are listed under ', link('#/help/urls', 'URLs and reserved paths'), '.'),
         h('span', null, 'Send webhooks or any unknown call to ', code(`${B}/<any-path>`), ' and watch them arrive on the ', link('#/inspector', 'Inspector'), ' page.'),
         h('span', null, 'Test error handling: add ', code('X-Force-Error: 503'), ' to one request, or set a random error rate on the ', link('#/chaos', 'Chaos'), ' page.'),
-        h('span', null, 'Import the live spec from ', link('#/openapi', 'OpenAPI'), ' (', code(`${B}/openapi.json`), ') into your API platform or Postman to get every endpoint pre-defined.'))));
+        h('span', null, 'Import the live spec from ', link('#/openapi', 'OpenAPI'), ' (', code(`${B}/openapi.json`), ') into your API platform or Postman to get every endpoint pre-defined.'),
+        h('span', null, 'Calling SOAP, GraphQL, OData, SSE or S3 instead? The ', link('#/protocols', 'Protocols'), ' page has each endpoint, its contract (WSDL, SDL, CSDL) or connection details, and a console. To receive events, add a webhook on the ', link('#/webhooks', 'Webhooks'), ' page.'))));
 
     el.append(section('quick-incoming', 'Quick start: incoming testing',
       steps(
@@ -1829,7 +1833,7 @@
         h('span', null, 'No implementation yet? "Install mock & use as target" serves the spec\'s own examples from this server so you can rehearse the run.'))));
 
     el.append(section('urls', 'URLs and reserved paths',
-      h('p', null, 'These paths belong to the tool. ', h('b', null, 'Every other path is captured by the Inspector'), ' and answered with its default response or a matching rule. Calls to /v1 and /oauth are recorded on the Inspector too (with their real responses) unless "Record /v1 & /oauth" is switched off; the dashboard, docs and health checks are never recorded.'),
+      h('p', null, 'These paths belong to the tool. ', h('b', null, 'Every other path is captured by the Inspector'), ' and answered with its default response or a matching rule. Calls to the APIs (/v1, SOAP, WebSocket upgrades, SSE, GraphQL, OData, the S3 API and OAuth) are recorded on the Inspector too, with their real responses, unless "Record API calls" is switched off; the dashboard, docs and health checks are never recorded.'),
       h('div', { class: 'table-wrap' }, h('table', null, h('tbody', null,
         [
           ['/v1/employees, /v1/products, /v1/departments, /v1/categories', 'Mock API with full CRUD (list, create, get, replace, patch, delete). Lists use offset pagination.'],

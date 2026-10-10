@@ -689,7 +689,7 @@ curl -s -X POST "$B/hooks/order-created?env=dev" -H 'Content-Type: application/j
   Available templates: `{{uuid}}`, `{{now}}`, `{{nowEpoch}}`, `{{id}}`, `{{path}}`, `{{method}}`, `{{params.x}}`, `{{query.x}}`, `{{body.x}}`, `{{baseUrl}}`.
 - **Detail pane:** copy as curl, replay (to this server or any URL), and auto-forward every capture to a target URL (the original path is appended).
 - **Housekeeping:** export JSON, delete a single capture (× on its row, or `DELETE /admin/api/inspector/{id}`), or clear all. The last `INSPECTOR_RETENTION` captures are kept.
-- **API traffic:** `/v1/*`, `/soap/*`, `/ws/*` upgrades (recorded as 101 when accepted), `/sse/*` streams (recorded when they end) and `/oauth/*` calls are recorded with their real responses, including requests rejected early (bad JSON, missing headers, auth, rate limit) and connections dropped by chaos (shown as *dropped*). Filter by source (webhooks / mock API / SOAP / WebSocket / SSE / OAuth) or switch it off with **Record /v1 & /oauth** (`INSPECTOR_LOG_ALL`). Streamed file uploads show their size only.
+- **API traffic:** `/v1/*`, `/soap/*`, `/ws/*` upgrades (recorded as 101 when accepted), `/sse/*` streams (recorded when they end), `/graphql`, `/odata/*`, S3 API calls and `/oauth/*` calls are recorded with their real responses, including requests rejected early (bad JSON, missing headers, auth, rate limit) and connections dropped by chaos (shown as *dropped*). Filter by source (webhooks / mock API / SOAP / WebSocket / SSE / GraphQL / OData / S3 API / OAuth) or switch it off with **Record API calls** (`INSPECTOR_LOG_ALL`). Streamed file uploads show their size only.
 
 ---
 
@@ -948,7 +948,7 @@ npm run postman        # Newman across all auth modes
 | S3 client: `AuthorizationHeaderMalformed` … region | The client signs with a different region; set it to `S3_API_REGION` (shown in the error), or change the setting. |
 | S3 client: DNS errors for `files.<host>` | The client uses virtual-hosted-style addressing; turn on path-style ("force path style"). |
 | `/v1/...` returns 400 "Missing required header" | `REQUIRED_HEADERS` is set (see the Headers page). |
-| Inspector doesn't show `/v1` or `/oauth` calls | Tick **Record /v1 & /oauth** on the Inspector page (or set `INSPECTOR_LOG_ALL=true`). The dashboard, docs and `/health` are never recorded. |
+| Inspector doesn't show API calls (`/v1`, SOAP, GraphQL, S3, …) | Tick **Record API calls** on the Inspector page (or set `INSPECTOR_LOG_ALL=true`). The dashboard, docs and `/health` are never recorded. |
 | Tester: "No usable base URL" | The spec's servers are relative or placeholders. Set a base URL override on the Target tab. |
 | Tester: every `Shipment` response fails | That's the spec's allOf issue. Fix the spec, or enable **Lenient allOf**. |
 | Large uploads time out on the host | Check the platform's request timeout. tus uploads are resumable and avoid this. |

@@ -219,6 +219,7 @@
           `Configure credentials to match the active auth mode: ${C.authLabel}.`,
           `Point webhooks at any path that is not reserved, e.g. \`${B}/hooks/orders\`, and watch them on the Inspector page.`,
           `Import \`${B}/openapi.json\` into your client tool to get every endpoint pre-defined.`,
+          'The other entries are the same data over SOAP, WebSocket, SSE, GraphQL and OData, and the file pool as an S3 bucket (endpoint = the base URL); the Protocols page has the details for each.',
         ],
         curls: [
           ['List two employees', curl('GET', '/v1/employees?limit=2')],
@@ -310,7 +311,7 @@
       // ------------------------------------------------------------ inspector
       'inspector.capture': {
         title: 'Inspector',
-        purpose: 'A webhook catcher. Any call to a path the tool does not reserve is recorded with its headers, detected auth, body and the response sent back. Calls to /v1 and /oauth are recorded too while "Record /v1 & /oauth" is on.',
+        purpose: 'A webhook catcher. Any call to a path the tool does not reserve is recorded with its headers, detected auth, body and the response sent back. Calls to the APIs (/v1, SOAP, WebSocket upgrades, SSE, GraphQL, OData, the S3 API and OAuth) are recorded too while "Record API calls" is on.',
         steps: [
           `Configure the system under test to send its webhook or callback to \`${B}/<any-path>\`, for example \`${B}/hooks/orders\`.`,
           'Trigger the event. The request appears here live — click it to see Request, Auth, Response and a ready-made curl.',
@@ -374,7 +375,7 @@
       // ------------------------------------------------------------ webhooks (outgoing)
       'webhooks.list': {
         title: 'Webhooks',
-        purpose: 'Every outgoing webhook: which resources and events it watches, where it posts, and how its last delivery went. Data changes through any protocol (/v1, SOAP, GraphQL, OData, the back office) and file uploads, downloads and deletes through any file protocol trigger them.',
+        purpose: 'Every outgoing webhook: which resources and events it watches, where it posts, and how its last delivery went. Data changes through any protocol (/v1, SOAP, GraphQL, OData, the back office) and file uploads, downloads and deletes through any file protocol (including the S3 API) trigger them.',
         steps: [
           'Untick On to pause one webhook; turn off webhooksEnabled (settings card) to pause them all. Definitions are kept either way.',
           'Test sends a delivery now for the first record of the webhook\'s first resource, marked `"test": true`, so you can check your receiver without changing data.',
@@ -393,7 +394,7 @@
         purpose: 'Choose the resources and events to watch and the URL that receives a JSON POST with the event, the resource type and the record id.',
         steps: [
           'URL: your integration\'s endpoint. "Use this tool\'s inspector" points it at this server so you can see a delivery first.',
-          'Data resources: all, or any of employees, products, departments, categories, with created / updated / deleted. File pool: files, with uploaded / downloaded / deleted (multipart, raw, base64, tus, presigned, range and chunked downloads, the Files page). One webhook can watch both.',
+          'Data resources: all, or any of employees, products, departments, categories, with created / updated / deleted. File pool: files, with uploaded / downloaded / deleted (multipart, raw, base64, tus, presigned, range and chunked downloads, the S3 API, the Files page). One webhook can watch both.',
           'File events also carry `via` (how it happened), `file` (name, type, size, sha256) and, for downloads, `status`, `range` and `bytes`. Failed uploads and regenerated sample files do not fire.',
           `The body is \`{"id", "event": "employees.created", "type", "resource", "resourceId", "href", "occurredAt", "webhookId"}\`; \`href\` is the record on \`${B}/v1\`. Tick "Include the record" to add it as \`data\`.`,
           'Signing secret: each delivery gets `X-Webhook-Signature: sha256=` + hex HMAC-SHA256(secret, `<X-Webhook-Timestamp>.<raw body>`). Extra headers carry credentials your receiver needs (e.g. an API key).',
@@ -436,7 +437,7 @@
 
       'files.upload': {
         title: 'Uploading files',
-        purpose: 'Every upload protocol writes into one shared file pool, so you can upload one way and download another.',
+        purpose: 'Every upload protocol writes into one shared file pool, so you can upload one way and download another. The pool is also an S3 bucket: an S3 client can list, upload and download the same files (Protocols page → S3-compatible API).',
         steps: [
           'Pick the protocol your integration uses: multipart form, raw body, base64 in JSON, tus resumable, or a presigned URL.',
           'Upload. The response (201) returns the file id and its download links.',
@@ -474,11 +475,11 @@
       // ------------------------------------------------------------ auth
       'auth.mode': {
         title: 'Mode & credentials',
-        purpose: 'How every /v1 call must authenticate. The mode comes from AUTH_MODE in the environment unless it is overridden here. The examples in these guides always follow the active mode.',
+        purpose: 'How every API call must authenticate: /v1, SOAP, WebSocket upgrades, SSE, GraphQL and OData all use this mode (the S3 API signs with its own keys instead). The mode comes from AUTH_MODE in the environment unless it is overridden here. The examples in these guides always follow the active mode.',
         steps: [
           `The active mode is \`${C.mode}\`: ${C.authLabel}.`,
           'Configure your integration with the credentials shown in the form (API key name and location, Basic user and password, Bearer token, JWT settings or the HMAC key).',
-          'Call any /v1 endpoint. A missing or wrong credential returns 401 problem+json with a WWW-Authenticate header.',
+          'Call any /v1 endpoint. A missing or wrong credential returns 401 problem+json with a WWW-Authenticate header (other protocols answer 401 in their own error format).',
           'Health, docs, OpenAPI, OAuth and discovery endpoints never need credentials.',
         ],
         curls: [
@@ -548,7 +549,7 @@
       // ------------------------------------------------------------ chaos
       'chaos.rates': {
         title: 'Rates & latency',
-        purpose: 'Random failures and slowness on /v1, so you can test retries, timeouts and error handling under realistic conditions.',
+        purpose: 'Random failures and slowness on every API protocol (/v1, SOAP, WebSocket, SSE, GraphQL, OData, S3), so you can test retries, timeouts and error handling under realistic conditions.',
         steps: [
           'Set an error rate (0–100 %) and the error types to draw from: any status, `timeout`, `reset`, `malformed-json`, `truncated-body`, `empty-body`, `wrong-content-type`, `slow-drip`.',
           'Add a latency range to slow every call, and a requests-per-minute limit to trigger 429 with `Retry-After`.',
@@ -609,7 +610,7 @@
       },
       'headers.required': {
         title: 'Required request headers',
-        purpose: 'Headers every /v1 request must carry, optionally with an exact value. Missing or wrong ones return 400 problem+json.',
+        purpose: 'Headers every API request must carry on every protocol (/v1, SOAP, WebSocket, SSE, GraphQL, OData, S3), optionally with an exact value. Missing or wrong ones return 400 in that protocol\'s error format (problem+json on /v1).',
         steps: [
           'Enter a JSON list such as `[{"name":"X-Tenant"},{"name":"X-Env","value":"demo"}]` and Save.',
           'Configure the same headers in your integration.',

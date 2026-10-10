@@ -49,6 +49,7 @@ module.exports = function platformRouter(ctx, { adminAuth } = {}) {
         graphql: settings.get('graphqlEnabled') ? { introspection: settings.get('graphqlIntrospection'), maxDepth: settings.get('graphqlMaxDepth') } : false,
         odata: settings.get('odataEnabled') ? { maxPageSize: settings.get('odataMaxPageSize') } : false,
         sse: settings.get('sseEnabled') ? { heartbeatSeconds: settings.get('sseHeartbeatSeconds'), replayBuffer: settings.get('sseReplayBuffer') } : false,
+        webhooks: { enabled: settings.get('webhooksEnabled'), defined: ctx.webhooks ? ctx.webhooks.list().length : 0, active: ctx.webhooks ? ctx.webhooks.list().filter((w) => w.enabled !== false).length : 0 },
         s3: settings.get('s3ApiEnabled') ? { endpoint: ctx.baseUrl(req), bucket: settings.get('s3ApiBucket'), region: settings.get('s3ApiRegion'), addressing: 'path-style' } : false,
         maxFileSizeMb: settings.get('maxFileSizeMb'),
         dashboardProtected: !!settings.get('adminPassword'),
