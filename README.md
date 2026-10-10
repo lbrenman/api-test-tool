@@ -14,14 +14,16 @@ Contains:
 * Operation web console to emulate a back office app for the business represted by the data, including full CRUD support of data via web forms
 * OpenAPI Spec for use in your client application
 * Postman collection for making calls to the server
+* Employee and Product data exposed via configurable APIs to test authentication, pagination, errors, webhooks, file access
 
 Everything runs in one Node.js process on one port, with a vanilla-JS dashboard (no build step). It is host-agnostic: Codespaces, Docker, Fly.io, Render and Northflank are configured with environment variables.
 
 Ues Cases:
 
-* You need a reliable, free data source for an api demo
+* You need a reliable data source for an api demo
+* You need to secure your API with OAuth2 and need an external OAuth2 server
 * You are trying to learn how to implement some API feature such as pagination or header introspection
-* You need a free http file upload/download endpoint for a file based flow
+* You need an http file upload/download endpoint for a file based flow
 * You need to experiment with advanced orchestration/aggregation functions such as data aggregation/join/deduplication and you need a data source
 * You are debugging an http client call and need a web catcher to see what your platform is actually sending
 
