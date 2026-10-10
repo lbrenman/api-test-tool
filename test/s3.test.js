@@ -247,7 +247,16 @@ test('authentication errors come back as S3 XML errors', async () => {
 
 test('payload hashes: a wrong x-amz-content-sha256 is rejected; a request without one is hashed by the server', async () => {
   const body = 'hello hash';
-  const bad = await fetch(`${t.url}/${BUCKET}/hash/bad.txt`, { method: 'PUT', body, headers: sign({ method: 'PUT', path: `/${BUCKET}/hash/bad.txt`, payloadHash: hex('something else') }) });
+  // A slow pool lookup (Postgres) lets the hash check fail before the upload pipeline reads the body:
+  // the error must still come back as a 400, not escape as an uncaught exception.
+  const list = t.ctx.files.list;
+  t.ctx.files.list = async (...a) => { await new Promise((r) => setTimeout(r, 200)); return list.apply(t.ctx.files, a); };
+  let bad;
+  try {
+    bad = await fetch(`${t.url}/${BUCKET}/hash/bad.txt`, { method: 'PUT', body, headers: sign({ method: 'PUT', path: `/${BUCKET}/hash/bad.txt`, payloadHash: hex('something else') }) });
+  } finally {
+    t.ctx.files.list = list;
+  }
   assert.equal(bad.status, 400);
   assert.match(await bad.text(), /XAmzContentSHA256Mismatch/);
   const nf = await fail(s3.send(new HeadObjectCommand({ Bucket: BUCKET, Key: 'hash/bad.txt' })));

@@ -133,6 +133,10 @@ function readAll(stream, limit, tooLarge) {
 // The request body after SigV4 decoding and checks (see S3BodyStream).
 function bodyStream(req) {
   const t = new S3BodyStream(req.s3.auth, req.headers);
+  // A failed check (bad hash, checksum, chunk signature) can surface before the consumer's pipeline is
+  // attached, e.g. while a slow database lookup is awaited. The stream keeps the error (stream.errored) and
+  // the pipeline that reads it later still rejects with it; this listener only keeps it from being uncaught.
+  t.on('error', () => {});
   if (req.s3.bodyBuffer) {
     Readable.from([req.s3.bodyBuffer]).pipe(t);
   } else {
