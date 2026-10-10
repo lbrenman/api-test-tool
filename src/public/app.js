@@ -240,7 +240,7 @@
     inspector: { purpose: 'Every call made to this server shows up here live, with headers, auth, body and the response that was returned: webhooks and other calls to unreserved paths, plus calls to every API the tool serves (/v1, SOAP, WebSocket upgrades, SSE, GraphQL, OData, the S3 API and OAuth). Filter by source, or switch API recording off with the checkbox at the top of the page.' },
     webhooks: { purpose: 'Outgoing webhooks: when an employee, product, department or category is created, updated or deleted, or a file is uploaded, downloaded or deleted (through any protocol), POST its type and id to URLs you choose. Stored in the database, so they survive restarts; every delivery is logged with the response.' },
     files: { purpose: 'The shared file pool used by every file protocol (multipart, raw, base64, tus, presigned, range, chunked) and by the S3-compatible API, where it is a bucket. Upload, download, delete or regenerate samples.' },
-    auth: { purpose: 'Choose how API calls must authenticate (none, API key, Basic, Bearer, JWT, OAuth2, HMAC) on /v1, SOAP, WebSocket, SSE, GraphQL and OData; see the credentials, manage OAuth clients and get test tokens. The S3 API signs with its own keys (Protocols page).' },
+    auth: { purpose: 'Choose how API calls must authenticate (none, API key, Basic, Bearer, JWT, OAuth2, HMAC) on /v1, SOAP, WebSocket, SSE, GraphQL and OData; see the credentials, manage OAuth clients (added here, from OAUTH_CLIENTS, or registered dynamically), control dynamic client registration and get test tokens. The S3 API signs with its own keys (Protocols page).' },
     chaos: { purpose: 'Make the mock API misbehave on purpose: random errors, latency, timeouts, broken JSON and rate limits, globally or per route, so you can test client error handling.' },
     headers: { purpose: 'Headers added to every response, and headers every API request must carry on every protocol (missing ones are rejected with 400 in that protocol\'s error format).' },
     protocols: { purpose: 'The same mock data over other protocols: SOAP 1.1/1.2 services with live WSDLs, WebSocket channels (echo, JSON-RPC, live change feed) with an AsyncAPI document and a live console, Server-Sent Events streams (change feed with replay, ticks, LLM-style streaming) with a live viewer, GraphQL (queries, mutations, subscriptions), OData v4, and the file pool as an S3-compatible bucket (AWS Signature V4), each with a console. Auth (the S3 API uses its own keys), chaos, rate limits and required headers apply as on /v1.' },
@@ -634,7 +634,7 @@
     const hmacBody = h('textarea', { rows: 3, placeholder: 'JSON body (exact bytes you will send)' });
     const hmacOut = h('div');
 
-    el.append(header('Auth', `Active mode: ${a.mode}. Applies globally to /v1/*.`));
+    el.append(header('Auth', `Active mode: ${a.mode}. Applies to /v1, SOAP, WebSocket, SSE, GraphQL and OData (the S3 API signs with its own keys).`));
     el.append(h('div', { class: 'grid cols-2' },
       h('div', { class: 'card stack' }, titled('Mode & credentials', 'auth.mode'), settingsForm(['authMode', 'apiKey', 'apiKeyName', 'apiKeyIn', 'basicUser', 'basicPass', 'bearerToken', 'jwtAlg', 'jwtIssuer', 'jwtAudience', 'hmacKeyId', 'hmacSecret', 'hmacMaxSkewSeconds'], { onSaved: route })),
       h('div', null,
@@ -646,11 +646,21 @@
           }) }, 'Issue token'), tokenOut,
           h('div', { class: 'small muted' }, 'curl:'), codeBlock(`curl -s -u '${a.clients[0]?.clientId || 'demo-client'}:${a.clients[0]?.secret || 'demo-secret'}' -d grant_type=client_credentials -d scope="read write" '${a.oauth.tokenUrl}'`)),
         h('div', { class: 'card' }, titled('OAuth server', 'auth.server'), kv({ token: a.oauth.tokenUrl, authorize: a.oauth.authorizeUrl, metadata: a.oauth.metadata, jwks: a.jwt.jwks, issuer: a.jwt.issuer, audience: a.jwt.audience, alg: a.jwt.alg, 'demo users': a.oauth.users.join(', ') })))));
+    const regUrl = a.oauth.registration;
+    el.append(h('div', { class: 'grid cols-2' },
+      h('div', { class: 'card stack' }, titled('Dynamic client registration', 'auth.registration'),
+        regUrl ? h('div', { class: 'kv' }, h('div', null, 'Endpoint'), h('div', null, h('code', null, regUrl), ' ', h('button', { class: 'small', onclick: () => copy(regUrl) }, 'copy')),
+          h('div', null, 'Mode'), h('div', null, a.oauth.registrationMode === 'token' ? 'needs the initial access token' : 'open (anyone may register)'))
+          : h('p', { class: 'muted' }, 'Registration is off: clients can only be added below or with OAUTH_CLIENTS.'),
+        h('div', { class: 'small muted' }, 'RFC 7591: a client POSTs its metadata (redirect URIs, grant types, auth method) and gets a client_id, a secret unless it is public, and a token to read or delete its registration. MCP clients register this way. Registered clients appear in the table below.')),
+      h('div', { class: 'card' }, titled('Registration settings', 'auth.registration-settings'),
+        settingsForm(['oauthRegistration', 'oauthRegistrationToken', 'oauthRegistrationScopes', 'oauthRegistrationMax'], { onSaved: () => { loadCurlCtx().catch(() => {}); route(); } }))));
     el.append(h('div', { class: 'card' }, titled('OAuth clients', 'auth.clients'),
-      h('div', { class: 'table-wrap' }, h('table', null, h('thead', null, h('tr', null, ['Client id', 'Secret', 'Scopes', 'Redirect URIs', 'Source', ''].map((x) => h('th', null, x)))),
-        h('tbody', null, a.clients.map((c) => h('tr', null, h('td', { class: 'mono' }, c.clientId), h('td', { class: 'mono' }, c.secret || '(public)'), h('td', null, c.scopes.join(' ')), h('td', { class: 'small' }, (c.redirectUris || []).join(' ') || 'any'),
+      h('div', { class: 'table-wrap' }, h('table', null, h('thead', null, h('tr', null, ['Client id', 'Secret', 'Scopes', 'Grants', 'Redirect URIs', 'Source', ''].map((x) => h('th', null, x)))),
+        h('tbody', null, a.clients.map((c) => h('tr', null, h('td', { class: 'mono' }, c.clientId, c.clientName ? h('div', { class: 'small muted' }, c.clientName) : null), h('td', { class: 'mono' }, c.secret || '(public)'), h('td', null, c.scopes.join(' ')),
+          h('td', { class: 'small' }, (c.grantTypes || ['any']).join(' ')), h('td', { class: 'small' }, (c.redirectUris || []).join(' ') || 'any http(s)'),
           h('td', null, h('span', { class: 'badge' }, c.source)),
-          h('td', null, c.source === 'dashboard' ? h('button', { class: 'small danger', onclick: guard(async () => { await api('DELETE', `/oauth/clients/${encodeURIComponent(c.clientId)}`); route(); }) }, 'Delete') : null)))))),
+          h('td', null, c.source !== 'env' ? h('button', { class: 'small danger', onclick: guard(async () => { if (!confirm(`Delete client ${c.clientId}?`)) return; await api('DELETE', `/oauth/clients/${encodeURIComponent(c.clientId)}`); route(); }) }, 'Delete') : null)))))),
       h('h3', null, 'Add client'), h('div', { class: 'grid cols-4' }, newId, newSecret, newScopes, newRedirects),
       h('div', { class: 'row', style: { marginTop: '8px' } }, h('button', { onclick: guard(async () => {
         const c = await api('POST', '/oauth/clients', { clientId: newId.value, secret: newSecret.value || undefined, scopes: newScopes.value, redirectUris: newRedirects.value });
@@ -1797,7 +1807,7 @@
           h('ul', null,
             h('li', null, 'Seeded employees and products with every JSON type worth parsing (decimals as strings, nulls, nested objects, unicode).'),
             h('li', null, 'Seven pagination styles side by side, so you can test each one.'),
-            h('li', null, 'Seven auth modes and a built-in OAuth 2.0 server.'),
+            h('li', null, 'Seven auth modes and a built-in OAuth 2.0 server with dynamic client registration (for MCP clients and other self-registering apps).'),
             h('li', null, 'Files over every common HTTP protocol, and the same file pool as an S3-compatible bucket.'),
             h('li', null, 'The same data over SOAP, WebSocket, Server-Sent Events, GraphQL and OData (Protocols page).'),
             h('li', null, 'Outgoing webhooks to your endpoints when data or files change.'),
@@ -1846,7 +1856,7 @@
           ['/odata/v4, /odata/v4/$metadata', 'OData v4 (JSON) over the same data: query options, paging with @odata.nextLink, navigation and CRUD. $metadata is always open.'],
           ['/graphql, /graphql/schema.graphql', 'GraphQL over the same data: queries (offset pages and Relay connections), mutations, and a changes subscription over WebSocket (graphql-transport-ws). GraphiQL in a browser; the SDL is always open.'],
           ['/files, /files/{key} (the S3 bucket name)', 'S3-compatible API over the file pool: path-style, signed with AWS Signature V4 using the S3 API keys (a signed GET / is ListBuckets). The bucket name is a setting.'],
-          ['/oauth/token, /oauth/authorize, /oauth/introspect, /oauth/revoke', 'Built-in OAuth 2.0 server.'],
+          ['/oauth/token, /oauth/authorize, /oauth/introspect, /oauth/revoke, /oauth/register', 'Built-in OAuth 2.0 server, with dynamic client registration (RFC 7591) at /oauth/register.'],
           ['/.well-known/jwks.json, /.well-known/oauth-authorization-server', 'Signing keys and OAuth discovery.'],
           ['/openapi.json, /openapi.yaml', 'Live OpenAPI for the mock data API (for integrations).'],
           ['/admin/api/openapi.json, .yaml', 'Live OpenAPI for the admin API (password protected).'],

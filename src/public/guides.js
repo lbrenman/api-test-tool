@@ -503,11 +503,12 @@
       },
       'auth.server': {
         title: 'OAuth server',
-        purpose: 'A standalone OAuth 2.0 / OIDC-style server: client credentials, authorization code with PKCE, refresh tokens, introspection, revocation, discovery and JWKS.',
+        purpose: 'A standalone OAuth 2.0 / OIDC-style server: client credentials, authorization code with PKCE, refresh tokens, introspection, revocation, dynamic client registration, discovery and JWKS.',
         steps: [
           'Point your platform\'s OAuth configuration at the discovery document, or enter the token and authorize URLs by hand.',
           'For authorization code + PKCE, send the user to the authorize URL; they sign in with a demo user and consent.',
           'Validate tokens yourself with the JWKS, or ask the server with introspection.',
+          'Clients that register themselves (MCP clients, for example) find `registration_endpoint` in the discovery document; see the Dynamic client registration card.',
         ],
         curls: [
           ['Discovery metadata', plain('GET', '/.well-known/oauth-authorization-server')],
@@ -519,16 +520,52 @@
       },
       'auth.clients': {
         title: 'OAuth clients',
-        purpose: 'The client ids and secrets the OAuth server accepts. Clients from OAUTH_CLIENTS (env) are listed alongside clients added here.',
+        purpose: 'The client ids and secrets the OAuth server accepts: clients from OAUTH_CLIENTS (env), clients added here, and clients that registered themselves through /oauth/register (source "registered"), with their grants and redirect URIs.',
         steps: [
           'Add a client per integration you test, with the scopes it should get (e.g. `read` only, to test 403 on writes).',
           'Leave the secret blank to generate one; add redirect URIs for the authorization code flow.',
           'Use the new id and secret in your platform\'s OAuth connection.',
+          'Delete removes a dashboard-added or registered client; env clients change only through OAUTH_CLIENTS.',
           ...pw,
         ],
         curls: [
           ['Add a read-only client', admin('POST', '/oauth/clients', { json: { clientId: 'read-only-app', scopes: 'read' } })],
           ['Get a token for it', `curl -s -u 'read-only-app:SECRET' -d grant_type=client_credentials ${q(C.ctx.tokenUrl)}`],
+        ],
+      },
+      'auth.registration': {
+        title: 'Dynamic client registration',
+        purpose: 'Clients can register themselves (RFC 7591) instead of being added by hand: they POST their metadata and get a client_id, a secret unless they are public, and a token to read or delete the registration (RFC 7592). MCP clients use this to connect to an authorization server they have never seen.',
+        steps: [
+          `The endpoint is \`${B}/oauth/register\` and is advertised as \`registration_endpoint\` in \`${B}/.well-known/oauth-authorization-server\`.`,
+          'Send JSON metadata: `redirect_uris` (needed for authorization_code; loopback http URIs match on any port, custom schemes such as `myapp://cb` are allowed), `grant_types` (authorization_code, refresh_token, client_credentials), `token_endpoint_auth_method` (client_secret_basic, client_secret_post, or none for a public client), optional `scope`, `client_name`.',
+          'A public client (`none`) has no secret, must use PKCE, and cannot use client_credentials. Each client can use only the grants it registered for; refresh tokens are issued only to clients with the refresh_token grant.',
+          'Keep the `registration_access_token` from the response: with it, GET or DELETE the `registration_client_uri`. Registered clients also show in the clients table, where you can delete them.',
+          'Errors are RFC 7591 JSON: `invalid_client_metadata`, `invalid_redirect_uri`; 401 `invalid_token` when the mode needs an initial access token.',
+        ],
+        curls: [
+          ['Register a public client with PKCE (as an MCP client does)', plain('POST', '/oauth/register', { json: { client_name: 'My MCP client', redirect_uris: ['http://127.0.0.1:33418/callback'], grant_types: ['authorization_code', 'refresh_token'], response_types: ['code'], token_endpoint_auth_method: 'none' } })],
+          ['Register a machine client, then get a token', `REG=$(curl -s ${q(`${B}/oauth/register`)} -H 'Content-Type: application/json' -d '{"client_name":"Integration","grant_types":["client_credentials"],"scope":"read"}')\nID=$(printf '%s' "$REG" | sed -E 's/.*"client_id":"([^"]+)".*/\\1/'); SECRET=$(printf '%s' "$REG" | sed -E 's/.*"client_secret":"([^"]+)".*/\\1/')\ncurl -s -u "$ID:$SECRET" -d grant_type=client_credentials ${q(`${B}/oauth/token`)}`],
+          ['Read the registration (RFC 7592)', "curl -s -H 'Authorization: Bearer REGISTRATION_ACCESS_TOKEN' 'REGISTRATION_CLIENT_URI'"],
+          ['Delete the registration', "curl -s -X DELETE -H 'Authorization: Bearer REGISTRATION_ACCESS_TOKEN' 'REGISTRATION_CLIENT_URI'"],
+          ['Is registration advertised?', plain('GET', '/.well-known/oauth-authorization-server')],
+        ],
+      },
+      'auth.registration-settings': {
+        title: 'Registration settings',
+        purpose: 'Decide who may register clients and what they may ask for.',
+        steps: [
+          '`oauthRegistration`: `open` (anyone, what MCP clients expect), `token` (the client must send `Authorization: Bearer <oauthRegistrationToken>`), or `off` (no endpoint, not advertised).',
+          '`oauthRegistrationScopes`: the scopes a registered client may ask for; a client that asks for none gets all of them.',
+          '`oauthRegistrationMax`: registration is refused beyond this many registered clients. Delete old ones in the clients table.',
+          'With `AUTH_MODE=oauth2` or `jwt`, tokens issued to registered clients are accepted on every protocol, like any other client\'s.',
+          ...pw,
+        ],
+        curls: [
+          ['Require an initial access token', admin('PUT', '/settings', { json: { oauthRegistration: 'token', oauthRegistrationToken: 'change-me' } })],
+          ['Register with it', `curl -s ${q(`${B}/oauth/register`)} -H 'Authorization: Bearer change-me' -H 'Content-Type: application/json' -d '{"grant_types":["client_credentials"]}'`],
+          ['Turn registration off', admin('PUT', '/settings', { json: { oauthRegistration: 'off' } })],
+          ['Back to the defaults', admin('POST', '/settings/reset', { json: { section: 'oauth' } })],
         ],
       },
       'auth.hmac': {

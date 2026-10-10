@@ -121,7 +121,7 @@ Fly.io, Render and Northflank are covered in [Deployment](#deployment).
 | **Rate limiting** | A real per-client limiter with `RateLimit-*` headers and 429 + `Retry-After`. |
 | **Headers** | Custom headers added to every response, and required request headers (with optional expected values) enforced on `/v1/*`. |
 | **Auth** | `none`, `apikey` (header or query), `basic`, `bearer`, `jwt` (HS256/RS256, JWKS), `oauth2` (scopes), `hmac` (signed requests). |
-| **OAuth 2.0 server** | client_credentials, authorization_code + PKCE (login/consent page), refresh_token (rotating), introspection (RFC 7662), revocation (RFC 7009), RFC 8414 metadata, JWKS. |
+| **OAuth 2.0 server** | client_credentials, authorization_code + PKCE (login/consent page), refresh_token (rotating), introspection (RFC 7662), revocation (RFC 7009), RFC 8414 metadata, JWKS, and dynamic client registration (RFC 7591, with RFC 7592 read/delete) for MCP clients and other self-registering apps: public or confidential clients, loopback and custom-scheme redirects, open or token-protected. |
 | **Files** | One shared pool (local disk or S3-compatible) behind multipart, raw, base64-in-JSON, tus resumable, presigned URLs, range downloads (206) and chunked downloads. Sample CSV, XLSX, JSON, PNG, JPG, PDF, TXT, ZIP and a 10 MB binary are generated on seed. |
 | **SOAP** | Mock SOAP 1.1 and 1.2 services (`EmployeeService`, `ProductService`) over the same data, with live WSDLs (document/literal, a SOAP 1.1 and a 1.2 binding). Get, List (paging, filters, text search, sort), Create, Update, Delete. Auth mode, chaos, rate limits and required headers apply as on `/v1`; errors are SOAP faults with field-level detail. Optional WS-Security UsernameToken (PasswordText and PasswordDigest) and SOAPAction checking. |
 | **WebSocket** | Mock channels over the same data: `/ws/echo`, `/ws/rpc` (JSON-RPC 2.0: get/list employees, products, departments, categories) and `/ws/changes` (live created/updated/deleted events from any protocol), with an AsyncAPI 3.0 document. The upgrade goes through auth, rate limiting, required headers and chaos. Size limit (1009), idle timeout, keep-alive pings, and a live console in the dashboard. In-house RFC 6455 implementation, no dependency. |
@@ -179,6 +179,10 @@ Settings marked **restart** can only be set through the environment.
 | `OAUTH_CLIENTS` | `demo-client:demo-secret:read write` | `id:secret:scopes;…`. More clients can be added in the dashboard. |
 | `OAUTH_USERS` | `demo:demo` | `user:password;…` for the authorization_code login page |
 | `OAUTH_TOKEN_TTL` / `OAUTH_REFRESH_TTL` | `3600` / `86400` | seconds |
+| `OAUTH_REGISTRATION` | `open` | Dynamic client registration at `/oauth/register`: `open`, `token` (needs `OAUTH_REGISTRATION_TOKEN`) or `off` |
+| `OAUTH_REGISTRATION_TOKEN` | | Initial access token clients send as `Authorization: Bearer …` when `OAUTH_REGISTRATION=token` |
+| `OAUTH_REGISTRATION_SCOPES` | `read write` | Scopes a registered client may ask for |
+| `OAUTH_REGISTRATION_MAX` | `500` | Registered clients kept; registration is refused beyond this |
 | `ERROR_RATE` | `0` | 0–100 % |
 | `ERROR_TYPES` | `500,503` | See [Chaos](#chaos-errors-and-latency) |
 | `LATENCY_MIN_MS` / `LATENCY_MAX_MS` | `0` / `0` | |
@@ -249,6 +253,7 @@ These prefixes are reserved: `/v1`, `/soap`, `/ws`, `/sse`, `/graphql`, `/odata`
 | `POST /graphql`, `GET /graphql?query=`, `GET /graphql` (upgrade) | GraphQL queries, mutations and subscriptions; GraphiQL in a browser (see [GraphQL](#graphql)) |
 | `/{bucket}`, `/{bucket}/{key}` (bucket `files` by default), signed `GET /` | S3-compatible API over the file pool (see [S3-compatible API](#s3-compatible-api)) |
 | `/oauth/token`, `/oauth/authorize`, `/oauth/introspect`, `/oauth/revoke` | OAuth 2.0 server |
+| `POST /oauth/register`, `GET`/`DELETE /oauth/register/{clientId}` | Dynamic client registration (RFC 7591) and its management (RFC 7592) |
 | `/.well-known/oauth-authorization-server`, `/.well-known/openid-configuration`, `/.well-known/jwks.json` | Discovery and JWKS |
 | `/samples/*` | Bundled specs (handy for the tester's URL loader) |
 | `/dashboard`, `/admin/api/*` | Dashboard and its API (password protected; described by `/admin/api/openapi.json`) |
@@ -261,7 +266,7 @@ These prefixes are reserved: `/v1`, `/soap`, `/ws`, `/sse`, `/graphql`, `/odata`
 
 ## Authentication
 
-Auth is global and applies to `/v1/*`. Health, docs, the mock data API spec (`/openapi.json`), OAuth and well-known endpoints are always open; the admin API and its spec use the dashboard password instead. Change the mode with `AUTH_MODE` or on the dashboard's **Auth** page. The change takes effect immediately, and `/openapi.json` updates its `securitySchemes` to match.
+Auth is global and applies to `/v1/*`, SOAP, WebSocket upgrades, SSE, GraphQL and OData (the S3 API signs with its own keys). Health, docs, the mock data API spec (`/openapi.json`), OAuth and well-known endpoints are always open; the admin API and its spec use the dashboard password instead. Change the mode with `AUTH_MODE` or on the dashboard's **Auth** page. The change takes effect immediately, and `/openapi.json` updates its `securitySchemes` to match.
 
 Below, `B` is your base URL, for example `B=http://localhost:3000`.
 
@@ -357,7 +362,29 @@ pm.request.headers.upsert({ key: 'Authorization', value: `HMAC ${pm.environment.
 pm.request.headers.upsert({ key: 'X-Timestamp', value: ts });
 ```
 
-The dashboard's **Auth** page has a "Get a test token" button, an OAuth client manager, and an HMAC signer that produces a ready-to-run curl.
+**Dynamic client registration** (RFC 7591): clients can register themselves at `POST /oauth/register`, advertised as `registration_endpoint` in the discovery documents. This is how MCP clients connect to an authorization server they have never seen.
+
+```bash
+# a public client with PKCE, as an MCP client registers
+curl -s "$B/oauth/register" -H 'Content-Type: application/json' -d '{
+  "client_name": "My MCP client", "redirect_uris": ["http://127.0.0.1:33418/callback"],
+  "grant_types": ["authorization_code", "refresh_token"], "response_types": ["code"],
+  "token_endpoint_auth_method": "none"}'
+# -> 201 {"client_id":"dcr-…","token_endpoint_auth_method":"none","scope":"read write",
+#         "registration_access_token":"…","registration_client_uri":"$B/oauth/register/dcr-…", …}
+
+# a confidential machine client gets a secret and can use client_credentials
+curl -s "$B/oauth/register" -H 'Content-Type: application/json' \
+  -d '{"client_name":"Integration","grant_types":["client_credentials"],"scope":"read"}'
+```
+
+- **Metadata:** `redirect_uris` (required for authorization_code; loopback `http://127.0.0.1|localhost|[::1]` redirects match on any port as RFC 8252 asks; custom schemes like `myapp://cb` are allowed), `grant_types` (`authorization_code`, `refresh_token`, `client_credentials`; default `authorization_code`), `token_endpoint_auth_method` (`client_secret_basic` default, `client_secret_post`, or `none`), `scope` (within `OAUTH_REGISTRATION_SCOPES`; default all of them), plus `client_name`, `client_uri`, `logo_uri`, `contacts`, `software_id`, `software_version`.
+- **Rules:** a public client (`none`) gets no secret, must use PKCE and cannot use client_credentials. A registered client may use only the grants it registered for (`unauthorized_client` otherwise) and gets refresh tokens only with the `refresh_token` grant. Secrets never expire (`client_secret_expires_at: 0`).
+- **Management (RFC 7592):** `GET` or `DELETE` the `registration_client_uri` with `Authorization: Bearer <registration_access_token>`. Updates (PUT) are not supported; register again instead.
+- **Errors:** RFC 7591 JSON, `invalid_client_metadata` or `invalid_redirect_uri` (400); `invalid_token` (401, `WWW-Authenticate: Bearer`) when an initial access token is needed and missing; `access_denied` (403) at the `OAUTH_REGISTRATION_MAX` limit.
+- **Control:** `OAUTH_REGISTRATION=open` (default; anyone may register, as MCP clients expect), `token` (requires `Authorization: Bearer $OAUTH_REGISTRATION_TOKEN`), or `off` (no endpoint, not advertised). Registered clients are stored in the database (they survive restarts and redeploys) and appear on the Auth page with source `registered`, where they can be deleted.
+
+The dashboard's **Auth** page has a "Get a test token" button, an OAuth client manager, the registration settings, and an HMAC signer that produces a ready-to-run curl.
 
 ---
 
@@ -813,9 +840,9 @@ For WebSocket APIs you expose, load an **AsyncAPI 2.x or 3.0** document (upload,
 
 ## Postman and Newman
 
-- `postman/API-Test-Tool.postman_collection.json` has 141 requests with test scripts, covering:
+- `postman/API-Test-Tool.postman_collection.json` has 149 requests with test scripts, covering:
   - health, OpenAPI and discovery;
-  - OAuth: token, introspect, revoke, error cases;
+  - OAuth: token, introspect, revoke, error cases, and dynamic client registration (register, token for the new client, RFC 7592 read and delete, invalid metadata);
   - each auth mode (with and without credentials);
   - CRUD with `Location`, `ETag`, `If-Match` and `Idempotency-Key`;
   - fields, filters and sort;

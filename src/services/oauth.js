@@ -41,7 +41,7 @@ class OAuthService {
   }
 
   async clients() {
-    const extra = (await this.ctx.repo.list('oauth_clients')).map((c) => ({ ...c, source: 'dashboard' }));
+    const extra = (await this.ctx.repo.list('oauth_clients')).map((c) => ({ ...c, source: c.source || 'dashboard' }));
     const env = this.envClients().filter((c) => !extra.some((x) => x.clientId === c.clientId));
     return [...env, ...extra];
   }
@@ -62,6 +62,132 @@ class OAuthService {
   }
 
   async removeClient(clientId) { return this.ctx.repo.del('oauth_clients', clientId); }
+
+  // ---- Dynamic client registration (RFC 7591) and its management endpoint (RFC 7592: read, delete) ----
+
+  registrationScopes() { return String(this.ctx.settings.get('oauthRegistrationScopes') || '').split(/[\s,]+/).filter(Boolean); }
+
+  /** Check the initial access token when registration needs one. Throws OAuthError. */
+  checkRegistrationAccess(req) {
+    const mode = this.ctx.settings.get('oauthRegistration');
+    if (mode === 'off') throw new OAuthError('registration_not_supported', 'Dynamic client registration is turned off (OAUTH_REGISTRATION=off)', 404);
+    if (mode !== 'token') return;
+    const expected = this.ctx.settings.get('oauthRegistrationToken');
+    const m = /^Bearer\s+(.+)$/i.exec(req.get('authorization') || '');
+    if (!expected) throw new OAuthError('access_denied', 'Registration needs an initial access token, but OAUTH_REGISTRATION_TOKEN is not set', 403);
+    if (!m || !safeEq(m[1].trim(), expected)) throw new OAuthError('invalid_token', 'A valid initial access token is required (Authorization: Bearer …)', 401);
+  }
+
+  /** Validate RFC 7591 client metadata and store the client. Returns the stored client. */
+  async registerClient(meta) {
+    if (!meta || typeof meta !== 'object' || Array.isArray(meta)) throw new OAuthError('invalid_client_metadata', 'The request body must be a JSON object of client metadata');
+    const bad = (d) => new OAuthError('invalid_client_metadata', d);
+    const list = (v, name) => {
+      if (v === undefined || v === null) return undefined;
+      if (!Array.isArray(v) || v.some((x) => typeof x !== 'string')) throw bad(`${name} must be an array of strings`);
+      return v;
+    };
+    const authMethod = meta.token_endpoint_auth_method ?? 'client_secret_basic';
+    if (!['client_secret_basic', 'client_secret_post', 'none'].includes(authMethod)) throw bad('token_endpoint_auth_method must be client_secret_basic, client_secret_post or none');
+    const grantTypes = list(meta.grant_types, 'grant_types') || ['authorization_code'];
+    const unknownGrant = grantTypes.find((g) => !['authorization_code', 'refresh_token', 'client_credentials'].includes(g));
+    if (unknownGrant) throw bad(`Unsupported grant type "${unknownGrant}" (supported: authorization_code, refresh_token, client_credentials)`);
+    const responseTypes = list(meta.response_types, 'response_types') || (grantTypes.includes('authorization_code') ? ['code'] : []);
+    if (responseTypes.some((r) => r !== 'code')) throw bad('Only the "code" response type is supported');
+    if (authMethod === 'none' && grantTypes.includes('client_credentials')) throw bad('A public client (token_endpoint_auth_method "none") cannot use client_credentials');
+    const redirectUris = list(meta.redirect_uris, 'redirect_uris') || [];
+    if (grantTypes.includes('authorization_code') && !redirectUris.length) throw new OAuthError('invalid_redirect_uri', 'redirect_uris is required for the authorization_code grant');
+    for (const u of redirectUris) {
+      let url;
+      try { url = new URL(u); } catch { throw new OAuthError('invalid_redirect_uri', `"${u}" is not an absolute URI`); }
+      if (url.hash) throw new OAuthError('invalid_redirect_uri', `"${u}" must not contain a fragment`);
+      if (/^(javascript|data|vbscript|file):$/i.test(url.protocol)) throw new OAuthError('invalid_redirect_uri', `The ${url.protocol} scheme is not allowed in a redirect URI`);
+    }
+    const allowed = this.registrationScopes();
+    let scopes = allowed;
+    if (meta.scope !== undefined && meta.scope !== null && String(meta.scope).trim()) {
+      scopes = String(meta.scope).split(/\s+/).filter(Boolean);
+      const notAllowed = scopes.filter((x) => !allowed.includes(x));
+      if (notAllowed.length) throw bad(`Scope not allowed for registered clients: ${notAllowed.join(' ')} (allowed: ${allowed.join(' ')})`);
+    }
+    const str = (k, max = 500) => {
+      if (meta[k] === undefined || meta[k] === null) return undefined;
+      if (typeof meta[k] !== 'string' || meta[k].length > max) throw bad(`${k} must be a string of at most ${max} characters`);
+      return meta[k];
+    };
+    const count = (await this.ctx.repo.list('oauth_clients')).filter((c) => c.source === 'registered').length;
+    if (count >= this.ctx.settings.get('oauthRegistrationMax')) throw new OAuthError('access_denied', 'The registered-client limit is reached; delete registered clients on the Auth page or raise OAUTH_REGISTRATION_MAX', 403);
+    const regToken = crypto.randomBytes(32).toString('base64url');
+    const doc = {
+      clientId: `dcr-${crypto.randomBytes(12).toString('base64url')}`,
+      secret: authMethod === 'none' ? '' : crypto.randomBytes(24).toString('base64url'),
+      scopes,
+      redirectUris,
+      source: 'registered',
+      public: authMethod === 'none',
+      tokenEndpointAuthMethod: authMethod,
+      grantTypes,
+      responseTypes,
+      clientName: str('client_name', 200),
+      clientUri: str('client_uri'),
+      logoUri: str('logo_uri'),
+      softwareId: str('software_id', 200),
+      softwareVersion: str('software_version', 100),
+      contacts: list(meta.contacts, 'contacts'),
+      registrationTokenHash: crypto.createHash('sha256').update(regToken).digest('hex'),
+      createdAt: new Date().toISOString(),
+    };
+    await this.ctx.repo.put('oauth_clients', doc.clientId, doc);
+    return { client: doc, registrationAccessToken: regToken };
+  }
+
+  /** RFC 7591 response body for a registered client. */
+  registrationResponse(client, base, registrationAccessToken) {
+    const out = {
+      client_id: client.clientId,
+      ...(client.secret ? { client_secret: client.secret, client_secret_expires_at: 0 } : {}),
+      client_id_issued_at: Math.floor(new Date(client.createdAt).getTime() / 1000),
+      token_endpoint_auth_method: client.tokenEndpointAuthMethod,
+      grant_types: client.grantTypes,
+      response_types: client.responseTypes,
+      redirect_uris: client.redirectUris,
+      scope: client.scopes.join(' '),
+      registration_client_uri: `${base}/oauth/register/${encodeURIComponent(client.clientId)}`,
+    };
+    if (registrationAccessToken) out.registration_access_token = registrationAccessToken;
+    for (const [k, v] of [['client_name', client.clientName], ['client_uri', client.clientUri], ['logo_uri', client.logoUri], ['contacts', client.contacts], ['software_id', client.softwareId], ['software_version', client.softwareVersion]]) {
+      if (v !== undefined) out[k] = v;
+    }
+    return out;
+  }
+
+  /** The registered client a registration access token (Bearer) belongs to. Throws OAuthError. */
+  async registeredClientFor(req, clientId) {
+    const m = /^Bearer\s+(.+)$/i.exec(req.get('authorization') || '');
+    if (!m) throw new OAuthError('invalid_token', 'The registration access token is required (Authorization: Bearer …)', 401);
+    const doc = await this.ctx.repo.get('oauth_clients', clientId);
+    const hash = crypto.createHash('sha256').update(m[1].trim()).digest('hex');
+    if (!doc || doc.source !== 'registered' || !safeEq(doc.registrationTokenHash, hash)) {
+      throw new OAuthError('invalid_token', 'The registration access token is not valid for this client', 401);
+    }
+    return doc;
+  }
+
+  /** Redirect URI check: exact match, or a loopback http URI that differs only in its port (RFC 8252 7.3). */
+  static redirectAllowed(client, uri) {
+    if (!client.redirectUris?.length) return /^https?:\/\//i.test(uri || '');
+    if (client.redirectUris.includes(uri)) return true;
+    let given;
+    try { given = new URL(uri); } catch { return false; }
+    const loop = (u) => u.protocol === 'http:' && ['127.0.0.1', 'localhost', '[::1]'].includes(u.hostname);
+    if (!loop(given)) return false;
+    return client.redirectUris.some((r) => {
+      try {
+        const reg = new URL(r);
+        return loop(reg) && reg.hostname === given.hostname && reg.pathname === given.pathname && reg.search === given.search;
+      } catch { return false; }
+    });
+  }
 
   users() {
     return String(this.ctx.settings.get('oauthUsers') || '').split(';').map((s) => s.trim()).filter(Boolean).map((e) => {
@@ -93,6 +219,11 @@ class OAuthService {
     if (!id) throw new OAuthError('invalid_client', 'Client authentication required', 401);
     const client = await this.client(id);
     if (!client) throw new OAuthError('invalid_client', 'Unknown client', 401);
+    if (client.public) {
+      // A registered public client (token_endpoint_auth_method "none") never authenticates with a secret.
+      if (!allowPublic) throw new OAuthError('invalid_client', 'Public clients cannot use this endpoint or grant', 401);
+      return { client, public: true };
+    }
     if (secret === undefined || secret === null || secret === '') {
       if (allowPublic) return { client, public: true };
       throw new OAuthError('invalid_client', 'Client secret required', 401);

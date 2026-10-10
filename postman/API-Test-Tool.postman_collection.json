@@ -309,7 +309,7 @@
       ]
     },
     {
-      "id": "att-000f",
+      "id": "att-000n",
       "name": "OAuth server",
       "item": [
         {
@@ -636,15 +636,330 @@
               }
             }
           ]
+        },
+        {
+          "id": "att-000f",
+          "name": "Discovery advertises registration",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/.well-known/oauth-authorization-server",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                ".well-known",
+                "oauth-authorization-server"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('registration_endpoint', () => pm.expect(pm.response.json().registration_endpoint).to.match(/\\/oauth\\/register$/));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "att-000g",
+          "name": "Register a client (RFC 7591)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/oauth/register",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "oauth",
+                "register"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"client_name\": \"Postman\",\n  \"grant_types\": [\n    \"client_credentials\"\n  ],\n  \"scope\": \"read\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 201', () => pm.response.to.have.status(201));",
+                  "const c = pm.response.json(); pm.test('client issued', () => { pm.expect(c.client_id).to.match(/^dcr-/); pm.expect(c.client_secret).to.be.a('string'); pm.expect(c.scope).to.eql('read'); pm.expect(c.registration_access_token).to.be.a('string'); });",
+                  "pm.test('Location', () => pm.expect(pm.response.headers.get('Location')).to.eql(c.registration_client_uri));",
+                  "pm.environment.set('dcrId', c.client_id); pm.environment.set('dcrSecret', c.client_secret); pm.environment.set('dcrRegToken', c.registration_access_token); pm.environment.set('dcrUri', c.registration_client_uri);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "att-000h",
+          "name": "Token for the registered client",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/oauth/token",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "oauth",
+                "token"
+              ]
+            },
+            "body": {
+              "mode": "urlencoded",
+              "urlencoded": [
+                {
+                  "key": "grant_type",
+                  "value": "client_credentials"
+                }
+              ]
+            },
+            "auth": {
+              "type": "basic",
+              "basic": [
+                {
+                  "key": "username",
+                  "value": "{{dcrId}}"
+                },
+                {
+                  "key": "password",
+                  "value": "{{dcrSecret}}"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('read only', () => pm.expect(pm.response.json().scope).to.eql('read'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "att-000i",
+          "name": "Read the registration (RFC 7592)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{dcrRegToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{dcrUri}}",
+              "host": [
+                "{{dcrUri}}"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('same client', () => pm.expect(pm.response.json().client_id).to.eql(pm.environment.get('dcrId')));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "att-000j",
+          "name": "Read with a wrong token → 401",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer wrong"
+              }
+            ],
+            "url": {
+              "raw": "{{dcrUri}}",
+              "host": [
+                "{{dcrUri}}"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 401', () => pm.response.to.have.status(401));",
+                  "pm.test('invalid_token', () => pm.expect(pm.response.json().error).to.eql('invalid_token'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "att-000k",
+          "name": "Delete the registration",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{dcrRegToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{dcrUri}}",
+              "host": [
+                "{{dcrUri}}"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 204', () => pm.response.to.have.status(204));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "att-000l",
+          "name": "Token after delete → 401",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/oauth/token",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "oauth",
+                "token"
+              ]
+            },
+            "body": {
+              "mode": "urlencoded",
+              "urlencoded": [
+                {
+                  "key": "grant_type",
+                  "value": "client_credentials"
+                }
+              ]
+            },
+            "auth": {
+              "type": "basic",
+              "basic": [
+                {
+                  "key": "username",
+                  "value": "{{dcrId}}"
+                },
+                {
+                  "key": "password",
+                  "value": "{{dcrSecret}}"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 401', () => pm.response.to.have.status(401));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "att-000m",
+          "name": "Register without redirect_uris → 400",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/oauth/register",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "oauth",
+                "register"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"grant_types\": [\n    \"authorization_code\"\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 400', () => pm.response.to.have.status(400));",
+                  "pm.test('invalid_redirect_uri', () => pm.expect(pm.response.json().error).to.eql('invalid_redirect_uri'));"
+                ]
+              }
+            }
+          ]
         }
       ]
     },
     {
-      "id": "att-000i",
+      "id": "att-000q",
       "name": "Auth mode",
       "item": [
         {
-          "id": "att-000g",
+          "id": "att-000o",
           "name": "Without credentials",
           "request": {
             "method": "GET",
@@ -681,7 +996,7 @@
           ]
         },
         {
-          "id": "att-000h",
+          "id": "att-000p",
           "name": "With credentials",
           "request": {
             "method": "GET",
@@ -714,11 +1029,11 @@
       "description": "The collection pre-request script authenticates /v1 calls according to {{authMode}}."
     },
     {
-      "id": "att-000z",
+      "id": "att-0017",
       "name": "Employees CRUD",
       "item": [
         {
-          "id": "att-000j",
+          "id": "att-000r",
           "name": "Create (201 + Location + ETag)",
           "request": {
             "method": "POST",
@@ -764,7 +1079,7 @@
           ]
         },
         {
-          "id": "att-000k",
+          "id": "att-000s",
           "name": "Get (ETag)",
           "request": {
             "method": "GET",
@@ -797,7 +1112,7 @@
           ]
         },
         {
-          "id": "att-000l",
+          "id": "att-000t",
           "name": "Get with If-None-Match → 304",
           "request": {
             "method": "GET",
@@ -832,7 +1147,7 @@
           ]
         },
         {
-          "id": "att-000m",
+          "id": "att-000u",
           "name": "Patch with stale If-Match → 412",
           "request": {
             "method": "PATCH",
@@ -877,7 +1192,7 @@
           ]
         },
         {
-          "id": "att-000n",
+          "id": "att-000v",
           "name": "Patch (merge patch, If-Match)",
           "request": {
             "method": "PATCH",
@@ -921,7 +1236,7 @@
           ]
         },
         {
-          "id": "att-000o",
+          "id": "att-000w",
           "name": "Put (full replace)",
           "request": {
             "method": "PUT",
@@ -966,7 +1281,7 @@
           ]
         },
         {
-          "id": "att-000p",
+          "id": "att-000x",
           "name": "Create with Idempotency-Key",
           "request": {
             "method": "POST",
@@ -1023,7 +1338,7 @@
           ]
         },
         {
-          "id": "att-000q",
+          "id": "att-000y",
           "name": "Replay same key → original response",
           "request": {
             "method": "POST",
@@ -1072,7 +1387,7 @@
           ]
         },
         {
-          "id": "att-000r",
+          "id": "att-000z",
           "name": "Same key, different body → 409",
           "request": {
             "method": "POST",
@@ -1121,7 +1436,7 @@
           ]
         },
         {
-          "id": "att-000s",
+          "id": "att-0010",
           "name": "Validation → 422",
           "request": {
             "method": "POST",
@@ -1167,7 +1482,7 @@
           ]
         },
         {
-          "id": "att-000t",
+          "id": "att-0011",
           "name": "Malformed JSON → 400",
           "request": {
             "method": "POST",
@@ -1207,7 +1522,7 @@
           ]
         },
         {
-          "id": "att-000u",
+          "id": "att-0012",
           "name": "Delete → 204",
           "request": {
             "method": "DELETE",
@@ -1237,7 +1552,7 @@
           ]
         },
         {
-          "id": "att-000v",
+          "id": "att-0013",
           "name": "Get deleted → 404",
           "request": {
             "method": "GET",
@@ -1269,7 +1584,7 @@
           ]
         },
         {
-          "id": "att-000w",
+          "id": "att-0014",
           "name": "Delete department in use → 409",
           "request": {
             "method": "DELETE",
@@ -1301,7 +1616,7 @@
           ]
         },
         {
-          "id": "att-000x",
+          "id": "att-0015",
           "name": "Nested: department employees",
           "request": {
             "method": "GET",
@@ -1339,7 +1654,7 @@
           ]
         },
         {
-          "id": "att-000y",
+          "id": "att-0016",
           "name": "Nested: category products",
           "request": {
             "method": "GET",
@@ -1379,11 +1694,11 @@
       ]
     },
     {
-      "id": "att-0015",
+      "id": "att-001d",
       "name": "Query: fields / filter / sort",
       "item": [
         {
-          "id": "att-0010",
+          "id": "att-0018",
           "name": "Sparse fieldset",
           "request": {
             "method": "GET",
@@ -1423,7 +1738,7 @@
           ]
         },
         {
-          "id": "att-0011",
+          "id": "att-0019",
           "name": "Range filter + sort",
           "request": {
             "method": "GET",
@@ -1473,7 +1788,7 @@
           ]
         },
         {
-          "id": "att-0012",
+          "id": "att-001a",
           "name": "Equality / list filter",
           "request": {
             "method": "GET",
@@ -1517,7 +1832,7 @@
           ]
         },
         {
-          "id": "att-0013",
+          "id": "att-001b",
           "name": "Text search",
           "request": {
             "method": "GET",
@@ -1557,7 +1872,7 @@
           ]
         },
         {
-          "id": "att-0014",
+          "id": "att-001c",
           "name": "Unknown filter field → 400",
           "request": {
             "method": "GET",
@@ -1596,11 +1911,11 @@
       ]
     },
     {
-      "id": "att-001e",
+      "id": "att-001m",
       "name": "Pagination (follow to the end)",
       "item": [
         {
-          "id": "att-0016",
+          "id": "att-001e",
           "name": "Reset walkers",
           "request": {
             "method": "GET",
@@ -1633,7 +1948,7 @@
           ]
         },
         {
-          "id": "att-0017",
+          "id": "att-001f",
           "name": "offset",
           "request": {
             "method": "GET",
@@ -1684,7 +1999,7 @@
           ]
         },
         {
-          "id": "att-0018",
+          "id": "att-001g",
           "name": "page",
           "request": {
             "method": "GET",
@@ -1735,7 +2050,7 @@
           ]
         },
         {
-          "id": "att-0019",
+          "id": "att-001h",
           "name": "cursor",
           "request": {
             "method": "GET",
@@ -1786,7 +2101,7 @@
           ]
         },
         {
-          "id": "att-001a",
+          "id": "att-001i",
           "name": "keyset",
           "request": {
             "method": "GET",
@@ -1837,7 +2152,7 @@
           ]
         },
         {
-          "id": "att-001b",
+          "id": "att-001j",
           "name": "link (RFC 8288)",
           "request": {
             "method": "GET",
@@ -1874,7 +2189,7 @@
           ]
         },
         {
-          "id": "att-001c",
+          "id": "att-001k",
           "name": "HAL",
           "request": {
             "method": "GET",
@@ -1909,7 +2224,7 @@
           ]
         },
         {
-          "id": "att-001d",
+          "id": "att-001l",
           "name": "token (nextPageToken)",
           "request": {
             "method": "GET",
@@ -1962,11 +2277,11 @@
       ]
     },
     {
-      "id": "att-001n",
+      "id": "att-001v",
       "name": "Chaos forcing headers",
       "item": [
         {
-          "id": "att-001f",
+          "id": "att-001n",
           "name": "X-Force-Error: 503",
           "request": {
             "method": "GET",
@@ -2005,7 +2320,7 @@
           ]
         },
         {
-          "id": "att-001g",
+          "id": "att-001o",
           "name": "X-Force-Error: 429",
           "request": {
             "method": "GET",
@@ -2042,7 +2357,7 @@
           ]
         },
         {
-          "id": "att-001h",
+          "id": "att-001p",
           "name": "X-Force-Status: 202",
           "request": {
             "method": "GET",
@@ -2078,7 +2393,7 @@
           ]
         },
         {
-          "id": "att-001i",
+          "id": "att-001q",
           "name": "X-Force-Latency: 300",
           "request": {
             "method": "GET",
@@ -2114,7 +2429,7 @@
           ]
         },
         {
-          "id": "att-001j",
+          "id": "att-001r",
           "name": "X-Force-Error: malformed-json",
           "request": {
             "method": "GET",
@@ -2150,7 +2465,7 @@
           ]
         },
         {
-          "id": "att-001k",
+          "id": "att-001s",
           "name": "X-Force-Error: wrong-content-type",
           "request": {
             "method": "GET",
@@ -2185,7 +2500,7 @@
           ]
         },
         {
-          "id": "att-001l",
+          "id": "att-001t",
           "name": "X-Force-Error: empty-body",
           "request": {
             "method": "GET",
@@ -2220,7 +2535,7 @@
           ]
         },
         {
-          "id": "att-001m",
+          "id": "att-001u",
           "name": "Unknown chaos type → 400",
           "request": {
             "method": "GET",
@@ -2259,11 +2574,11 @@
       ]
     },
     {
-      "id": "att-0027",
+      "id": "att-002f",
       "name": "Files",
       "item": [
         {
-          "id": "att-001o",
+          "id": "att-001w",
           "name": "List",
           "request": {
             "method": "GET",
@@ -2299,7 +2614,7 @@
           ]
         },
         {
-          "id": "att-001p",
+          "id": "att-001x",
           "name": "Multipart upload",
           "request": {
             "method": "POST",
@@ -2347,7 +2662,7 @@
           ]
         },
         {
-          "id": "att-001q",
+          "id": "att-001y",
           "name": "Download multipart file",
           "request": {
             "method": "GET",
@@ -2380,7 +2695,7 @@
           ]
         },
         {
-          "id": "att-001r",
+          "id": "att-001z",
           "name": "Raw PUT",
           "request": {
             "method": "PUT",
@@ -2422,7 +2737,7 @@
           ]
         },
         {
-          "id": "att-001s",
+          "id": "att-0020",
           "name": "Base64 upload",
           "request": {
             "method": "POST",
@@ -2467,7 +2782,7 @@
           ]
         },
         {
-          "id": "att-001t",
+          "id": "att-0021",
           "name": "Base64 download",
           "request": {
             "method": "GET",
@@ -2499,7 +2814,7 @@
           ]
         },
         {
-          "id": "att-001u",
+          "id": "att-0022",
           "name": "Presign PUT",
           "request": {
             "method": "POST",
@@ -2544,7 +2859,7 @@
           ]
         },
         {
-          "id": "att-001v",
+          "id": "att-0023",
           "name": "Upload to presigned URL",
           "request": {
             "method": "PUT",
@@ -2578,7 +2893,7 @@
           ]
         },
         {
-          "id": "att-001w",
+          "id": "att-0024",
           "name": "Presign GET",
           "request": {
             "method": "POST",
@@ -2623,7 +2938,7 @@
           ]
         },
         {
-          "id": "att-001x",
+          "id": "att-0025",
           "name": "Download from presigned URL",
           "request": {
             "method": "GET",
@@ -2649,7 +2964,7 @@
           ]
         },
         {
-          "id": "att-001y",
+          "id": "att-0026",
           "name": "Range download → 206",
           "request": {
             "method": "GET",
@@ -2687,7 +3002,7 @@
           ]
         },
         {
-          "id": "att-001z",
+          "id": "att-0027",
           "name": "Range not satisfiable → 416",
           "request": {
             "method": "GET",
@@ -2725,7 +3040,7 @@
           ]
         },
         {
-          "id": "att-0020",
+          "id": "att-0028",
           "name": "Chunked download",
           "request": {
             "method": "GET",
@@ -2757,7 +3072,7 @@
           ]
         },
         {
-          "id": "att-0021",
+          "id": "att-0029",
           "name": "tus: create",
           "request": {
             "method": "POST",
@@ -2801,7 +3116,7 @@
           ]
         },
         {
-          "id": "att-0022",
+          "id": "att-002a",
           "name": "tus: patch chunk 1",
           "request": {
             "method": "PATCH",
@@ -2844,7 +3159,7 @@
           ]
         },
         {
-          "id": "att-0023",
+          "id": "att-002b",
           "name": "tus: head",
           "request": {
             "method": "HEAD",
@@ -2875,7 +3190,7 @@
           ]
         },
         {
-          "id": "att-0024",
+          "id": "att-002c",
           "name": "tus: patch chunk 2 (completes)",
           "request": {
             "method": "PATCH",
@@ -2919,7 +3234,7 @@
           ]
         },
         {
-          "id": "att-0025",
+          "id": "att-002d",
           "name": "tus file in the shared pool (range)",
           "request": {
             "method": "GET",
@@ -2956,7 +3271,7 @@
           ]
         },
         {
-          "id": "att-0026",
+          "id": "att-002e",
           "name": "Delete raw file",
           "request": {
             "method": "DELETE",
@@ -2988,11 +3303,11 @@
       ]
     },
     {
-      "id": "att-002k",
+      "id": "att-002s",
       "name": "SOAP",
       "item": [
         {
-          "id": "att-0028",
+          "id": "att-002g",
           "name": "List services",
           "request": {
             "method": "GET",
@@ -3021,7 +3336,7 @@
           ]
         },
         {
-          "id": "att-0029",
+          "id": "att-002h",
           "name": "EmployeeService WSDL (always open)",
           "request": {
             "method": "GET",
@@ -3059,7 +3374,7 @@
           ]
         },
         {
-          "id": "att-002a",
+          "id": "att-002i",
           "name": "GetEmployee (SOAP 1.1)",
           "request": {
             "method": "POST",
@@ -3104,7 +3419,7 @@
           ]
         },
         {
-          "id": "att-002b",
+          "id": "att-002j",
           "name": "ListProducts page 2 (SOAP 1.2)",
           "request": {
             "method": "POST",
@@ -3145,7 +3460,7 @@
           ]
         },
         {
-          "id": "att-002c",
+          "id": "att-002k",
           "name": "CreateEmployee",
           "request": {
             "method": "POST",
@@ -3188,7 +3503,7 @@
           ]
         },
         {
-          "id": "att-002d",
+          "id": "att-002l",
           "name": "UpdateEmployee",
           "request": {
             "method": "POST",
@@ -3232,7 +3547,7 @@
           ]
         },
         {
-          "id": "att-002e",
+          "id": "att-002m",
           "name": "DeleteEmployee",
           "request": {
             "method": "POST",
@@ -3275,7 +3590,7 @@
           ]
         },
         {
-          "id": "att-002f",
+          "id": "att-002n",
           "name": "Not found → SOAP 1.1 Client fault (HTTP 500)",
           "request": {
             "method": "POST",
@@ -3319,7 +3634,7 @@
           ]
         },
         {
-          "id": "att-002g",
+          "id": "att-002o",
           "name": "Not found → SOAP 1.2 Sender fault (HTTP 400)",
           "request": {
             "method": "POST",
@@ -3359,7 +3674,7 @@
           ]
         },
         {
-          "id": "att-002h",
+          "id": "att-002p",
           "name": "Validation errors in the fault detail",
           "request": {
             "method": "POST",
@@ -3403,7 +3718,7 @@
           ]
         },
         {
-          "id": "att-002i",
+          "id": "att-002q",
           "name": "Wrong SOAPAction → fault",
           "request": {
             "method": "POST",
@@ -3446,7 +3761,7 @@
           ]
         },
         {
-          "id": "att-002j",
+          "id": "att-002r",
           "name": "X-Force-Error: 503 → fault with the real status",
           "request": {
             "method": "POST",
@@ -3496,11 +3811,11 @@
       ]
     },
     {
-      "id": "att-002r",
+      "id": "att-002z",
       "name": "Server-Sent Events",
       "item": [
         {
-          "id": "att-002l",
+          "id": "att-002t",
           "name": "List streams",
           "request": {
             "method": "GET",
@@ -3529,7 +3844,7 @@
           ]
         },
         {
-          "id": "att-002m",
+          "id": "att-002u",
           "name": "Ticks: three events then end",
           "request": {
             "method": "GET",
@@ -3573,7 +3888,7 @@
           ]
         },
         {
-          "id": "att-002n",
+          "id": "att-002v",
           "name": "Ticks resume after Last-Event-ID",
           "request": {
             "method": "GET",
@@ -3619,7 +3934,7 @@
           ]
         },
         {
-          "id": "att-002o",
+          "id": "att-002w",
           "name": "Stream (event format)",
           "request": {
             "method": "POST",
@@ -3665,7 +3980,7 @@
           ]
         },
         {
-          "id": "att-002p",
+          "id": "att-002x",
           "name": "Stream (OpenAI chunk format)",
           "request": {
             "method": "POST",
@@ -3710,7 +4025,7 @@
           ]
         },
         {
-          "id": "att-002q",
+          "id": "att-002y",
           "name": "Unknown resource → 400 before the stream starts",
           "request": {
             "method": "GET",
@@ -3749,11 +4064,11 @@
       ]
     },
     {
-      "id": "att-0037",
+      "id": "att-003f",
       "name": "GraphQL",
       "item": [
         {
-          "id": "att-002s",
+          "id": "att-0030",
           "name": "SDL (always open)",
           "request": {
             "method": "GET",
@@ -3784,7 +4099,7 @@
           ]
         },
         {
-          "id": "att-002t",
+          "id": "att-0031",
           "name": "Query: offset page with nested department",
           "request": {
             "method": "POST",
@@ -3829,7 +4144,7 @@
           ]
         },
         {
-          "id": "att-002u",
+          "id": "att-0032",
           "name": "Query over GET",
           "request": {
             "method": "GET",
@@ -3865,7 +4180,7 @@
           ]
         },
         {
-          "id": "att-002v",
+          "id": "att-0033",
           "name": "Relay connection: first page",
           "request": {
             "method": "POST",
@@ -3909,7 +4224,7 @@
           ]
         },
         {
-          "id": "att-002w",
+          "id": "att-0034",
           "name": "Relay connection: next page",
           "request": {
             "method": "POST",
@@ -3953,7 +4268,7 @@
           ]
         },
         {
-          "id": "att-002x",
+          "id": "att-0035",
           "name": "Filter and sort",
           "request": {
             "method": "POST",
@@ -3997,7 +4312,7 @@
           ]
         },
         {
-          "id": "att-002y",
+          "id": "att-0036",
           "name": "Mutation: create department",
           "request": {
             "method": "POST",
@@ -4041,7 +4356,7 @@
           ]
         },
         {
-          "id": "att-002z",
+          "id": "att-0037",
           "name": "Mutation: update (merge patch)",
           "request": {
             "method": "POST",
@@ -4085,7 +4400,7 @@
           ]
         },
         {
-          "id": "att-0030",
+          "id": "att-0038",
           "name": "Mutation: delete",
           "request": {
             "method": "POST",
@@ -4129,7 +4444,7 @@
           ]
         },
         {
-          "id": "att-0031",
+          "id": "att-0039",
           "name": "Not found → field error NOT_FOUND (HTTP 200)",
           "request": {
             "method": "POST",
@@ -4173,7 +4488,7 @@
           ]
         },
         {
-          "id": "att-0032",
+          "id": "att-003a",
           "name": "Validation → BAD_USER_INPUT with field errors",
           "request": {
             "method": "POST",
@@ -4217,7 +4532,7 @@
           ]
         },
         {
-          "id": "att-0033",
+          "id": "att-003b",
           "name": "Invalid query → 400 with graphql-response+json",
           "request": {
             "method": "POST",
@@ -4266,7 +4581,7 @@
           ]
         },
         {
-          "id": "att-0034",
+          "id": "att-003c",
           "name": "Injected field error → partial data",
           "request": {
             "method": "POST",
@@ -4313,7 +4628,7 @@
           ]
         },
         {
-          "id": "att-0035",
+          "id": "att-003d",
           "name": "Mutation over GET → 405",
           "request": {
             "method": "GET",
@@ -4349,7 +4664,7 @@
           ]
         },
         {
-          "id": "att-0036",
+          "id": "att-003e",
           "name": "X-Force-Error: 503 → errors with the real status",
           "request": {
             "method": "POST",
@@ -4398,11 +4713,11 @@
       ]
     },
     {
-      "id": "att-003q",
+      "id": "att-003y",
       "name": "OData v4",
       "item": [
         {
-          "id": "att-0038",
+          "id": "att-003g",
           "name": "Service document (open)",
           "request": {
             "method": "GET",
@@ -4432,7 +4747,7 @@
           ]
         },
         {
-          "id": "att-0039",
+          "id": "att-003h",
           "name": "$metadata (open)",
           "request": {
             "method": "GET",
@@ -4465,7 +4780,7 @@
           ]
         },
         {
-          "id": "att-003a",
+          "id": "att-003i",
           "name": "Filter, select, orderby, count",
           "request": {
             "method": "GET",
@@ -4515,7 +4830,7 @@
           ]
         },
         {
-          "id": "att-003b",
+          "id": "att-003j",
           "name": "Functions and lambda",
           "request": {
             "method": "GET",
@@ -4556,7 +4871,7 @@
           ]
         },
         {
-          "id": "att-003c",
+          "id": "att-003k",
           "name": "Expand with nested options",
           "request": {
             "method": "GET",
@@ -4593,7 +4908,7 @@
           ]
         },
         {
-          "id": "att-003d",
+          "id": "att-003l",
           "name": "$count",
           "request": {
             "method": "GET",
@@ -4631,7 +4946,7 @@
           ]
         },
         {
-          "id": "att-003e",
+          "id": "att-003m",
           "name": "Property value",
           "request": {
             "method": "GET",
@@ -4665,7 +4980,7 @@
           ]
         },
         {
-          "id": "att-003f",
+          "id": "att-003n",
           "name": "Reset the paging walker",
           "request": {
             "method": "GET",
@@ -4694,7 +5009,7 @@
           ]
         },
         {
-          "id": "att-003g",
+          "id": "att-003o",
           "name": "Server paging: follow @odata.nextLink to the end",
           "request": {
             "method": "GET",
@@ -4735,7 +5050,7 @@
           ]
         },
         {
-          "id": "att-003h",
+          "id": "att-003p",
           "name": "Create employee with @odata.bind",
           "request": {
             "method": "POST",
@@ -4780,7 +5095,7 @@
           ]
         },
         {
-          "id": "att-003i",
+          "id": "att-003q",
           "name": "PATCH with a stale If-Match → 412",
           "request": {
             "method": "PATCH",
@@ -4830,7 +5145,7 @@
           ]
         },
         {
-          "id": "att-003j",
+          "id": "att-003r",
           "name": "PATCH with If-Match → 204",
           "request": {
             "method": "PATCH",
@@ -4878,7 +5193,7 @@
           ]
         },
         {
-          "id": "att-003k",
+          "id": "att-003s",
           "name": "PATCH return=representation → 200",
           "request": {
             "method": "PATCH",
@@ -4927,7 +5242,7 @@
           ]
         },
         {
-          "id": "att-003l",
+          "id": "att-003t",
           "name": "DELETE → 204",
           "request": {
             "method": "DELETE",
@@ -4957,7 +5272,7 @@
           ]
         },
         {
-          "id": "att-003m",
+          "id": "att-003u",
           "name": "Deleted → 404",
           "request": {
             "method": "GET",
@@ -4989,7 +5304,7 @@
           ]
         },
         {
-          "id": "att-003n",
+          "id": "att-003v",
           "name": "Unknown property in $filter → 400",
           "request": {
             "method": "GET",
@@ -5027,7 +5342,7 @@
           ]
         },
         {
-          "id": "att-003o",
+          "id": "att-003w",
           "name": "Validation → 422 with details",
           "request": {
             "method": "POST",
@@ -5074,7 +5389,7 @@
           ]
         },
         {
-          "id": "att-003p",
+          "id": "att-003x",
           "name": "X-Force-Error: 503 → OData error",
           "request": {
             "method": "GET",
@@ -5119,11 +5434,11 @@
       ]
     },
     {
-      "id": "att-0048",
+      "id": "att-004g",
       "name": "S3-compatible API",
       "item": [
         {
-          "id": "att-003r",
+          "id": "att-003z",
           "name": "ListBuckets",
           "request": {
             "method": "GET",
@@ -5176,7 +5491,7 @@
           ]
         },
         {
-          "id": "att-003s",
+          "id": "att-0040",
           "name": "HeadBucket",
           "request": {
             "method": "HEAD",
@@ -5230,7 +5545,7 @@
           ]
         },
         {
-          "id": "att-003t",
+          "id": "att-0041",
           "name": "ListObjectsV2 (page of 3)",
           "request": {
             "method": "GET",
@@ -5296,7 +5611,7 @@
           ]
         },
         {
-          "id": "att-003u",
+          "id": "att-0042",
           "name": "ListObjectsV2 (next page)",
           "request": {
             "method": "GET",
@@ -5364,7 +5679,7 @@
           ]
         },
         {
-          "id": "att-003v",
+          "id": "att-0043",
           "name": "PutObject with metadata",
           "request": {
             "method": "PUT",
@@ -5433,7 +5748,7 @@
           ]
         },
         {
-          "id": "att-003w",
+          "id": "att-0044",
           "name": "HeadObject",
           "request": {
             "method": "HEAD",
@@ -5490,7 +5805,7 @@
           ]
         },
         {
-          "id": "att-003x",
+          "id": "att-0045",
           "name": "GetObject",
           "request": {
             "method": "GET",
@@ -5547,7 +5862,7 @@
           ]
         },
         {
-          "id": "att-003y",
+          "id": "att-0046",
           "name": "GetObject with Range → 206",
           "request": {
             "method": "GET",
@@ -5609,7 +5924,7 @@
           ]
         },
         {
-          "id": "att-003z",
+          "id": "att-0047",
           "name": "CopyObject",
           "request": {
             "method": "PUT",
@@ -5671,7 +5986,7 @@
           ]
         },
         {
-          "id": "att-0040",
+          "id": "att-0048",
           "name": "List a \"folder\" with a delimiter",
           "request": {
             "method": "GET",
@@ -5740,7 +6055,7 @@
           ]
         },
         {
-          "id": "att-0041",
+          "id": "att-0049",
           "name": "The copy is in the file pool (/v1/files)",
           "request": {
             "method": "GET",
@@ -5776,7 +6091,7 @@
           ]
         },
         {
-          "id": "att-0042",
+          "id": "att-004a",
           "name": "DeleteObjects",
           "request": {
             "method": "POST",
@@ -5845,7 +6160,7 @@
           ]
         },
         {
-          "id": "att-0043",
+          "id": "att-004b",
           "name": "Deleted → 404 NoSuchKey",
           "request": {
             "method": "GET",
@@ -5902,7 +6217,7 @@
           ]
         },
         {
-          "id": "att-0044",
+          "id": "att-004c",
           "name": "Unknown bucket → 404 NoSuchBucket",
           "request": {
             "method": "GET",
@@ -5963,7 +6278,7 @@
           ]
         },
         {
-          "id": "att-0045",
+          "id": "att-004d",
           "name": "Wrong secret → 403 SignatureDoesNotMatch",
           "request": {
             "method": "GET",
@@ -6024,7 +6339,7 @@
           ]
         },
         {
-          "id": "att-0046",
+          "id": "att-004e",
           "name": "Unsigned → 403 AccessDenied",
           "request": {
             "method": "GET",
@@ -6058,7 +6373,7 @@
           ]
         },
         {
-          "id": "att-0047",
+          "id": "att-004f",
           "name": "X-Force-Error: 503 → S3 XML error",
           "request": {
             "method": "GET",
@@ -6127,11 +6442,11 @@
       "description": "The file pool as an S3 bucket (path-style). Requests use Postman's AWS Signature auth with {{s3AccessKeyId}}, {{s3SecretAccessKey}} and {{s3Region}}, independent of {{authMode}}."
     },
     {
-      "id": "att-004b",
+      "id": "att-004j",
       "name": "Headers & inspector",
       "item": [
         {
-          "id": "att-0049",
+          "id": "att-004h",
           "name": "Request id echo",
           "request": {
             "method": "GET",
@@ -6171,7 +6486,7 @@
           ]
         },
         {
-          "id": "att-004a",
+          "id": "att-004i",
           "name": "Inspector catch-all",
           "request": {
             "method": "POST",

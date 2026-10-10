@@ -96,6 +96,13 @@ test('S3 API examples sign with the S3 keys (curl --aws-sigv4 / AWS CLI), never 
   assert.doesNotMatch(up, /-X PUT/);
 });
 
+test('dynamic client registration has its guides', () => {
+  const g = build(makeCurl({ ...BASE_CTX, mode: 'none' }), {});
+  for (const id of ['auth.registration', 'auth.registration-settings']) assert.ok(g[id], `guide ${id}`);
+  assert.match(g['auth.registration'].curls[0][1], /\/oauth\/register'/);
+  assert.match(g['auth.registration'].curls[0][1], /"token_endpoint_auth_method":"none"/);
+});
+
 test('required request headers are added to /v1 calls only', () => {
   const C = makeCurl({ ...BASE_CTX, mode: 'none', required: [{ name: 'X-Tenant' }, { name: 'X-Env', value: 'demo' }] });
   const cmd = C.curl('GET', '/v1/products');

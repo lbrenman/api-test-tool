@@ -61,6 +61,10 @@ const DEFS = [
   { key: 'oauthUsers', env: 'OAUTH_USERS', def: 'demo:demo', type: 'string', section: 'oauth', desc: 'user:password;… for the authorization_code login page' },
   { key: 'oauthTokenTtl', env: 'OAUTH_TOKEN_TTL', def: 3600, type: 'int', section: 'oauth', min: 1 },
   { key: 'oauthRefreshTtl', env: 'OAUTH_REFRESH_TTL', def: 86400, type: 'int', section: 'oauth', min: 1 },
+  { key: 'oauthRegistration', env: 'OAUTH_REGISTRATION', def: 'open', type: 'enum', options: ['off', 'open', 'token'], section: 'oauth', desc: 'Dynamic client registration (RFC 7591) at /oauth/register: open = anyone may register (MCP clients expect this), token = needs the initial access token below, off = no registration endpoint' },
+  { key: 'oauthRegistrationToken', env: 'OAUTH_REGISTRATION_TOKEN', def: '', type: 'string', section: 'oauth', secret: true, desc: 'Initial access token for registration when OAUTH_REGISTRATION=token (sent as Authorization: Bearer …)' },
+  { key: 'oauthRegistrationScopes', env: 'OAUTH_REGISTRATION_SCOPES', def: 'read write', type: 'string', section: 'oauth', desc: 'Scopes a registered client may ask for (space separated); a client that asks for none gets all of them' },
+  { key: 'oauthRegistrationMax', env: 'OAUTH_REGISTRATION_MAX', def: 500, type: 'int', section: 'oauth', min: 1, max: 100000, desc: 'Most registered clients kept; registration is refused beyond this (delete some on the Auth page)' },
 
   // ---- chaos ----
   { key: 'errorRate', env: 'ERROR_RATE', def: 0, type: 'number', section: 'chaos', min: 0, max: 100 },

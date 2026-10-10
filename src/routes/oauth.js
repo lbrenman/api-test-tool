@@ -1,6 +1,7 @@
 'use strict';
 // Built-in OAuth 2.0 server: token (client_credentials, authorization_code + PKCE, refresh_token),
-// authorize (login/consent page), introspect (RFC 7662), revoke (RFC 7009), metadata (RFC 8414) and JWKS.
+// authorize (login/consent page), introspect (RFC 7662), revoke (RFC 7009), metadata (RFC 8414), JWKS, and
+// dynamic client registration (RFC 7591, with read/delete from RFC 7592) at /oauth/register.
 const express = require('express');
 const { OAuthError, OAuthService } = require('../services/oauth');
 const { verify } = require('../middleware/body');
@@ -10,7 +11,7 @@ const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '
 function oauthError(res, e) {
   if (!(e instanceof OAuthError)) throw e;
   res.setHeader('Cache-Control', 'no-store');
-  if (e.status === 401) res.setHeader('WWW-Authenticate', 'Basic realm="oauth"');
+  if (e.status === 401) res.setHeader('WWW-Authenticate', e.error === 'invalid_token' ? `Bearer error="invalid_token", error_description="${String(e.description).replace(/"/g, "'").replace(/[^\x20-\x7e]/g, '')}"` : 'Basic realm="oauth"');
   return res.status(e.status).json({ error: e.error, error_description: e.description });
 }
 
@@ -57,8 +58,11 @@ module.exports = function oauthRouter(ctx) {
     if (q.response_type !== 'code') throw new OAuthError('unsupported_response_type', 'response_type must be "code"');
     const client = await oauth.client(q.client_id);
     if (!client) throw new OAuthError('invalid_client', 'Unknown client_id');
-    if (!q.redirect_uri || !/^https?:\/\//i.test(q.redirect_uri)) throw new OAuthError('invalid_request', 'redirect_uri (http/https) is required');
-    if (client.redirectUris?.length && !client.redirectUris.includes(q.redirect_uri)) throw new OAuthError('invalid_request', 'redirect_uri is not registered for this client');
+    if (!q.redirect_uri) throw new OAuthError('invalid_request', 'redirect_uri is required');
+    if (!OAuthService.redirectAllowed(client, q.redirect_uri)) {
+      throw new OAuthError('invalid_request', client.redirectUris?.length ? 'redirect_uri is not registered for this client' : 'redirect_uri must be an http or https URL');
+    }
+    if (client.grantTypes && !client.grantTypes.includes('authorization_code')) throw new OAuthError('unauthorized_client', 'This client is not registered for the authorization_code grant');
     if (q.code_challenge_method && !['S256', 'plain'].includes(q.code_challenge_method)) throw new OAuthError('invalid_request', 'code_challenge_method must be S256 or plain');
     const scopes = oauth.resolveScopes(client, q.scope);
     return { client, scopes };
@@ -102,22 +106,29 @@ module.exports = function oauthRouter(ctx) {
       res.setHeader('Pragma', 'no-cache');
       const b = req.body || {};
       const grant = b.grant_type;
+      const allowedGrant = (client) => {
+        if (client.grantTypes && !client.grantTypes.includes(grant)) throw new OAuthError('unauthorized_client', `This client is not registered for the ${grant} grant`);
+      };
+      const mayRefresh = (client) => !client.grantTypes || client.grantTypes.includes('refresh_token');
       if (grant === 'client_credentials') {
         const { client } = await oauth.authenticateClient(req);
+        allowedGrant(client);
         const scopes = oauth.resolveScopes(client, b.scope);
         return res.json(await oauth.issueAccessToken(req, { client, scopes }));
       }
       if (grant === 'authorization_code') {
         const { client, public: isPublic } = await oauth.authenticateClient(req, { allowPublic: true });
+        allowedGrant(client);
         const code = oauth.consumeCode(b.code);
         if (code.clientId !== client.clientId) throw new OAuthError('invalid_grant', 'Code was issued to another client');
         if (code.redirectUri !== b.redirect_uri) throw new OAuthError('invalid_grant', 'redirect_uri does not match the authorization request');
         if (isPublic && !code.codeChallenge) throw new OAuthError('invalid_request', 'Public clients must use PKCE');
         if (!OAuthService.verifyPkce(b.code_verifier, code.codeChallenge, code.codeChallengeMethod)) throw new OAuthError('invalid_grant', 'PKCE code_verifier does not match code_challenge');
-        return res.json(await oauth.issueAccessToken(req, { client, scopes: code.scopes, subject: code.subject, refresh: true }));
+        return res.json(await oauth.issueAccessToken(req, { client, scopes: code.scopes, subject: code.subject, refresh: mayRefresh(client) }));
       }
       if (grant === 'refresh_token') {
         const { client } = await oauth.authenticateClient(req, { allowPublic: true });
+        allowedGrant(client);
         const rt = await ctx.repo.get('oauth_refresh', b.refresh_token || '');
         if (!rt || rt.expiresAt < Date.now() || rt.clientId !== client.clientId) throw new OAuthError('invalid_grant', 'Refresh token is invalid, expired or belongs to another client');
         await ctx.repo.del('oauth_refresh', rt.token); // rotation
@@ -150,6 +161,50 @@ module.exports = function oauthRouter(ctx) {
     }
   });
 
+  // ---- Dynamic client registration (RFC 7591) + read/delete management (RFC 7592) ----
+  const json = express.json({ verify, type: () => true });
+  r.post('/oauth/register', (req, res, next) => {
+    try { oauth.checkRegistrationAccess(req); } catch (e) { return oauthError(res, e); }
+    return next();
+  }, json, async (req, res) => {
+    try {
+      res.setHeader('Cache-Control', 'no-store');
+      const { client, registrationAccessToken } = await oauth.registerClient(req.body);
+      const base = baseUrl(req);
+      res.setHeader('Location', `${base}/oauth/register/${encodeURIComponent(client.clientId)}`);
+      return res.status(201).json(oauth.registrationResponse(client, base, registrationAccessToken));
+    } catch (e) {
+      return oauthError(res, e);
+    }
+  });
+  r.get('/oauth/register/:clientId', async (req, res) => {
+    try {
+      res.setHeader('Cache-Control', 'no-store');
+      const client = await oauth.registeredClientFor(req, req.params.clientId);
+      return res.json(oauth.registrationResponse(client, baseUrl(req)));
+    } catch (e) {
+      return oauthError(res, e);
+    }
+  });
+  r.delete('/oauth/register/:clientId', async (req, res) => {
+    try {
+      const client = await oauth.registeredClientFor(req, req.params.clientId);
+      await oauth.removeClient(client.clientId);
+      return res.status(204).end();
+    } catch (e) {
+      return oauthError(res, e);
+    }
+  });
+
+  // A registration body that is not JSON is invalid client metadata (RFC 7591 error shape, not problem+json).
+  // eslint-disable-next-line no-unused-vars
+  r.use('/oauth/register', (err, req, res, next) => {
+    if (err.type === 'entity.parse.failed' || err.type === 'entity.too.large') {
+      return oauthError(res, new OAuthError('invalid_client_metadata', `The request body is not valid JSON: ${err.message}`));
+    }
+    return next(err);
+  });
+
   function metadata(req) {
     const base = baseUrl(req);
     return {
@@ -165,7 +220,8 @@ module.exports = function oauthRouter(ctx) {
       introspection_endpoint_auth_methods_supported: ['client_secret_basic', 'client_secret_post'],
       revocation_endpoint_auth_methods_supported: ['client_secret_basic', 'client_secret_post', 'none'],
       code_challenge_methods_supported: ['S256', 'plain'],
-      scopes_supported: [...new Set(['read', 'write', ...oauth.envClients().flatMap((c) => c.scopes)])],
+      ...(settings.get('oauthRegistration') !== 'off' ? { registration_endpoint: `${base}/oauth/register` } : {}),
+      scopes_supported: [...new Set(['read', 'write', ...oauth.envClients().flatMap((c) => c.scopes), ...oauth.registrationScopes()])],
       id_token_signing_alg_values_supported: [settings.get('jwtAlg')],
       subject_types_supported: ['public'],
     };

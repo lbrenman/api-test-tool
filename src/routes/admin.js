@@ -135,8 +135,11 @@ module.exports = function adminRouter(ctx, { adminAuth, filesApi }) {
       jwt: { alg: settings.get('jwtAlg'), issuer: oauth.issuer(req), audience: oauth.audience(), jwks: `${baseUrl(req)}/.well-known/jwks.json` },
       hmac: { keyId: settings.get('hmacKeyId'), secret: settings.get('hmacSecret'), maxSkewSeconds: settings.get('hmacMaxSkewSeconds') },
       s3: { enabled: settings.get('s3ApiEnabled'), endpoint: baseUrl(req), bucket: settings.get('s3ApiBucket'), region: settings.get('s3ApiRegion'), accessKeyId: settings.get('s3ApiAccessKeyId'), secretAccessKey: settings.get('s3ApiSecretAccessKey') },
-      oauth: { tokenUrl: `${baseUrl(req)}/oauth/token`, authorizeUrl: `${baseUrl(req)}/oauth/authorize`, metadata: `${baseUrl(req)}/.well-known/oauth-authorization-server`, users: oauth.users().map((u) => u.username) },
-      clients: await oauth.clients(),
+      oauth: {
+        tokenUrl: `${baseUrl(req)}/oauth/token`, authorizeUrl: `${baseUrl(req)}/oauth/authorize`, metadata: `${baseUrl(req)}/.well-known/oauth-authorization-server`, users: oauth.users().map((u) => u.username),
+        registration: settings.get('oauthRegistration') !== 'off' ? `${baseUrl(req)}/oauth/register` : null, registrationMode: settings.get('oauthRegistration'),
+      },
+      clients: (await oauth.clients()).map(({ registrationTokenHash, ...c }) => c), // eslint-disable-line no-unused-vars
     });
   });
   r.post('/oauth/clients', async (req, res) => res.status(201).json(await oauth.addClient(req.body || {})));

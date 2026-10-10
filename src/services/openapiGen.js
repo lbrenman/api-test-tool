@@ -409,6 +409,38 @@ async function generateOpenApi(ctx, req) {
     },
   };
 
+  // Dynamic client registration (RFC 7591) and read/delete management (RFC 7592), when OAUTH_REGISTRATION is not off.
+  if (settings.get('oauthRegistration') !== 'off') {
+    const oauthErr = (d) => ({ description: d, content: { 'application/json': { schema: S('OAuthError') } } });
+    const regAuth = settings.get('oauthRegistration') === 'token' ? 'Requires the initial access token (`Authorization: Bearer <OAUTH_REGISTRATION_TOKEN>`).' : 'Open registration: no credentials needed.';
+    paths['/oauth/register'] = {
+      post: {
+        tags: ['OAuth'], operationId: 'oauthRegisterClient', summary: 'Register a client (RFC 7591 dynamic client registration)', security: [],
+        description: `${regAuth} Returns the client_id (and client_secret unless token_endpoint_auth_method is "none") plus a registration_access_token for the management endpoint. Scopes are limited to: ${String(settings.get('oauthRegistrationScopes')).split(/\s+/).filter(Boolean).join(', ')}.`,
+        requestBody: { required: true, content: { 'application/json': { schema: S('ClientMetadata'), example: { client_name: 'My MCP client', redirect_uris: ['http://127.0.0.1:33418/callback'], grant_types: ['authorization_code', 'refresh_token'], response_types: ['code'], token_endpoint_auth_method: 'none' } } } },
+        responses: {
+          201: { description: 'Client registered', headers: { Location: H('Location') }, content: { 'application/json': { schema: S('ClientInformation') } } },
+          400: oauthErr('invalid_client_metadata or invalid_redirect_uri'),
+          401: oauthErr('Missing or wrong initial access token (OAUTH_REGISTRATION=token)'),
+          403: oauthErr('Registered-client limit reached'),
+        },
+      },
+    };
+    const clientIdParam = { name: 'clientId', in: 'path', required: true, schema: { type: 'string' } };
+    paths['/oauth/register/{clientId}'] = {
+      get: {
+        tags: ['OAuth'], operationId: 'oauthReadRegisteredClient', summary: 'Read a registered client (RFC 7592)', security: [],
+        description: 'Send the registration_access_token from the registration response as `Authorization: Bearer …`.', parameters: [clientIdParam],
+        responses: { 200: { description: 'Client', content: { 'application/json': { schema: S('ClientInformation') } } }, 401: oauthErr('Missing or wrong registration access token') },
+      },
+      delete: {
+        tags: ['OAuth'], operationId: 'oauthDeleteRegisteredClient', summary: 'Delete a registered client (RFC 7592)', security: [],
+        description: 'Send the registration_access_token as `Authorization: Bearer …`. The client can no longer get tokens.', parameters: [clientIdParam],
+        responses: { 204: { description: 'Deleted' }, 401: oauthErr('Missing or wrong registration access token') },
+      },
+    };
+  }
+
   const problemExample = (status, title, detail) => ({ type: `${base}/problems/${title.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`, title, status, detail, instance: '/v1/employees', requestId: '5f754b61-2038-4978-a7cb-6d6a97afd501', timestamp: '2026-01-15T14:30:00.000Z' });
   const retry = { 'Retry-After': H('RetryAfter') };
 
@@ -421,7 +453,7 @@ async function generateOpenApi(ctx, req) {
       summary: 'Realistic mock target for integration testing (pagination, errors, files, auth, headers).',
       description: [
         '**For integrations and API clients.** Import this into your integration platform, Postman or a code generator to call the mock',
-        'data API: employees, products, departments, categories, the seven pagination schemes, the file pool, the Server-Sent Events streams and the OAuth token endpoint.',
+        'data API: employees, products, departments, categories, the seven pagination schemes, the file pool, the Server-Sent Events streams, the OAuth token endpoint and dynamic client registration.',
         `SOAP is described by WSDLs (\`${base}/soap/EmployeeService?wsdl\`), WebSockets by AsyncAPI (\`${base}/ws/asyncapi.json\`) GraphQL by its SDL (\`${base}/graphql/schema.graphql\`) and OData by its CSDL (\`${base}/odata/v4/$metadata\`). The file pool is also an S3-compatible bucket at \`${base}\` (path-style, AWS Signature V4).`,
         '',
         'Tool administration (settings, seeding, the inspector, the contract tester) and the health probes are not part of this document.',
@@ -443,7 +475,7 @@ async function generateOpenApi(ctx, req) {
       { name: 'Pagination', description: 'Seven pagination schemes, each on its own path' },
       { name: 'Files', description: 'Shared file pool with multiple transfer protocols' },
       { name: 'Streaming', description: 'Server-Sent Events: change feed, ticks and request/stream' },
-      { name: 'OAuth', description: 'Token endpoint for the oauth2 and jwt auth modes' },
+      { name: 'OAuth', description: 'Token endpoint for the oauth2 and jwt auth modes, and dynamic client registration' },
     ],
     paths,
     components: {
@@ -472,6 +504,30 @@ async function generateOpenApi(ctx, req) {
           },
         },
         OAuthError: { type: 'object', required: ['error'], properties: { error: { type: 'string' }, error_description: { type: 'string' } } },
+        ClientMetadata: {
+          type: 'object', description: 'RFC 7591 client metadata',
+          properties: {
+            redirect_uris: { type: 'array', items: { type: 'string', format: 'uri' }, description: 'Required for authorization_code. Loopback http redirects match on any port (RFC 8252); custom schemes are allowed.' },
+            token_endpoint_auth_method: { type: 'string', enum: ['client_secret_basic', 'client_secret_post', 'none'], default: 'client_secret_basic' },
+            grant_types: { type: 'array', items: { type: 'string', enum: ['authorization_code', 'refresh_token', 'client_credentials'] }, default: ['authorization_code'] },
+            response_types: { type: 'array', items: { type: 'string', enum: ['code'] } },
+            scope: { type: 'string', description: 'Space-separated; must be within OAUTH_REGISTRATION_SCOPES (default: all of them)' },
+            client_name: { type: 'string' }, client_uri: { type: 'string' }, logo_uri: { type: 'string' },
+            contacts: { type: 'array', items: { type: 'string' } }, software_id: { type: 'string' }, software_version: { type: 'string' },
+          },
+        },
+        ClientInformation: {
+          type: 'object', required: ['client_id', 'client_id_issued_at', 'token_endpoint_auth_method', 'grant_types', 'redirect_uris', 'scope', 'registration_client_uri'],
+          properties: {
+            client_id: { type: 'string' }, client_secret: { type: 'string' }, client_secret_expires_at: { type: 'integer', description: '0 = never' },
+            client_id_issued_at: { type: 'integer' }, registration_access_token: { type: 'string', description: 'Only in the registration response' },
+            registration_client_uri: { type: 'string', format: 'uri' }, token_endpoint_auth_method: { type: 'string' },
+            grant_types: { type: 'array', items: { type: 'string' } }, response_types: { type: 'array', items: { type: 'string' } },
+            redirect_uris: { type: 'array', items: { type: 'string' } }, scope: { type: 'string' },
+            client_name: { type: 'string' }, client_uri: { type: 'string' }, logo_uri: { type: 'string' },
+            contacts: { type: 'array', items: { type: 'string' } }, software_id: { type: 'string' }, software_version: { type: 'string' },
+          },
+        },
       },
       parameters: {
         XForceError: { name: 'X-Force-Error', in: 'header', required: false, description: `Force an error: a 4xx/5xx status or one of ${TYPE_NAMES.join(', ')}`, schema: { type: 'string' }, example: '503' },
