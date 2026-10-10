@@ -791,7 +791,17 @@ fly secrets set ADMIN_PASSWORD='something-long'
 fly deploy
 ```
 
-`fly.toml` mounts `/data` for SQLite and the file pool, and health-checks `/health`. `PUBLIC_BASE_URL` is detected from `FLY_APP_NAME`. For S3 storage on Fly, `fly storage create` (Tigris) gives you the `S3_*` values.
+`fly.toml` mounts `/data` for SQLite and the file pool, and health-checks `/health`. `PUBLIC_BASE_URL` is detected from `FLY_APP_NAME`.
+
+The `/data` volume is enough for a single machine. Use a bucket for the file pool (`FILE_STORE=s3`) when you run more than one machine (volumes are per machine; move the database to `DB_DRIVER=postgres` too), or when you want presigned URLs to go to a real bucket. Fly's Tigris storage is S3-compatible:
+
+```bash
+fly storage create        # run in the app directory; note the bucket name it prints
+fly secrets set FILE_STORE=s3 S3_BUCKET=<bucket-name> S3_REGION=auto \
+  S3_ENDPOINT=https://fly.storage.tigris.dev
+```
+
+`fly storage create` sets `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_ENDPOINT_URL_S3` and `BUCKET_NAME` on the app. The tool reads the bucket and endpoint from `S3_BUCKET` and `S3_ENDPOINT`, not from those names, so set them as above. The `AWS_*` keys can stay as they are: when `S3_ACCESS_KEY_ID` is empty, the S3 client falls back to the standard AWS credential variables.
 
 ### Render
 
