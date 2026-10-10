@@ -840,12 +840,24 @@ For WebSocket APIs you expose, load an **AsyncAPI 2.x or 3.0** document (upload,
 
 ### Fly.io
 
+From a clone of this repo:
+
 ```bash
+git pull                                   # deploy the latest master
 fly launch --no-deploy --copy-config --name my-api-test-tool
 fly volumes create att_data --size 1 --region ewr
 fly secrets set ADMIN_PASSWORD='something-long'
+# optional: your own S3 API keys, so the demo keys are never live
+fly secrets set S3_API_ACCESS_KEY_ID='my-connector' S3_API_SECRET_ACCESS_KEY='a-long-secret'
 fly deploy
+fly status                                 # one machine; if there are two: fly scale count 1
 ```
+
+- `fly launch` creates the app and writes its name into your local `fly.toml`; the URL becomes `https://<name>.fly.dev`. Keep that edit local (if `git pull` later complains about `fly.toml`, run `git stash`, `git pull`, `git stash pop`).
+- `fly volumes create` asks whether you still want to use volumes: answer Yes. Use the region in `fly.toml` (`ewr`; Fly retired `bos`). One volume and one machine is the right setup: volumes are not replicated, so a second machine would get its own separate database and file pool.
+- Check `https://<name>.fly.dev/health` shows `"status":"ok"`, then sign in to `/dashboard` with the admin password. Settings changed in the dashboard (auth mode, keys, chaos, …) are stored in the database on the volume, so they survive restarts and redeploys; Fly secrets only set the starting values (a dashboard override wins over a secret until you reset it).
+- **Update** a running app: `git pull`, then `fly deploy`. The volume stays attached, so data, files, settings and webhooks carry over.
+- **Start over:** deleting the app (`fly apps destroy`) also deletes its volume and everything on it. Run the steps above again for a fresh, re-seeded app.
 
 `fly.toml` mounts `/data` for SQLite and the file pool, and health-checks `/health`. `PUBLIC_BASE_URL` is detected from `FLY_APP_NAME`.
 
@@ -859,7 +871,7 @@ fly secrets set FILE_STORE=s3 S3_BUCKET=<bucket-name> S3_REGION=auto \
 
 `fly storage create` sets `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_ENDPOINT_URL_S3` and `BUCKET_NAME` on the app. The tool reads the bucket and endpoint from `S3_BUCKET` and `S3_ENDPOINT`, not from those names, so set them as above. The `AWS_*` keys can stay as they are: when `S3_ACCESS_KEY_ID` is empty, the S3 client falls back to the standard AWS credential variables.
 
-> **Not yet verified on Fly.** `FILE_STORE=s3` is tested in CI against MinIO, but the Fly deploy and this Tigris setup (including `S3_REGION=auto` and the `AWS_*` credential fallback) have not been tried on a real Fly app yet.
+> **Tigris not yet verified.** The Fly deploy above (one volume, local storage) has been run on a real Fly app. `FILE_STORE=s3` is tested in CI against MinIO, but this Tigris setup (including `S3_REGION=auto` and the `AWS_*` credential fallback) has not been tried on Fly yet.
 
 ### Render
 
