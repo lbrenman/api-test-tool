@@ -3,7 +3,7 @@
 # fly secrets set ADMIN_PASSWORD=...
 # fly deploy
 app = "api-test-tool"
-primary_region = "bos"
+primary_region = "ewr"
 
 [build]
   dockerfile = "Dockerfile"

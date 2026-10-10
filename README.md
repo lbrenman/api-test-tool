@@ -786,7 +786,7 @@ For WebSocket APIs you expose, load an **AsyncAPI 2.x or 3.0** document (upload,
 
 ```bash
 fly launch --no-deploy --copy-config --name my-api-test-tool
-fly volumes create att_data --size 1 --region bos
+fly volumes create att_data --size 1 --region ewr
 fly secrets set ADMIN_PASSWORD='something-long'
 fly deploy
 ```
