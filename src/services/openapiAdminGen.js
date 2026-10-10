@@ -109,8 +109,8 @@ async function generateAdminOpenApi(ctx, req) {
   }));
 
   // ---- Auth
-  add(`${A}/auth`, 'get', op('Auth', 'getAuthConfig', 'Active /v1 auth mode, every mode\'s credentials, OAuth endpoints and clients', {
-    responses: { ...ok('Auth configuration', anyObj('mode, apiKey, basic, bearer, jwt, hmac, oauth, clients')), ...AUTHED },
+  add(`${A}/auth`, 'get', op('Auth', 'getAuthConfig', 'Active /v1 auth mode, every mode\'s credentials, the S3 API keys, OAuth endpoints and clients', {
+    responses: { ...ok('Auth configuration', anyObj('mode, apiKey, basic, bearer, jwt, hmac, s3 (S3 API endpoint, bucket, region and keys), oauth, clients')), ...AUTHED },
   }));
   add(`${A}/oauth/clients`, 'post', op('Auth', 'createOAuthClient', 'Add an OAuth client (stored in the DB)', {
     requestBody: body(obj({ clientId: { type: 'string' }, secret: { type: 'string' }, scopes: { description: 'Space/comma-separated string or array', anyOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }] }, redirectUris: { anyOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }] } }), { clientId: 'fusion', secret: 's3cret', scopes: 'read write' }),

@@ -38,7 +38,9 @@ function shared(ctx) {
 // Returns an array of middleware for router.use(...stack).
 //   format - name of a registered error renderer ('problem', later 'soap', 'odata', ...)
 //   body   - optional body-parser middleware (or array of them) for this protocol
-function protocolStack(ctx, { format = 'problem', body } = {}) {
+//   auth   - optional middleware that replaces the AUTH_MODE check, for a protocol whose contract defines
+//            its own authentication (the S3 API's AWS Signature V4). It runs at the same point in the chain.
+function protocolStack(ctx, { format = 'problem', body, auth } = {}) {
   if (!errorFormats().includes(format)) throw new Error(`Unknown error format "${format}". Registered: ${errorFormats().join(', ')}`);
   const s = shared(ctx);
   return [
@@ -46,7 +48,7 @@ function protocolStack(ctx, { format = 'problem', body } = {}) {
     ...(body ? [].concat(body) : []),
     s.requiredHeaders,
     s.rateLimit,
-    s.auth,
+    auth || s.auth,
     s.chaos,
   ];
 }

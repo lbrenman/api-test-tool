@@ -1,5 +1,5 @@
 'use strict';
-// Catch-all capture for every non-reserved path, plus capture of /v1/*, /soap/* and /oauth/* traffic (INSPECTOR_LOG_ALL).
+// Catch-all capture for every non-reserved path, plus capture of /v1/*, /soap/*, the S3 API and /oauth/* traffic (INSPECTOR_LOG_ALL).
 
 function readRaw(req, limit) {
   return new Promise((resolve, reject) => {
@@ -48,7 +48,8 @@ const MAX_RESPONSE_CAPTURE = 65536;
 
 // Which API traffic is recorded when INSPECTOR_LOG_ALL is on. The dashboard, admin API, docs and
 // health probes are the tool's own plumbing and are never recorded.
-function apiKind(path) {
+function apiKind(path, req) {
+  if (req?.s3) return 's3';
   if (path === '/v1' || path.startsWith('/v1/')) return 'v1';
   if (path === '/soap' || path.startsWith('/soap/')) return 'soap';
   if (path === '/ws' || path.startsWith('/ws/')) return 'ws';
@@ -65,7 +66,7 @@ function apiKind(path) {
 function logAll(ctx) {
   const { inspector, settings } = ctx;
   return function inspectorLogAll(req, res, next) {
-    const kind = apiKind(req.path);
+    const kind = apiKind(req.path, req);
     if (!kind || !settings.get('inspectorLogAll')) return next();
     const started = Date.now();
     const ip = req.ip; // read now: a dropped socket loses its remote address

@@ -7,6 +7,7 @@ const EXPOSE = [
   'RateLimit-Policy', 'Retry-After', 'X-Request-Id', 'X-Correlation-Id', 'X-Chaos-Injected', 'Idempotent-Replayed',
   'Content-Disposition', 'Content-Range', 'Accept-Ranges', 'Upload-Offset', 'Upload-Length', 'Upload-Metadata',
   'Tus-Resumable', 'Tus-Version', 'Tus-Extension', 'Tus-Max-Size', 'WWW-Authenticate',
+  'x-amz-request-id', 'x-amz-id-2', 'x-amz-bucket-region', 'x-amz-checksum-crc32', 'x-amz-mp-parts-count',
 ].join(', ');
 
 module.exports = function cors(settings) {

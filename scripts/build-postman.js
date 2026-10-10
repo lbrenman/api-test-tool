@@ -330,6 +330,39 @@ const odataFolder = folder('OData v4', [
   req('X-Force-Error: 503 → OData error', 'GET', '/odata/v4/Employees?$top=1', { headers: { 'X-Force-Error': '503' }, tests: odError(503) }),
 ]);
 
+// S3-compatible API: every request signs itself with Postman's built-in AWS Signature (awsv4) auth using the
+// S3 API keys, so the collection-level auth script leaves these paths alone in every auth mode.
+const awsv4 = (secret = '{{s3SecretAccessKey}}') => ({ type: 'awsv4', awsv4: [
+  { key: 'accessKey', value: '{{s3AccessKeyId}}', type: 'string' }, { key: 'secretKey', value: secret, type: 'string' },
+  { key: 'region', value: '{{s3Region}}', type: 'string' }, { key: 'service', value: 's3', type: 'string' },
+] });
+const s3req = (name, method, raw, opts = {}) => {
+  const item = req(name, method, raw, opts);
+  item.request.auth = opts.auth || awsv4();
+  return item;
+};
+const s3Error = (code, s3Code) => [status(code), ctype('application/xml'), has(`S3 error ${s3Code}`, `<Code>${s3Code}</Code>`)];
+const s3Body = 'Hello from Postman over the S3 API';
+const s3Folder = folder('S3-compatible API', [
+  s3req('ListBuckets', 'GET', '/', { tests: [status(200), ctype('application/xml'), "pm.test('bucket listed', () => pm.expect(pm.response.text()).to.include('<Name>' + pm.environment.get('s3Bucket') + '</Name>'));"] }),
+  s3req('HeadBucket', 'HEAD', '/{{s3Bucket}}', { tests: [status(200), "pm.test('region header', () => pm.expect(pm.response.headers.get('x-amz-bucket-region')).to.eql(pm.environment.get('s3Region')));"] }),
+  s3req('ListObjectsV2 (page of 3)', 'GET', '/{{s3Bucket}}?list-type=2&max-keys=3', { tests: [status(200), has('truncated', '<IsTruncated>true</IsTruncated>'), has('three keys', '<KeyCount>3</KeyCount>'), "const m = /<NextContinuationToken>([^<]+)</.exec(pm.response.text()); pm.test('continuation token', () => pm.expect(m).to.not.eql(null)); pm.environment.set('s3Token', m ? m[1] : '');"] }),
+  s3req('ListObjectsV2 (next page)', 'GET', '/{{s3Bucket}}?list-type=2&max-keys=3&continuation-token={{s3Token}}', { tests: [status(200), has('echoes the token', '<ContinuationToken>')] }),
+  s3req('PutObject with metadata', 'PUT', '/{{s3Bucket}}/postman/hello.txt', { headers: { 'Content-Type': 'text/plain', 'x-amz-meta-source': 'postman' }, body: rawText(s3Body), tests: [status(200), `pm.test('ETag is the MD5', () => pm.expect(pm.response.headers.get('ETag')).to.eql('"' + require('crypto-js').MD5(${JSON.stringify(s3Body)}).toString() + '"'));`] }),
+  s3req('HeadObject', 'HEAD', '/{{s3Bucket}}/postman/hello.txt', { tests: [status(200), `pm.test('length', () => pm.expect(pm.response.headers.get('Content-Length')).to.eql('${Buffer.byteLength(s3Body)}'));`, "pm.test('metadata', () => pm.expect(pm.response.headers.get('x-amz-meta-source')).to.eql('postman'));"] }),
+  s3req('GetObject', 'GET', '/{{s3Bucket}}/postman/hello.txt', { tests: [status(200), ctype('text/plain'), `pm.test('body', () => pm.expect(pm.response.text()).to.eql(${JSON.stringify(s3Body)}));`] }),
+  s3req('GetObject with Range → 206', 'GET', '/{{s3Bucket}}/postman/hello.txt', { headers: { Range: 'bytes=0-4' }, tests: [status(206), "pm.test('first five bytes', () => pm.expect(pm.response.text()).to.eql('Hello'));", `pm.test('Content-Range', () => pm.expect(pm.response.headers.get('Content-Range')).to.eql('bytes 0-4/${Buffer.byteLength(s3Body)}'));`] }),
+  s3req('CopyObject', 'PUT', '/{{s3Bucket}}/postman/copy.txt', { headers: { 'x-amz-copy-source': '/{{s3Bucket}}/postman/hello.txt' }, tests: [status(200), has('CopyObjectResult', '<CopyObjectResult'), has('ETag', '<ETag>')] }),
+  s3req('List a "folder" with a delimiter', 'GET', '/{{s3Bucket}}?list-type=2&prefix=postman%2F&delimiter=%2F', { tests: [status(200), has('original', '<Key>postman/hello.txt</Key>'), has('copy', '<Key>postman/copy.txt</Key>')] }),
+  req('The copy is in the file pool (/v1/files)', 'GET', '/v1/files?limit=200', { tests: [status(200), "pm.test('listed with its S3 key', () => pm.expect(pm.response.json().data.some((f) => f.s3 && f.s3.key === 'postman/copy.txt')).to.eql(true));"] }),
+  s3req('DeleteObjects', 'POST', '/{{s3Bucket}}?delete', { headers: { 'Content-Type': 'application/xml' }, body: rawText('<Delete><Object><Key>postman/hello.txt</Key></Object><Object><Key>postman/copy.txt</Key></Object></Delete>'), tests: [status(200), has('deleted', '<Deleted><Key>postman/hello.txt</Key></Deleted>')] }),
+  s3req('Deleted → 404 NoSuchKey', 'GET', '/{{s3Bucket}}/postman/hello.txt', { tests: s3Error(404, 'NoSuchKey') }),
+  s3req('Unknown bucket → 404 NoSuchBucket', 'GET', '/no-such-bucket?list-type=2', { tests: s3Error(404, 'NoSuchBucket') }),
+  s3req('Wrong secret → 403 SignatureDoesNotMatch', 'GET', '/{{s3Bucket}}?list-type=2', { auth: awsv4('not-the-secret'), tests: s3Error(403, 'SignatureDoesNotMatch') }),
+  s3req('Unsigned → 403 AccessDenied', 'GET', '/{{s3Bucket}}/employees.csv', { auth: { type: 'noauth' }, tests: s3Error(403, 'AccessDenied') }),
+  s3req('X-Force-Error: 503 → S3 XML error', 'GET', '/{{s3Bucket}}?list-type=2', { headers: { 'X-Force-Error': '503' }, tests: s3Error(503, 'ServiceUnavailable') }),
+], 'The file pool as an S3 bucket (path-style). Requests use Postman\'s AWS Signature auth with {{s3AccessKeyId}}, {{s3SecretAccessKey}} and {{s3Region}}, independent of {{authMode}}.');
+
 const misc = folder('Headers & inspector', [
   req('Request id echo', 'GET', '/v1/employees/1', { headers: { 'X-Request-Id': 'postman-req-1', 'X-Correlation-Id': 'postman-corr-1' }, tests: [status(200), "pm.test('echoed', () => { pm.expect(pm.response.headers.get('X-Request-Id')).to.eql('postman-req-1'); pm.expect(pm.response.headers.get('X-Correlation-Id')).to.eql('postman-corr-1'); });"] }),
   req('Inspector catch-all', 'POST', '/hooks/postman?source=newman', { headers: { 'Content-Type': 'application/json' }, body: json({ event: 'order.created', id: 42 }), tests: [status(200), "pm.test('captured with actual path', () => { pm.expect(pm.response.json().status).to.eql('captured'); pm.expect(pm.response.json().path).to.eql('/hooks/postman'); });"] }),
@@ -347,7 +380,7 @@ const collection = {
     { listen: 'test', script: { type: 'text/javascript', exec: collectionTest } },
   ],
   variable: [{ key: 'cachedToken', value: '' }, { key: 'cachedTokenExp', value: '0' }],
-  item: [platform, oauth, authFolder, crud, query, pagination, chaos, files, soapFolder, sseFolder, graphqlFolder, odataFolder, misc],
+  item: [platform, oauth, authFolder, crud, query, pagination, chaos, files, soapFolder, sseFolder, graphqlFolder, odataFolder, s3Folder, misc],
 };
 
 const environment = {
@@ -359,6 +392,7 @@ const environment = {
     ['basicUser', 'demo'], ['basicPass', 'demo'], ['bearerToken', 'demo-token'],
     ['clientId', 'demo-client'], ['clientSecret', 'demo-secret'], ['scope', 'read write'],
     ['hmacKeyId', 'demo'], ['hmacSecret', 'demo-hmac'],
+    ['s3Bucket', 'files'], ['s3Region', 'us-east-1'], ['s3AccessKeyId', 'demo-access-key'], ['s3SecretAccessKey', 'demo-secret-key'],
   ].map(([key, value]) => ({ key, value, type: /secret|pass|key$/i.test(key) && key !== 'apiKeyName' ? 'secret' : 'default', enabled: true })),
   _postman_variable_scope: 'environment',
 };

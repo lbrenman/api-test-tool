@@ -163,7 +163,33 @@
       return [...pre, `${envs.length ? `${envs.join(' ')} ` : ''}node -e ${q(js)}`].join('\n');
     }
 
-    return { curl, admin, plain, ws, tokenLine, ctx, authLabel, base: ctx.base, mode: ctx.mode };
+    /**
+     * Call the S3-compatible API with curl's built-in AWS Signature V4 (--aws-sigv4, curl 7.75+).
+     * key: object key ('' for the bucket, null for the service root). The S3 API ignores AUTH_MODE.
+     * o: { query, upload (file for -T), headers, include, head, output }
+     */
+    function s3(method, key, o = {}) {
+      const c = ctx.s3 || { bucket: 'files', region: 'us-east-1', accessKeyId: 'demo-access-key', secretAccessKey: 'demo-secret-key' };
+      const enc = (k) => String(k).split('/').map(encodeURIComponent).join('/');
+      const p = key === null ? '/' : `/${c.bucket}${key ? `/${enc(key)}` : ''}`;
+      const parts = [o.include ? 'curl -s -i' : (o.head ? 'curl -s -I' : 'curl -s')];
+      if (method !== 'GET' && !(method === 'HEAD' && o.head) && !(method === 'PUT' && o.upload)) parts.push(`-X ${method}`);
+      parts.push(`--aws-sigv4 ${q(`aws:amz:${c.region}:s3`)}`, `--user ${q(`${c.accessKeyId}:${c.secretAccessKey}`)}`);
+      for (const [k, v] of Object.entries(o.headers || {})) parts.push(`-H ${q(`${k}: ${v}`)}`);
+      if (o.upload) parts.push(`-T ${q(o.upload)}`);
+      if (o.body !== undefined) parts.push(`--data-binary ${q(o.body)}`);
+      if (o.output) parts.push(`-o ${q(o.output)}`);
+      parts.push(q(`${ctx.base}${p}${o.query ? `?${o.query}` : ''}`));
+      return lines([], parts);
+    }
+
+    /** The same with the AWS CLI (path-style is used automatically with --endpoint-url). */
+    function aws(args) {
+      const c = ctx.s3 || { bucket: 'files', region: 'us-east-1', accessKeyId: 'demo-access-key', secretAccessKey: 'demo-secret-key' };
+      return `AWS_ACCESS_KEY_ID=${q(c.accessKeyId)} AWS_SECRET_ACCESS_KEY=${q(c.secretAccessKey)} AWS_REGION=${q(c.region)} aws --endpoint-url ${q(ctx.base)} ${args}`;
+    }
+
+    return { curl, admin, plain, ws, s3, aws, tokenLine, ctx, authLabel, base: ctx.base, mode: ctx.mode };
   }
 
   /**
@@ -172,7 +198,8 @@
    */
   function build(C, extra = {}) {
     const B = C.base;
-    const { curl, admin, plain, ws } = C;
+    const { curl, admin, plain, ws, s3, aws } = C;
+    const S3 = C.ctx.s3 || { bucket: 'files', region: 'us-east-1', accessKeyId: 'demo-access-key', secretAccessKey: 'demo-secret-key' };
     const c = C.ctx.client || { clientId: 'demo-client', secret: 'demo-secret' };
     const fileId = extra.fileId || 'FILE_ID';
     const specId = extra.specId || 'SPEC_ID';
@@ -810,6 +837,57 @@
         ],
         curls: [
           ['The same from a terminal', curl('GET', '/odata/v4/Employees?$top=3&$select=firstName,lastName')],
+        ],
+      },
+
+      // ------------------------------------------------------------ protocols: S3
+      'protocols.s3': {
+        title: 'S3-compatible API',
+        purpose: 'The file pool as an S3 bucket, for platforms with an S3 connector. It works the same whether files are stored locally or in an S3 bucket behind the tool. Requests are signed with AWS Signature V4 using the keys on this card (AUTH_MODE does not apply); the rate limit, required headers and chaos apply as on every protocol.',
+        steps: [
+          `In your S3 connector set the endpoint (or "custom endpoint" / "service URL") to \`${B}\`, the access key ID to \`${S3.accessKeyId}\`, the secret access key to the one on this card, and the region to \`${S3.region}\`.`,
+          `Turn on path-style addressing ("force path style", "use path-style access"): requests go to \`${B}/${S3.bucket}/<key>\`. Virtual-hosted style needs a DNS name per bucket, which this host does not have.`,
+          `The bucket is \`${S3.bucket}\`. Every file in the pool is an object keyed by its file name; uploads through this API can use folder-style keys such as \`in/2026/orders.csv\`.`,
+          'Supported: ListBuckets, HeadBucket, GetBucketLocation, ListObjects (v1 and v2, prefix, delimiter, paging), Get/Head (Range, conditional headers), Put (including aws-chunked streaming and checksums), Copy, Delete, DeleteObjects, multipart uploads (parts of at least 5 MiB except the last) and presigned URLs.',
+          'Errors use the S3 XML format (`<Error><Code>NoSuchKey</Code>…`). A wrong secret gives SignatureDoesNotMatch, a wrong key InvalidAccessKeyId, a wrong region AuthorizationHeaderMalformed with the expected region. Uploads, downloads and deletes fire the file webhooks with `via: "s3"`.',
+        ],
+        curls: [
+          ['List the bucket (curl signs the request)', s3('GET', '', { query: 'list-type=2&max-keys=5' })],
+          ['List one "folder"', s3('GET', '', { query: 'list-type=2&prefix=in%2F&delimiter=%2F' })],
+          ['Upload a file', s3('PUT', 'in/hello.txt', { upload: 'hello.txt', headers: { 'Content-Type': 'text/plain' } })],
+          ['Download a file', s3('GET', 'employees.csv', { output: 'employees.csv' })],
+          ['Object headers (HEAD)', s3('HEAD', 'employees.csv', { head: true })],
+          ['Delete an object', s3('DELETE', 'in/hello.txt')],
+          ['AWS CLI: list', aws(`s3 ls s3://${S3.bucket}/`)],
+          ['AWS CLI: copy a file in and out', `${aws(`s3 cp hello.txt s3://${S3.bucket}/in/hello.txt`)}\n${aws(`s3 cp s3://${S3.bucket}/in/hello.txt copy.txt`)}`],
+          ['AWS CLI: presigned download link (1 hour)', aws(`s3 presign s3://${S3.bucket}/employees.csv --expires-in 3600`)],
+        ],
+      },
+      'protocols.s3-settings': {
+        title: 'S3 API settings',
+        purpose: 'Turn the S3 API on or off and set the bucket name, region and keys clients sign with.',
+        steps: [
+          '`s3ApiAccessKeyId` / `s3ApiSecretAccessKey`: the credentials your connector uses. Change them from the demo values before you share the URL.',
+          '`s3ApiRegion`: clients must sign with this region (a mismatch is rejected with the expected region in the error).',
+          '`s3ApiBucket`: the bucket name. It cannot be a path the tool already uses (v1, admin, soap, …).',
+          'These are separate from the S3_* variables, which choose where the tool itself stores files (FILE_STORE=s3).',
+          ...pw,
+        ],
+        curls: [
+          ['Rotate the keys', admin('PUT', '/settings', { json: { s3ApiAccessKeyId: 'my-connector', s3ApiSecretAccessKey: 'change-me-to-something-long' } })],
+          ['Sign with eu-west-1', admin('PUT', '/settings', { json: { s3ApiRegion: 'eu-west-1' } })],
+          ['Back to the defaults', admin('POST', '/settings/reset', { json: { section: 's3api' } })],
+        ],
+      },
+      'protocols.s3-try': {
+        title: 'Try the S3 API',
+        purpose: 'Send a signed request from this page (the page signs it with AWS Signature V4, like a client would) and see the status, headers and XML.',
+        steps: [
+          'List objects with an optional prefix and delimiter, or enter a key to HEAD or GET one object.',
+          'The request is signed in your browser with the keys on this page; the same signature check runs as for any client.',
+        ],
+        curls: [
+          ['The same from a terminal', s3('GET', '', { query: 'list-type=2&max-keys=10' })],
         ],
       },
 

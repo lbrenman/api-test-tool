@@ -78,6 +78,24 @@ test('OData requests carry credentials; the service document and $metadata do no
   for (const id of ['protocols.odata', 'protocols.odata-settings', 'protocols.odata-try']) assert.ok(g[id], `guide ${id}`);
 });
 
+test('S3 API examples sign with the S3 keys (curl --aws-sigv4 / AWS CLI), never with AUTH_MODE credentials', () => {
+  const s3 = { bucket: 'pool', region: 'eu-west-1', accessKeyId: 'AKIDEXAMPLE', secretAccessKey: "se'cret" };
+  for (const mode of MODES) {
+    const g = build(makeCurl({ ...BASE_CTX, mode, s3 }), {});
+    for (const id of ['protocols.s3', 'protocols.s3-settings', 'protocols.s3-try']) assert.ok(g[id], `guide ${id}`);
+    const list = g['protocols.s3'].curls.find(([l]) => /List the bucket/.test(l))[1];
+    assert.match(list, /--aws-sigv4 'aws:amz:eu-west-1:s3'/);
+    assert.match(list, /--user 'AKIDEXAMPLE:se'\\''cret'/);
+    assert.match(list, /'https:\/\/att\.example\.dev\/pool\?list-type=2/);
+    assert.doesNotMatch(list, /Authorization|X-API-Key|\$TOKEN|-u 'demo/);
+    assert.match(g['protocols.s3'].curls.find(([l]) => /AWS CLI: list/.test(l))[1], /aws --endpoint-url 'https:\/\/att\.example\.dev' s3 ls s3:\/\/pool\//);
+  }
+  const up = makeCurl({ ...BASE_CTX, mode: 'none', s3 }).s3('PUT', 'in/a b.txt', { upload: 'a.txt' });
+  assert.match(up, /-T 'a\.txt'/);
+  assert.match(up, /\/pool\/in\/a%20b\.txt'/);
+  assert.doesNotMatch(up, /-X PUT/);
+});
+
 test('required request headers are added to /v1 calls only', () => {
   const C = makeCurl({ ...BASE_CTX, mode: 'none', required: [{ name: 'X-Tenant' }, { name: 'X-Env', value: 'demo' }] });
   const cmd = C.curl('GET', '/v1/products');

@@ -61,7 +61,7 @@ module.exports = function adminRouter(ctx, { adminAuth, filesApi }) {
     res.json({
       version: pkg.version,
       baseUrl: base,
-      urls: { api: `${base}/v1`, docs: `${base}/docs`, openapi: `${base}/openapi.json`, adminOpenapi: `${base}/admin/api/openapi.json`, app: `${base}/app/`, health: `${base}/health`, inspector: `${base}/<any-other-path>`, token: `${base}/oauth/token`, ...(settings.get('soapEnabled') ? { soap: `${base}/soap`, soapWsdl: `${base}/soap/EmployeeService?wsdl` } : {}), ...(settings.get('wsEnabled') ? { websocket: `${base.replace(/^http/, 'ws')}/ws/rpc`, asyncapi: `${base}/ws/asyncapi.json` } : {}), ...(settings.get('sseEnabled') ? { sse: `${base}/sse/changes` } : {}), ...(settings.get('odataEnabled') ? { odata: `${base}/odata/v4`, odataMetadata: `${base}/odata/v4/$metadata` } : {}), ...(settings.get('graphqlEnabled') ? { graphql: `${base}/graphql`, graphqlSchema: `${base}/graphql/schema.graphql` } : {}) },
+      urls: { api: `${base}/v1`, docs: `${base}/docs`, openapi: `${base}/openapi.json`, adminOpenapi: `${base}/admin/api/openapi.json`, app: `${base}/app/`, health: `${base}/health`, inspector: `${base}/<any-other-path>`, token: `${base}/oauth/token`, ...(settings.get('soapEnabled') ? { soap: `${base}/soap`, soapWsdl: `${base}/soap/EmployeeService?wsdl` } : {}), ...(settings.get('wsEnabled') ? { websocket: `${base.replace(/^http/, 'ws')}/ws/rpc`, asyncapi: `${base}/ws/asyncapi.json` } : {}), ...(settings.get('sseEnabled') ? { sse: `${base}/sse/changes` } : {}), ...(settings.get('odataEnabled') ? { odata: `${base}/odata/v4`, odataMetadata: `${base}/odata/v4/$metadata` } : {}), ...(settings.get('graphqlEnabled') ? { graphql: `${base}/graphql`, graphqlSchema: `${base}/graphql/schema.graphql` } : {}), ...(settings.get('s3ApiEnabled') ? { s3Endpoint: base, s3Bucket: `${base}/${settings.get('s3ApiBucket')}` } : {}) },
       authMode: mode,
       dateFormat: settings.get('dateFormat'),
       chaos: { errorRate: settings.get('errorRate'), errorTypes: settings.get('errorTypes'), latency: [settings.get('latencyMinMs'), settings.get('latencyMaxMs')] },
@@ -134,6 +134,7 @@ module.exports = function adminRouter(ctx, { adminAuth, filesApi }) {
       bearer: settings.get('bearerToken'),
       jwt: { alg: settings.get('jwtAlg'), issuer: oauth.issuer(req), audience: oauth.audience(), jwks: `${baseUrl(req)}/.well-known/jwks.json` },
       hmac: { keyId: settings.get('hmacKeyId'), secret: settings.get('hmacSecret'), maxSkewSeconds: settings.get('hmacMaxSkewSeconds') },
+      s3: { enabled: settings.get('s3ApiEnabled'), endpoint: baseUrl(req), bucket: settings.get('s3ApiBucket'), region: settings.get('s3ApiRegion'), accessKeyId: settings.get('s3ApiAccessKeyId'), secretAccessKey: settings.get('s3ApiSecretAccessKey') },
       oauth: { tokenUrl: `${baseUrl(req)}/oauth/token`, authorizeUrl: `${baseUrl(req)}/oauth/authorize`, metadata: `${baseUrl(req)}/.well-known/oauth-authorization-server`, users: oauth.users().map((u) => u.username) },
       clients: await oauth.clients(),
     });

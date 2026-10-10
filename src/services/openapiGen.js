@@ -422,7 +422,7 @@ async function generateOpenApi(ctx, req) {
       description: [
         '**For integrations and API clients.** Import this into your integration platform, Postman or a code generator to call the mock',
         'data API: employees, products, departments, categories, the seven pagination schemes, the file pool, the Server-Sent Events streams and the OAuth token endpoint.',
-        `SOAP is described by WSDLs (\`${base}/soap/EmployeeService?wsdl\`), WebSockets by AsyncAPI (\`${base}/ws/asyncapi.json\`) GraphQL by its SDL (\`${base}/graphql/schema.graphql\`) and OData by its CSDL (\`${base}/odata/v4/$metadata\`).`,
+        `SOAP is described by WSDLs (\`${base}/soap/EmployeeService?wsdl\`), WebSockets by AsyncAPI (\`${base}/ws/asyncapi.json\`) GraphQL by its SDL (\`${base}/graphql/schema.graphql\`) and OData by its CSDL (\`${base}/odata/v4/$metadata\`). The file pool is also an S3-compatible bucket at \`${base}\` (path-style, AWS Signature V4).`,
         '',
         'Tool administration (settings, seeding, the inspector, the contract tester) and the health probes are not part of this document.',
         `They are described by the admin spec at \`${base}/admin/api/openapi.json\` (requires the dashboard password).`,
@@ -465,6 +465,10 @@ async function generateOpenApi(ctx, req) {
             sha256: { type: ['string', 'null'] }, source: { type: 'string', enum: ['generated', 'uploaded'] },
             createdAt: dates.schema(), updatedAt: dates.schema(),
             links: { type: 'object', properties: { self: { type: 'string' }, download: { type: 'string' }, chunked: { type: 'string' }, base64: { type: 'string' } } },
+            s3: {
+              type: 'object', description: 'Present on files written through the S3-compatible API: the object key, its ETag (MD5, or MD5-of-parts for multipart), user metadata and stored headers.',
+              properties: { key: { type: 'string' }, md5: { type: 'string' }, etag: { type: 'string' }, crc32: { type: 'string' }, parts: { type: 'integer' }, meta: { type: 'object', additionalProperties: { type: 'string' } }, headers: { type: 'object', additionalProperties: { type: 'string' } } },
+            },
           },
         },
         OAuthError: { type: 'object', required: ['error'], properties: { error: { type: 'string' }, error_description: { type: 'string' } } },

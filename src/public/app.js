@@ -127,6 +127,7 @@
       basic: a.basic,
       bearer: a.bearer,
       hmac: { keyId: a.hmac.keyId, secret: a.hmac.secret },
+      s3: a.s3 ? { bucket: a.s3.bucket, region: a.s3.region, accessKeyId: a.s3.accessKeyId, secretAccessKey: a.s3.secretAccessKey } : null,
       tokenUrl: a.oauth.tokenUrl,
       client: client ? { clientId: client.clientId, secret: client.secret || '' } : null,
       required: (sval('requiredHeaders') || []).map((r) => ({ name: r.name, value: r.value })),
@@ -242,7 +243,7 @@
     auth: { purpose: 'Choose how /v1 calls must authenticate (none, API key, Basic, Bearer, JWT, OAuth2, HMAC), see the credentials, manage OAuth clients and get test tokens.' },
     chaos: { purpose: 'Make the mock API misbehave on purpose: random errors, latency, timeouts, broken JSON and rate limits, globally or per route, so you can test client error handling.' },
     headers: { purpose: 'Headers added to every response, and headers every /v1 request must carry (missing ones return 400).' },
-    protocols: { purpose: 'The same mock data over other protocols: SOAP 1.1/1.2 services with live WSDLs, WebSocket channels (echo, JSON-RPC, live change feed) with an AsyncAPI document and a live console, Server-Sent Events streams (change feed with replay, ticks, LLM-style streaming) with a live viewer, GraphQL (queries, mutations, subscriptions) and OData v4, each with a console. Auth, chaos, rate limits and required headers apply as on /v1.' },
+    protocols: { purpose: 'The same mock data over other protocols: SOAP 1.1/1.2 services with live WSDLs, WebSocket channels (echo, JSON-RPC, live change feed) with an AsyncAPI document and a live console, Server-Sent Events streams (change feed with replay, ticks, LLM-style streaming) with a live viewer, GraphQL (queries, mutations, subscriptions), OData v4, and the file pool as an S3-compatible bucket (AWS Signature V4), each with a console. Auth (the S3 API uses its own keys), chaos, rate limits and required headers apply as on /v1.' },
     openapi: { purpose: 'Two live OpenAPI 3.1 specs: the Mock Data API (/openapi.json) for integrations to import, and the Admin API (/admin/api/openapi.json) for scripting the tool itself.' },
     tester: { purpose: 'Test an API you built: load its OpenAPI spec (REST), WSDL (SOAP) or AsyncAPI document (WebSocket), call your implementation, and check every response or message against the contract.' },
     help: { purpose: 'What this tool does and how to use each page.' },
@@ -453,7 +454,7 @@
     const filterText = h('input', { type: 'text', placeholder: 'Filter path, header, body…', 'aria-label': 'Filter' });
     const filterMethod = h('select', { 'aria-label': 'Method' }, ['', 'GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'].map((m) => h('option', { value: m }, m || 'All methods')));
     const filterSource = h('select', { 'aria-label': 'Source' },
-      [['', 'All sources'], ['catch-all', 'Webhooks / other paths'], ['v1', 'Mock API (/v1)'], ['soap', 'SOAP (/soap)'], ['ws', 'WebSocket (/ws)'], ['sse', 'SSE (/sse)'], ['graphql', 'GraphQL (/graphql)'], ['odata', 'OData (/odata)'], ['oauth', 'OAuth (/oauth)']].map(([v, l]) => h('option', { value: v }, l)));
+      [['', 'All sources'], ['catch-all', 'Webhooks / other paths'], ['v1', 'Mock API (/v1)'], ['soap', 'SOAP (/soap)'], ['ws', 'WebSocket (/ws)'], ['sse', 'SSE (/sse)'], ['graphql', 'GraphQL (/graphql)'], ['odata', 'OData (/odata)'], ['s3', 'S3 API (/<bucket>)'], ['oauth', 'OAuth (/oauth)']].map(([v, l]) => h('option', { value: v }, l)));
     const live = h('span', { class: 'live-dot' });
     const count = h('span', { class: 'muted small' });
     const logAll = h('input', { type: 'checkbox', checked: !!sval('inspectorLogAll') });
@@ -899,7 +900,7 @@
 
   VIEWS.protocols = async (el) => {
     await loadSettings();
-    el.append(header('Protocols', 'The same mock data over other protocols. Auth, chaos, rate limits and required headers work as on /v1.'));
+    el.append(header('Protocols', 'The same mock data over other protocols, and the file pool as an S3 bucket. Auth, chaos, rate limits and required headers work as on /v1 (the S3 API signs with its own keys).'));
     const soapOn = !!sval('soapEnabled');
     const listing = soapOn ? await fetch('/soap', { headers: { Accept: 'application/json' } }).then((r) => (r.ok ? r.json() : null)).catch(() => null) : null;
     const services = listing?.services || [];
@@ -924,8 +925,101 @@
     const sseCleanup = await sseSection(el);
     graphqlSection(el);
     odataSection(el);
+    await s3Section(el);
     return () => { wsCleanup?.(); sseCleanup?.(); }; // close the live consoles when leaving the page
   };
+
+  // ---- S3-compatible API: connection details, settings and a console that signs requests in the browser.
+  const textEnc = new TextEncoder();
+  const awsEncode = (str) => encodeURIComponent(str).replace(/[!'()*]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`);
+  const toHex = (buf) => [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, '0')).join('');
+  async function sha256Hex(text) { return toHex(await crypto.subtle.digest('SHA-256', textEnc.encode(text))); }
+  async function hmacSha256(key, data) {
+    const k = await crypto.subtle.importKey('raw', typeof key === 'string' ? textEnc.encode(key) : key, { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+    return crypto.subtle.sign('HMAC', k, textEnc.encode(data));
+  }
+  // AWS Signature V4 for a GET/HEAD with no body, as an S3 SDK would sign it.
+  async function s3SignedHeaders(method, path, pairs, c) {
+    const amz = new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '');
+    const date = amz.slice(0, 8);
+    const payload = await sha256Hex('');
+    const query = pairs.map(([k, v]) => [awsEncode(k), awsEncode(v)]).sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : a[1] < b[1] ? -1 : 1)).map(([k, v]) => `${k}=${v}`).join('&');
+    const canonical = [method, path, query, `host:${location.host}\nx-amz-content-sha256:${payload}\nx-amz-date:${amz}\n`, 'host;x-amz-content-sha256;x-amz-date', payload].join('\n');
+    const scope = `${date}/${c.region}/s3/aws4_request`;
+    const sts = ['AWS4-HMAC-SHA256', amz, scope, await sha256Hex(canonical)].join('\n');
+    let key = await hmacSha256(`AWS4${c.secretAccessKey}`, date);
+    for (const part of [c.region, 's3', 'aws4_request']) key = await hmacSha256(key, part);
+    const sig = toHex(await hmacSha256(key, sts));
+    return { query, headers: { 'x-amz-date': amz, 'x-amz-content-sha256': payload, Authorization: `AWS4-HMAC-SHA256 Credential=${c.accessKeyId}/${scope}, SignedHeaders=host;x-amz-content-sha256;x-amz-date, Signature=${sig}` } };
+  }
+
+  async function s3Section(el) {
+    const on = !!sval('s3ApiEnabled');
+    const a = await api('GET', '/auth').catch(() => null);
+    const c = a?.s3 || { endpoint: location.origin, bucket: sval('s3ApiBucket'), region: sval('s3ApiRegion'), accessKeyId: sval('s3ApiAccessKeyId'), secretAccessKey: sval('s3ApiSecretAccessKey') };
+    const secretEl = h('code', null, '••••••••');
+    let shown = false;
+    const rows = [
+      ['Endpoint', h('span', null, h('code', null, c.endpoint), ' ', h('button', { class: 'small', onclick: () => copy(c.endpoint) }, 'copy'))],
+      ['Bucket', h('span', null, h('code', null, c.bucket), ' ', h('button', { class: 'small', onclick: () => copy(c.bucket) }, 'copy'))],
+      ['Region', h('span', null, h('code', null, c.region), ' ', h('button', { class: 'small', onclick: () => copy(c.region) }, 'copy'))],
+      ['Access key ID', h('span', null, h('code', null, c.accessKeyId), ' ', h('button', { class: 'small', onclick: () => copy(c.accessKeyId) }, 'copy'))],
+      ['Secret access key', h('span', null, secretEl, ' ', h('button', { class: 'small', onclick: (e) => { shown = !shown; secretEl.textContent = shown ? c.secretAccessKey : '••••••••'; e.target.textContent = shown ? 'hide' : 'show'; } }, 'show'), ' ', h('button', { class: 'small', onclick: () => copy(c.secretAccessKey) }, 'copy'))],
+      ['Addressing', h('span', null, 'path-style ', h('span', { class: 'small muted' }, `(${c.endpoint}/${c.bucket}/<key>)`))],
+    ];
+    const demo = c.accessKeyId === 'demo-access-key' || c.secretAccessKey === 'demo-secret-key';
+    el.append(h('div', { class: 'grid cols-2' },
+      h('div', { class: 'card' }, titled('S3-compatible API', 'protocols.s3'),
+        !on ? h('p', { class: 'muted' }, 'The S3 API is off. Turn on s3ApiEnabled in the settings next to this card.')
+          : h('div', { class: 'stack' },
+            h('div', { class: 'kv' }, rows.flatMap(([k, v]) => [h('div', null, k), h('div', null, v)])),
+            demo ? h('div', { class: 'small', style: { color: 'var(--warn)' } }, 'Still using the demo keys: change them in the settings before you share this URL.') : null,
+            h('div', { class: 'small muted' }, 'The whole file pool is one bucket, keyed by file name; it works the same with local storage or S3 behind the tool. Requests are signed with AWS Signature V4 (header or presigned URL) instead of the active auth mode. Lists, get/head with Range, put (incl. streaming and checksums), copy, delete, multipart uploads; errors in the S3 XML format.'))),
+      h('div', { class: 'card' }, titled('S3 API settings', 'protocols.s3-settings'),
+        settingsForm(['s3ApiEnabled', 's3ApiBucket', 's3ApiRegion', 's3ApiAccessKeyId', 's3ApiSecretAccessKey'], { onSaved: () => { loadCurlCtx().catch(() => {}); route(); } }))));
+    if (!on) return;
+
+    const op = h('select', { 'aria-label': 'Operation' }, [['list', 'List objects'], ['head', 'HEAD object'], ['get', 'GET object']].map(([v, l]) => h('option', { value: v }, l)));
+    const prefixIn = h('input', { type: 'text', class: 'mono', placeholder: 'prefix (optional)', 'aria-label': 'Prefix' });
+    const delimIn = h('input', { type: 'text', class: 'mono', value: '/', style: { maxWidth: '80px' }, 'aria-label': 'Delimiter' });
+    const keyIn = h('input', { type: 'text', class: 'mono', value: 'employees.csv', 'aria-label': 'Key' });
+    const out = h('div', { class: 'stack' });
+    const listFields = h('div', { class: 'row' }, field('Prefix', prefixIn), field('Delimiter', delimIn));
+    const keyFields = h('div', { class: 'row' }, field('Key', keyIn));
+    const sync = () => { listFields.hidden = op.value !== 'list'; keyFields.hidden = op.value === 'list'; };
+    op.addEventListener('change', sync);
+    sync();
+    const send = guard(async (token) => {
+      if (!window.crypto?.subtle) throw new Error('Signing needs a secure page (https or localhost); use the curl examples in the guide instead.');
+      const listing = op.value === 'list';
+      const method = op.value === 'head' ? 'HEAD' : 'GET';
+      const path = listing ? `/${awsEncode(c.bucket)}` : `/${awsEncode(c.bucket)}/${keyIn.value.split('/').map(awsEncode).join('/')}`;
+      const pairs = listing ? [['list-type', '2'], ['max-keys', '50'], ...(prefixIn.value ? [['prefix', prefixIn.value]] : []), ...(delimIn.value ? [['delimiter', delimIn.value]] : []), ...(typeof token === 'string' ? [['continuation-token', token]] : [])] : [];
+      const signed = await s3SignedHeaders(method, path, pairs, c);
+      const started = performance.now();
+      const res = await fetch(`${path}${signed.query ? `?${signed.query}` : ''}`, { method, headers: signed.headers, credentials: 'omit' });
+      const text = method === 'HEAD' ? '' : await res.text();
+      const ms = Math.round(performance.now() - started);
+      const next = /<NextContinuationToken>([^<]+)<\/NextContinuationToken>/.exec(text)?.[1];
+      const count = /<KeyCount>(\d+)<\/KeyCount>/.exec(text)?.[1];
+      const code = /<Code>([^<]+)<\/Code>/.exec(text)?.[1];
+      const shownHeaders = ['content-type', 'content-length', 'etag', 'last-modified', 'x-amz-request-id', 'x-amz-bucket-region', 'x-chaos-injected', 'retry-after'];
+      clear(out).append(
+        h('div', { class: 'row' }, h('span', { class: statusClass(res.status) }, String(res.status)), h('span', { class: 'muted small' }, `${ms} ms · ${fmtBytes(text.length)}`),
+          count !== undefined ? h('span', { class: 'badge' }, `${count} entr${count === '1' ? 'y' : 'ies'}`) : null,
+          code ? h('span', { class: 'badge warn' }, code) : null,
+          next ? h('button', { class: 'small', onclick: () => send(next) }, 'Next page →') : null),
+        h('div', { class: 'small muted mono' }, `${method} ${decodeURIComponent(path)}${signed.query ? `?${decodeURIComponent(signed.query)}` : ''}`),
+        kv(Object.fromEntries(shownHeaders.filter((k) => res.headers.get(k)).map((k) => [k, res.headers.get(k)]))),
+        text ? h('div', { class: 'row between' }, h('span', { class: 'small muted' }, 'Response'), h('button', { class: 'small', onclick: () => copy(text) }, 'copy')) : null,
+        text ? codeBlock(/^\s*</.test(text) ? prettyXml(text.trim()) : text.slice(0, 20000), { maxHeight: '480px' }) : null);
+    });
+    el.append(h('div', { class: 'card stack' }, titled('Try the S3 API', 'protocols.s3-try'),
+      h('div', { class: 'row' }, field('Operation', op)), listFields, keyFields,
+      h('div', { class: 'row' }, h('button', { class: 'primary', onclick: send }, 'Send'),
+        h('span', { class: 'small muted' }, 'Signed in your browser with AWS Signature V4 and the keys above. Uploads and deletes are in the guide\'s curl and AWS CLI examples.')),
+      out));
+  }
 
   // OData v4 service, settings and a query console (GET from the browser with the active auth).
   function odataSection(el) {
@@ -1747,6 +1841,7 @@
           ['/sse, /sse/changes, /sse/ticks, POST /sse/stream', 'Server-Sent Events: change feed with Last-Event-ID replay, numbered ticks, and LLM-style request/stream (described in /openapi.json).'],
           ['/odata/v4, /odata/v4/$metadata', 'OData v4 (JSON) over the same data: query options, paging with @odata.nextLink, navigation and CRUD. $metadata is always open.'],
           ['/graphql, /graphql/schema.graphql', 'GraphQL over the same data: queries (offset pages and Relay connections), mutations, and a changes subscription over WebSocket (graphql-transport-ws). GraphiQL in a browser; the SDL is always open.'],
+          ['/files, /files/{key} (the S3 bucket name)', 'S3-compatible API over the file pool: path-style, signed with AWS Signature V4 using the S3 API keys (a signed GET / is ListBuckets). The bucket name is a setting.'],
           ['/oauth/token, /oauth/authorize, /oauth/introspect, /oauth/revoke', 'Built-in OAuth 2.0 server.'],
           ['/.well-known/jwks.json, /.well-known/oauth-authorization-server', 'Signing keys and OAuth discovery.'],
           ['/openapi.json, /openapi.yaml', 'Live OpenAPI for the mock data API (for integrations).'],

@@ -5119,11 +5119,1019 @@
       ]
     },
     {
-      "id": "att-003t",
-      "name": "Headers & inspector",
+      "id": "att-0048",
+      "name": "S3-compatible API",
       "item": [
         {
           "id": "att-003r",
+          "name": "ListBuckets",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": []
+            },
+            "auth": {
+              "type": "awsv4",
+              "awsv4": [
+                {
+                  "key": "accessKey",
+                  "value": "{{s3AccessKeyId}}",
+                  "type": "string"
+                },
+                {
+                  "key": "secretKey",
+                  "value": "{{s3SecretAccessKey}}",
+                  "type": "string"
+                },
+                {
+                  "key": "region",
+                  "value": "{{s3Region}}",
+                  "type": "string"
+                },
+                {
+                  "key": "service",
+                  "value": "s3",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Content-Type application/xml', () => pm.expect(pm.response.headers.get('Content-Type')).to.include('application/xml'));",
+                  "pm.test('bucket listed', () => pm.expect(pm.response.text()).to.include('<Name>' + pm.environment.get('s3Bucket') + '</Name>'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "att-003s",
+          "name": "HeadBucket",
+          "request": {
+            "method": "HEAD",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/{{s3Bucket}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "{{s3Bucket}}"
+              ]
+            },
+            "auth": {
+              "type": "awsv4",
+              "awsv4": [
+                {
+                  "key": "accessKey",
+                  "value": "{{s3AccessKeyId}}",
+                  "type": "string"
+                },
+                {
+                  "key": "secretKey",
+                  "value": "{{s3SecretAccessKey}}",
+                  "type": "string"
+                },
+                {
+                  "key": "region",
+                  "value": "{{s3Region}}",
+                  "type": "string"
+                },
+                {
+                  "key": "service",
+                  "value": "s3",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('region header', () => pm.expect(pm.response.headers.get('x-amz-bucket-region')).to.eql(pm.environment.get('s3Region')));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "att-003t",
+          "name": "ListObjectsV2 (page of 3)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/{{s3Bucket}}?list-type=2&max-keys=3",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "{{s3Bucket}}"
+              ],
+              "query": [
+                {
+                  "key": "list-type",
+                  "value": "2"
+                },
+                {
+                  "key": "max-keys",
+                  "value": "3"
+                }
+              ]
+            },
+            "auth": {
+              "type": "awsv4",
+              "awsv4": [
+                {
+                  "key": "accessKey",
+                  "value": "{{s3AccessKeyId}}",
+                  "type": "string"
+                },
+                {
+                  "key": "secretKey",
+                  "value": "{{s3SecretAccessKey}}",
+                  "type": "string"
+                },
+                {
+                  "key": "region",
+                  "value": "{{s3Region}}",
+                  "type": "string"
+                },
+                {
+                  "key": "service",
+                  "value": "s3",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test(\"truncated\", () => pm.expect(pm.response.text()).to.include(\"<IsTruncated>true</IsTruncated>\"));",
+                  "pm.test(\"three keys\", () => pm.expect(pm.response.text()).to.include(\"<KeyCount>3</KeyCount>\"));",
+                  "const m = /<NextContinuationToken>([^<]+)</.exec(pm.response.text()); pm.test('continuation token', () => pm.expect(m).to.not.eql(null)); pm.environment.set('s3Token', m ? m[1] : '');"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "att-003u",
+          "name": "ListObjectsV2 (next page)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/{{s3Bucket}}?list-type=2&max-keys=3&continuation-token={{s3Token}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "{{s3Bucket}}"
+              ],
+              "query": [
+                {
+                  "key": "list-type",
+                  "value": "2"
+                },
+                {
+                  "key": "max-keys",
+                  "value": "3"
+                },
+                {
+                  "key": "continuation-token",
+                  "value": "{{s3Token}}"
+                }
+              ]
+            },
+            "auth": {
+              "type": "awsv4",
+              "awsv4": [
+                {
+                  "key": "accessKey",
+                  "value": "{{s3AccessKeyId}}",
+                  "type": "string"
+                },
+                {
+                  "key": "secretKey",
+                  "value": "{{s3SecretAccessKey}}",
+                  "type": "string"
+                },
+                {
+                  "key": "region",
+                  "value": "{{s3Region}}",
+                  "type": "string"
+                },
+                {
+                  "key": "service",
+                  "value": "s3",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test(\"echoes the token\", () => pm.expect(pm.response.text()).to.include(\"<ContinuationToken>\"));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "att-003v",
+          "name": "PutObject with metadata",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "text/plain"
+              },
+              {
+                "key": "x-amz-meta-source",
+                "value": "postman"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/{{s3Bucket}}/postman/hello.txt",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "{{s3Bucket}}",
+                "postman",
+                "hello.txt"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "Hello from Postman over the S3 API"
+            },
+            "auth": {
+              "type": "awsv4",
+              "awsv4": [
+                {
+                  "key": "accessKey",
+                  "value": "{{s3AccessKeyId}}",
+                  "type": "string"
+                },
+                {
+                  "key": "secretKey",
+                  "value": "{{s3SecretAccessKey}}",
+                  "type": "string"
+                },
+                {
+                  "key": "region",
+                  "value": "{{s3Region}}",
+                  "type": "string"
+                },
+                {
+                  "key": "service",
+                  "value": "s3",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('ETag is the MD5', () => pm.expect(pm.response.headers.get('ETag')).to.eql('\"' + require('crypto-js').MD5(\"Hello from Postman over the S3 API\").toString() + '\"'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "att-003w",
+          "name": "HeadObject",
+          "request": {
+            "method": "HEAD",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/{{s3Bucket}}/postman/hello.txt",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "{{s3Bucket}}",
+                "postman",
+                "hello.txt"
+              ]
+            },
+            "auth": {
+              "type": "awsv4",
+              "awsv4": [
+                {
+                  "key": "accessKey",
+                  "value": "{{s3AccessKeyId}}",
+                  "type": "string"
+                },
+                {
+                  "key": "secretKey",
+                  "value": "{{s3SecretAccessKey}}",
+                  "type": "string"
+                },
+                {
+                  "key": "region",
+                  "value": "{{s3Region}}",
+                  "type": "string"
+                },
+                {
+                  "key": "service",
+                  "value": "s3",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('length', () => pm.expect(pm.response.headers.get('Content-Length')).to.eql('34'));",
+                  "pm.test('metadata', () => pm.expect(pm.response.headers.get('x-amz-meta-source')).to.eql('postman'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "att-003x",
+          "name": "GetObject",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/{{s3Bucket}}/postman/hello.txt",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "{{s3Bucket}}",
+                "postman",
+                "hello.txt"
+              ]
+            },
+            "auth": {
+              "type": "awsv4",
+              "awsv4": [
+                {
+                  "key": "accessKey",
+                  "value": "{{s3AccessKeyId}}",
+                  "type": "string"
+                },
+                {
+                  "key": "secretKey",
+                  "value": "{{s3SecretAccessKey}}",
+                  "type": "string"
+                },
+                {
+                  "key": "region",
+                  "value": "{{s3Region}}",
+                  "type": "string"
+                },
+                {
+                  "key": "service",
+                  "value": "s3",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Content-Type text/plain', () => pm.expect(pm.response.headers.get('Content-Type')).to.include('text/plain'));",
+                  "pm.test('body', () => pm.expect(pm.response.text()).to.eql(\"Hello from Postman over the S3 API\"));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "att-003y",
+          "name": "GetObject with Range → 206",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Range",
+                "value": "bytes=0-4"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/{{s3Bucket}}/postman/hello.txt",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "{{s3Bucket}}",
+                "postman",
+                "hello.txt"
+              ]
+            },
+            "auth": {
+              "type": "awsv4",
+              "awsv4": [
+                {
+                  "key": "accessKey",
+                  "value": "{{s3AccessKeyId}}",
+                  "type": "string"
+                },
+                {
+                  "key": "secretKey",
+                  "value": "{{s3SecretAccessKey}}",
+                  "type": "string"
+                },
+                {
+                  "key": "region",
+                  "value": "{{s3Region}}",
+                  "type": "string"
+                },
+                {
+                  "key": "service",
+                  "value": "s3",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 206', () => pm.response.to.have.status(206));",
+                  "pm.test('first five bytes', () => pm.expect(pm.response.text()).to.eql('Hello'));",
+                  "pm.test('Content-Range', () => pm.expect(pm.response.headers.get('Content-Range')).to.eql('bytes 0-4/34'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "att-003z",
+          "name": "CopyObject",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "x-amz-copy-source",
+                "value": "/{{s3Bucket}}/postman/hello.txt"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/{{s3Bucket}}/postman/copy.txt",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "{{s3Bucket}}",
+                "postman",
+                "copy.txt"
+              ]
+            },
+            "auth": {
+              "type": "awsv4",
+              "awsv4": [
+                {
+                  "key": "accessKey",
+                  "value": "{{s3AccessKeyId}}",
+                  "type": "string"
+                },
+                {
+                  "key": "secretKey",
+                  "value": "{{s3SecretAccessKey}}",
+                  "type": "string"
+                },
+                {
+                  "key": "region",
+                  "value": "{{s3Region}}",
+                  "type": "string"
+                },
+                {
+                  "key": "service",
+                  "value": "s3",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test(\"CopyObjectResult\", () => pm.expect(pm.response.text()).to.include(\"<CopyObjectResult\"));",
+                  "pm.test(\"ETag\", () => pm.expect(pm.response.text()).to.include(\"<ETag>\"));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "att-0040",
+          "name": "List a \"folder\" with a delimiter",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/{{s3Bucket}}?list-type=2&prefix=postman%2F&delimiter=%2F",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "{{s3Bucket}}"
+              ],
+              "query": [
+                {
+                  "key": "list-type",
+                  "value": "2"
+                },
+                {
+                  "key": "prefix",
+                  "value": "postman%2F"
+                },
+                {
+                  "key": "delimiter",
+                  "value": "%2F"
+                }
+              ]
+            },
+            "auth": {
+              "type": "awsv4",
+              "awsv4": [
+                {
+                  "key": "accessKey",
+                  "value": "{{s3AccessKeyId}}",
+                  "type": "string"
+                },
+                {
+                  "key": "secretKey",
+                  "value": "{{s3SecretAccessKey}}",
+                  "type": "string"
+                },
+                {
+                  "key": "region",
+                  "value": "{{s3Region}}",
+                  "type": "string"
+                },
+                {
+                  "key": "service",
+                  "value": "s3",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test(\"original\", () => pm.expect(pm.response.text()).to.include(\"<Key>postman/hello.txt</Key>\"));",
+                  "pm.test(\"copy\", () => pm.expect(pm.response.text()).to.include(\"<Key>postman/copy.txt</Key>\"));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "att-0041",
+          "name": "The copy is in the file pool (/v1/files)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/v1/files?limit=200",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "files"
+              ],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "200"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('listed with its S3 key', () => pm.expect(pm.response.json().data.some((f) => f.s3 && f.s3.key === 'postman/copy.txt')).to.eql(true));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "att-0042",
+          "name": "DeleteObjects",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/xml"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/{{s3Bucket}}?delete",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "{{s3Bucket}}"
+              ],
+              "query": [
+                {
+                  "key": "delete",
+                  "value": ""
+                }
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "<Delete><Object><Key>postman/hello.txt</Key></Object><Object><Key>postman/copy.txt</Key></Object></Delete>"
+            },
+            "auth": {
+              "type": "awsv4",
+              "awsv4": [
+                {
+                  "key": "accessKey",
+                  "value": "{{s3AccessKeyId}}",
+                  "type": "string"
+                },
+                {
+                  "key": "secretKey",
+                  "value": "{{s3SecretAccessKey}}",
+                  "type": "string"
+                },
+                {
+                  "key": "region",
+                  "value": "{{s3Region}}",
+                  "type": "string"
+                },
+                {
+                  "key": "service",
+                  "value": "s3",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test(\"deleted\", () => pm.expect(pm.response.text()).to.include(\"<Deleted><Key>postman/hello.txt</Key></Deleted>\"));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "att-0043",
+          "name": "Deleted → 404 NoSuchKey",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/{{s3Bucket}}/postman/hello.txt",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "{{s3Bucket}}",
+                "postman",
+                "hello.txt"
+              ]
+            },
+            "auth": {
+              "type": "awsv4",
+              "awsv4": [
+                {
+                  "key": "accessKey",
+                  "value": "{{s3AccessKeyId}}",
+                  "type": "string"
+                },
+                {
+                  "key": "secretKey",
+                  "value": "{{s3SecretAccessKey}}",
+                  "type": "string"
+                },
+                {
+                  "key": "region",
+                  "value": "{{s3Region}}",
+                  "type": "string"
+                },
+                {
+                  "key": "service",
+                  "value": "s3",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 404', () => pm.response.to.have.status(404));",
+                  "pm.test('Content-Type application/xml', () => pm.expect(pm.response.headers.get('Content-Type')).to.include('application/xml'));",
+                  "pm.test(\"S3 error NoSuchKey\", () => pm.expect(pm.response.text()).to.include(\"<Code>NoSuchKey</Code>\"));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "att-0044",
+          "name": "Unknown bucket → 404 NoSuchBucket",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/no-such-bucket?list-type=2",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "no-such-bucket"
+              ],
+              "query": [
+                {
+                  "key": "list-type",
+                  "value": "2"
+                }
+              ]
+            },
+            "auth": {
+              "type": "awsv4",
+              "awsv4": [
+                {
+                  "key": "accessKey",
+                  "value": "{{s3AccessKeyId}}",
+                  "type": "string"
+                },
+                {
+                  "key": "secretKey",
+                  "value": "{{s3SecretAccessKey}}",
+                  "type": "string"
+                },
+                {
+                  "key": "region",
+                  "value": "{{s3Region}}",
+                  "type": "string"
+                },
+                {
+                  "key": "service",
+                  "value": "s3",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 404', () => pm.response.to.have.status(404));",
+                  "pm.test('Content-Type application/xml', () => pm.expect(pm.response.headers.get('Content-Type')).to.include('application/xml'));",
+                  "pm.test(\"S3 error NoSuchBucket\", () => pm.expect(pm.response.text()).to.include(\"<Code>NoSuchBucket</Code>\"));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "att-0045",
+          "name": "Wrong secret → 403 SignatureDoesNotMatch",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/{{s3Bucket}}?list-type=2",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "{{s3Bucket}}"
+              ],
+              "query": [
+                {
+                  "key": "list-type",
+                  "value": "2"
+                }
+              ]
+            },
+            "auth": {
+              "type": "awsv4",
+              "awsv4": [
+                {
+                  "key": "accessKey",
+                  "value": "{{s3AccessKeyId}}",
+                  "type": "string"
+                },
+                {
+                  "key": "secretKey",
+                  "value": "not-the-secret",
+                  "type": "string"
+                },
+                {
+                  "key": "region",
+                  "value": "{{s3Region}}",
+                  "type": "string"
+                },
+                {
+                  "key": "service",
+                  "value": "s3",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 403', () => pm.response.to.have.status(403));",
+                  "pm.test('Content-Type application/xml', () => pm.expect(pm.response.headers.get('Content-Type')).to.include('application/xml'));",
+                  "pm.test(\"S3 error SignatureDoesNotMatch\", () => pm.expect(pm.response.text()).to.include(\"<Code>SignatureDoesNotMatch</Code>\"));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "att-0046",
+          "name": "Unsigned → 403 AccessDenied",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/{{s3Bucket}}/employees.csv",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "{{s3Bucket}}",
+                "employees.csv"
+              ]
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 403', () => pm.response.to.have.status(403));",
+                  "pm.test('Content-Type application/xml', () => pm.expect(pm.response.headers.get('Content-Type')).to.include('application/xml'));",
+                  "pm.test(\"S3 error AccessDenied\", () => pm.expect(pm.response.text()).to.include(\"<Code>AccessDenied</Code>\"));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "att-0047",
+          "name": "X-Force-Error: 503 → S3 XML error",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-Force-Error",
+                "value": "503"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/{{s3Bucket}}?list-type=2",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "{{s3Bucket}}"
+              ],
+              "query": [
+                {
+                  "key": "list-type",
+                  "value": "2"
+                }
+              ]
+            },
+            "auth": {
+              "type": "awsv4",
+              "awsv4": [
+                {
+                  "key": "accessKey",
+                  "value": "{{s3AccessKeyId}}",
+                  "type": "string"
+                },
+                {
+                  "key": "secretKey",
+                  "value": "{{s3SecretAccessKey}}",
+                  "type": "string"
+                },
+                {
+                  "key": "region",
+                  "value": "{{s3Region}}",
+                  "type": "string"
+                },
+                {
+                  "key": "service",
+                  "value": "s3",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 503', () => pm.response.to.have.status(503));",
+                  "pm.test('Content-Type application/xml', () => pm.expect(pm.response.headers.get('Content-Type')).to.include('application/xml'));",
+                  "pm.test(\"S3 error ServiceUnavailable\", () => pm.expect(pm.response.text()).to.include(\"<Code>ServiceUnavailable</Code>\"));"
+                ]
+              }
+            }
+          ]
+        }
+      ],
+      "description": "The file pool as an S3 bucket (path-style). Requests use Postman's AWS Signature auth with {{s3AccessKeyId}}, {{s3SecretAccessKey}} and {{s3Region}}, independent of {{authMode}}."
+    },
+    {
+      "id": "att-004b",
+      "name": "Headers & inspector",
+      "item": [
+        {
+          "id": "att-0049",
           "name": "Request id echo",
           "request": {
             "method": "GET",
@@ -5163,7 +6171,7 @@
           ]
         },
         {
-          "id": "att-003s",
+          "id": "att-004a",
           "name": "Inspector catch-all",
           "request": {
             "method": "POST",

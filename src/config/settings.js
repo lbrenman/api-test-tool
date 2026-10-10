@@ -98,6 +98,13 @@ const DEFS = [
   { key: 'odataEnabled', env: 'ODATA_ENABLED', def: true, type: 'bool', section: 'odata', desc: 'serve the OData v4 service at /odata/v4 (Employees, Products, Departments, Categories)' },
   { key: 'odataMaxPageSize', env: 'ODATA_MAX_PAGE_SIZE', def: 100, type: 'int', section: 'odata', min: 1, max: 1000, desc: 'Server-driven page size: longer results get @odata.nextLink (clients can ask for less with Prefer: odata.maxpagesize)' },
 
+  // ---- s3 api (an S3-compatible endpoint over the file pool; not the S3_* storage backend above) ----
+  { key: 's3ApiEnabled', env: 'S3_API_ENABLED', def: true, type: 'bool', section: 's3api', desc: 'serve the file pool as an S3-compatible API at the base URL (path-style: <base>/<bucket>/<key>), signed with AWS Signature V4' },
+  { key: 's3ApiBucket', env: 'S3_API_BUCKET', def: 'files', type: 'string', section: 's3api', pattern: /^(?!(v1|admin|dashboard|docs|soap|ws|sse|graphql|odata|oauth|app|health|ready|samples|mock|problems|openapi\.json|openapi\.yaml)$)[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/, desc: 'Bucket name clients use (3-63 lowercase letters, digits, dots, hyphens; not a path the tool already uses)' },
+  { key: 's3ApiRegion', env: 'S3_API_REGION', def: 'us-east-1', type: 'string', section: 's3api', pattern: /^[a-z0-9-]{1,40}$/, desc: 'Region clients must sign with (e.g. us-east-1, eu-west-1, auto)' },
+  { key: 's3ApiAccessKeyId', env: 'S3_API_ACCESS_KEY_ID', def: 'demo-access-key', type: 'string', section: 's3api', pattern: /^[A-Za-z0-9._-]{3,128}$/, desc: 'Access key ID clients sign with' },
+  { key: 's3ApiSecretAccessKey', env: 'S3_API_SECRET_ACCESS_KEY', def: 'demo-secret-key', type: 'string', section: 's3api', secret: true, pattern: /^.{1,256}$/, desc: 'Secret access key clients sign with' },
+
   // ---- sse ----
   { key: 'sseEnabled', env: 'SSE_ENABLED', def: true, type: 'bool', section: 'sse', desc: 'serve the Server-Sent Events streams under /sse (changes, ticks, stream)' },
   { key: 'sseHeartbeatSeconds', env: 'SSE_HEARTBEAT_SECONDS', def: 15, type: 'int', section: 'sse', min: 0, desc: 'Comment line sent this often to keep idle streams open; 0 = off' },
@@ -112,7 +119,7 @@ const DEFS = [
 
   // ---- inspector ----
   { key: 'inspectorRetention', env: 'INSPECTOR_RETENTION', def: 500, type: 'int', section: 'inspector', min: 1 },
-  { key: 'inspectorLogAll', env: 'INSPECTOR_LOG_ALL', def: true, type: 'bool', section: 'inspector', desc: 'also record /v1/*, /soap/*, /ws/* (upgrades), /sse/*, /graphql, /odata/* and /oauth/* calls (the dashboard, docs and health probes are never recorded)' },
+  { key: 'inspectorLogAll', env: 'INSPECTOR_LOG_ALL', def: true, type: 'bool', section: 'inspector', desc: 'also record /v1/*, /soap/*, /ws/* (upgrades), /sse/*, /graphql, /odata/*, S3 API and /oauth/* calls (the dashboard, docs and health probes are never recorded)' },
   { key: 'inspectorResponseStatus', env: 'INSPECTOR_RESPONSE_STATUS', def: 200, type: 'int', section: 'inspector', min: 100, max: 599 },
   { key: 'inspectorResponseContentType', env: 'INSPECTOR_RESPONSE_CONTENT_TYPE', def: 'application/json', type: 'string', section: 'inspector' },
   { key: 'inspectorResponseBody', env: 'INSPECTOR_RESPONSE_BODY', def: '', type: 'string', section: 'inspector', desc: 'blank = JSON receipt with the capture id' },

@@ -24,6 +24,7 @@ Ues Cases:
 * You need to secure your API with OAuth2 and need an external OAuth2 server
 * You are trying to learn how to implement some API feature such as pagination or header introspection
 * You need an http file upload/download endpoint for a file based flow
+* You need an S3 bucket to test an S3 connector, without an AWS account
 * You need to experiment with advanced orchestration/aggregation functions such as data aggregation/join/deduplication and you need a data source
 * You are debugging an http client call and need a web catcher to see what your platform is actually sending
 
@@ -54,6 +55,7 @@ Ues Cases:
   - [Server-Sent Events](#server-sent-events)
   - [OData v4](#odata-v4)
   - [GraphQL](#graphql)
+  - [S3-compatible API](#s3-compatible-api)
   - [Inspector](#inspector)
   - [Outgoing webhooks](#outgoing-webhooks)
   - [API tester walkthrough](#api-tester-walkthrough)
@@ -125,13 +127,14 @@ Fly.io, Render and Northflank are covered in [Deployment](#deployment).
 | **WebSocket** | Mock channels over the same data: `/ws/echo`, `/ws/rpc` (JSON-RPC 2.0: get/list employees, products, departments, categories) and `/ws/changes` (live created/updated/deleted events from any protocol), with an AsyncAPI 3.0 document. The upgrade goes through auth, rate limiting, required headers and chaos. Size limit (1009), idle timeout, keep-alive pings, and a live console in the dashboard. In-house RFC 6455 implementation, no dependency. |
 | **Server-Sent Events** | `/sse/changes` (live change feed from any protocol, Last-Event-ID replay, `event: reset` on gaps), `/sse/ticks` (numbered, resumable) and `POST /sse/stream` (LLM-style token streaming, plain events or OpenAI chunk format with `[DONE]`). Heartbeats, `retry:`, stream chaos (`dropAfter`, `malformedAt`, `skipIds`), documented in `/openapi.json`, with a live viewer in the dashboard. The tester reads SSE responses for a time window. |
 | **OData v4** | `/odata/v4` over the same data: service document, CSDL `$metadata`, `$filter` (comparison, logical, arithmetic, `in`, string/date/math functions, `any`/`all` lambdas, navigation paths), `$select`, `$expand` with nested options, `$orderby`, `$top`, `$skip`, `$count`, `$search`, server-driven paging with `@odata.nextLink` and `Prefer: odata.maxpagesize`, key/property/`$value`/navigation addressing, and create/update/delete with `@odata.bind`, `Prefer: return=…` and If-Match ETags. OData error format, `odata.metadata=none/minimal/full`, a query console in the dashboard. |
+| **S3-compatible API** | The file pool as an S3 bucket at the base URL (path-style), whether files are stored locally or in S3: ListBuckets, HeadBucket, GetBucketLocation, ListObjects v1/v2 (prefix, delimiter, paging, `encoding-type=url`), Get/Head (Range, conditional headers, `response-*` overrides), Put (aws-chunked streaming, CRC32/SHA checksums, Content-MD5), Copy, Delete, DeleteObjects, multipart uploads and presigned URLs. Real AWS Signature V4 checks against a configurable access key, secret and region; S3 XML errors; works with the AWS SDKs, the AWS CLI, curl `--aws-sigv4` and Postman's AWS Signature auth. |
 | **GraphQL** | `/graphql` over the same data: queries with offset pages and Relay connections (filters, sort, search), nested department/category/manager resolvers, CRUD mutations with merge-patch updates, and a live `changes` subscription over WebSocket (graphql-transport-ws). Field errors come back as HTTP 200 with partial data and `extensions.code`; auth, rate-limit and chaos errors keep their HTTP status. GraphQL-over-HTTP media types, introspection on/off, depth limit, injected field errors (`X-Force-GraphQL-Error`), SDL at `/graphql/schema.graphql`, GraphiQL in the browser and a query console in the dashboard. |
 | **Outgoing webhooks** | Any number of webhooks that POST `{event, resource, resourceId, href, …}` to your URL when an employee, product, department or category is created, updated or deleted, or a file is uploaded, downloaded or deleted, through any protocol. Per webhook: resources, events, optional record data, HMAC signing secret and extra headers. Stored in the database (they survive restarts); every delivery is logged with the response, with Test and Resend buttons. |
 | **Inspector** | Catch-all capture with the actual path, live stream (SSE), detected auth (Basic user, decoded JWT, API keys), pretty bodies and multipart parts, copy as curl, replay, auto-forward, configurable responses and path rules. |
 | **Generated OpenAPI** | Two OAS 3.1 specs, regenerated from the live settings. **Mock Data API** (`/openapi.json`, `/openapi.yaml`) is for integrations: `/v1` resources, every pagination path, the file endpoints, the SSE streams and the OAuth token endpoint, reflecting the server URL, date format, auth scheme, required headers and chaos headers. **Admin API** (`/admin/api/openapi.json`, `.yaml`, password protected) is for operators and scripts: settings, seeding, files, OAuth clients, inspector, tester, `/health` and `/ready`. Swagger UI at `/docs` shows both (`/docs?spec=admin` for the admin spec). |
 | **API tester** | Upload, paste or URL load for OAS 3.0, 3.1 and Swagger 2.0 (REST), WSDL 1.1 (SOAP 1.1/1.2, with XSD validation and WS-Security) and AsyncAPI 2.x/3.0 (WebSocket, with message validation, correlation and scripted scenarios). Spec lint, per-operation "try it" with generated samples that honour `pattern`/`format`/`enum`/limits, auth profiles (none, API key, Basic, Bearer, OAuth2 client credentials), response validation, run-all contract mode with ID chaining and negative tests, run history, and JSON and HTML reports. "Mock from spec" serves a spec's examples from this tool. |
 | **Back office app** | `/app` is a business-style app over the mock data, for demos and non-technical viewers: KPIs (headcount, payroll, stock value, stock health), charts, searchable and sortable lists, record pages with related records, and forms to create, edit and delete employees, products, departments and categories. It reads and writes the same data as `/v1` but through its own backend (`/admin/api/app/*`), so the `/v1` auth mode, chaos, rate limits and required headers never break it. Uses the dashboard password. |
-| **Dashboard** | Overview, Settings (with source badges and resets), Data, Inspector, Files, Auth, Chaos, Headers, Protocols (SOAP services, WebSocket channels and SSE streams: endpoints, settings, a SOAP try-it panel, a live WebSocket console and a live SSE viewer), OpenAPI, API Tester, and About & Help (what each page does, quick starts, reserved paths, handy headers). Every page has a "? Help" link, and every main component has a **"?" guide** (hover, focus or tap) with numbered steps for using it in your integration or tests and copy-ready curl commands. The curls use the resolved base URL, the auth mode that is active right now (from `AUTH_MODE` or a dashboard override — the guides never change it), and any required request headers; in `jwt`/`oauth2` mode they fetch a token first, and in `hmac` mode they sign the request with `openssl`. The tester's **Try it → Request** tab adds "Copy as curl" for the exact call it sent. Responsive, with light and dark themes. |
+| **Dashboard** | Overview, Settings (with source badges and resets), Data, Inspector, Files, Auth, Chaos, Headers, Protocols (SOAP services, WebSocket channels, SSE streams, GraphQL, OData and the S3 API: endpoints, settings, a SOAP try-it panel, a live WebSocket console, a live SSE viewer and query consoles), OpenAPI, API Tester, and About & Help (what each page does, quick starts, reserved paths, handy headers). Every page has a "? Help" link, and every main component has a **"?" guide** (hover, focus or tap) with numbered steps for using it in your integration or tests and copy-ready curl commands. The curls use the resolved base URL, the auth mode that is active right now (from `AUTH_MODE` or a dashboard override — the guides never change it), and any required request headers; in `jwt`/`oauth2` mode they fetch a token first, and in `hmac` mode they sign the request with `openssl`. The tester's **Try it → Request** tab adds "Copy as curl" for the exact call it sent. Responsive, with light and dark themes. |
 
 ---
 
@@ -194,6 +197,10 @@ Settings marked **restart** can only be set through the environment.
 | `WS_PING_INTERVAL_SECONDS` | `30` | Server keep-alive pings; a connection that misses a pong is dropped; 0 = off |
 | `ODATA_ENABLED` | `true` | Serve the OData v4 service at `/odata/v4` |
 | `ODATA_MAX_PAGE_SIZE` | `100` | Server-driven page size; longer results get `@odata.nextLink` (1–1000) |
+| `S3_API_ENABLED` | `true` | Serve the file pool as an S3-compatible API at the base URL (path-style `/<bucket>/<key>`) |
+| `S3_API_BUCKET` | `files` | Bucket name S3 clients use (3–63 lowercase letters, digits, dots, hyphens; not a reserved path) |
+| `S3_API_REGION` | `us-east-1` | Region S3 clients must sign with |
+| `S3_API_ACCESS_KEY_ID` / `S3_API_SECRET_ACCESS_KEY` | `demo-access-key` / `demo-secret-key` | Credentials S3 clients sign with (AWS Signature V4). Not the `S3_*` storage settings. |
 | `GRAPHQL_ENABLED` | `true` | Serve the GraphQL mock at `/graphql` |
 | `GRAPHQL_INTROSPECTION` | `true` | Allow `__schema` / `__type` queries (the SDL file stays available) |
 | `GRAPHQL_MAX_DEPTH` | `10` | Reject operations nested deeper than this (introspection fields not counted); 0 = no limit |
@@ -217,7 +224,7 @@ Settings marked **restart** can only be set through the environment.
 
 ## Route map
 
-These prefixes are reserved: `/v1`, `/soap`, `/ws`, `/sse`, `/graphql`, `/odata`, `/oauth`, `/.well-known`, `/admin`, `/dashboard`, `/app`, `/docs`, `/openapi.json`, `/openapi.yaml`, `/samples`, `/health`, `/ready`, and `GET /` (which redirects to the dashboard). **Every other path, and every method, is captured by the inspector.** Calls to `/v1`, `/soap`, `/ws` (the upgrade), `/sse`, `/graphql`, `/odata` and `/oauth` are recorded there too (unless `INSPECTOR_LOG_ALL=false`); the dashboard, admin API, docs and health probes never are.
+These prefixes are reserved: `/v1`, `/soap`, `/ws`, `/sse`, `/graphql`, `/odata`, the S3 bucket name (`/files` by default), `/oauth`, `/.well-known`, `/admin`, `/dashboard`, `/app`, `/docs`, `/openapi.json`, `/openapi.yaml`, `/samples`, `/health`, `/ready`, and `GET /` (which redirects to the dashboard; a request signed with AWS Signature V4 to `/` is the S3 API's ListBuckets). **Every other path, and every method, is captured by the inspector.** Calls to `/v1`, `/soap`, `/ws` (the upgrade), `/sse`, `/graphql`, `/odata`, the S3 API and `/oauth` are recorded there too (unless `INSPECTOR_LOG_ALL=false`); the dashboard, admin API, docs and health probes never are.
 
 | Path | Purpose |
 |---|---|
@@ -240,6 +247,7 @@ These prefixes are reserved: `/v1`, `/soap`, `/ws`, `/sse`, `/graphql`, `/odata`
 | `/odata/v4/{Employees\|Products\|Departments\|Categories}…` | OData v4 queries and writes (see [OData v4](#odata-v4)) |
 | `GET /graphql/schema.graphql` | GraphQL SDL (open) |
 | `POST /graphql`, `GET /graphql?query=`, `GET /graphql` (upgrade) | GraphQL queries, mutations and subscriptions; GraphiQL in a browser (see [GraphQL](#graphql)) |
+| `/{bucket}`, `/{bucket}/{key}` (bucket `files` by default), signed `GET /` | S3-compatible API over the file pool (see [S3-compatible API](#s3-compatible-api)) |
 | `/oauth/token`, `/oauth/authorize`, `/oauth/introspect`, `/oauth/revoke` | OAuth 2.0 server |
 | `/.well-known/oauth-authorization-server`, `/.well-known/openid-configuration`, `/.well-known/jwks.json` | Discovery and JWKS |
 | `/samples/*` | Bundled specs (handy for the tester's URL loader) |
@@ -440,7 +448,7 @@ curl -s -o /dev/null -w '%{time_total}\n' "$B/v1/employees/1" -H 'X-Force-Latenc
 
 ## Files
 
-All protocols read from and write to **one pool**, local disk or S3. A file uploaded with tus can be downloaded by range, presigned, or fetched as base64.
+All protocols read from and write to **one pool**, local disk or S3. A file uploaded with tus can be downloaded by range, presigned, or fetched as base64. The same pool is also an S3 bucket for S3 clients (see [S3-compatible API](#s3-compatible-api)).
 
 | Path | Protocol |
 |---|---|
@@ -608,6 +616,53 @@ The dashboard's **Protocols** page shows the endpoint, holds the GraphQL setting
 
 ---
 
+## S3-compatible API
+
+The file pool is also served as an **S3 bucket**, so a platform's S3 connector (or any AWS SDK, the AWS CLI, rclone, …) can list, read, write and delete the tool's files. It works the same whether the files are stored on local disk or in an S3 bucket behind the tool (`FILE_STORE`). The `S3_API_*` settings below are the credentials *clients* use; they are unrelated to the `S3_*` variables that choose where the tool itself stores files.
+
+What a client needs:
+
+| Setting | Value |
+|---|---|
+| Endpoint / service URL | the tool's base URL, e.g. `https://my-api-test-tool.fly.dev` |
+| Access key ID / secret access key | `S3_API_ACCESS_KEY_ID` / `S3_API_SECRET_ACCESS_KEY` (default `demo-access-key` / `demo-secret-key`) |
+| Region | `S3_API_REGION` (default `us-east-1`) |
+| Addressing | **path-style** ("force path style"): requests go to `<base>/<bucket>/<key>` |
+| Bucket | `S3_API_BUCKET` (default `files`) |
+
+- **Objects:** every file in the pool is an object keyed by its file name (`employees.csv`, …). Uploads through the S3 API can use any key, including folder-style keys (`in/2026/orders.csv`); the file gets the last path segment as its name and the full key is stored with it (`s3.key` in `/v1/files`). Putting an existing key replaces that object. If two pool files share a name, the newest one is the object.
+- **Operations:** ListBuckets, HeadBucket, GetBucketLocation, GetBucketVersioning/GetBucketAcl (fixed answers), ListObjectsV2 and ListObjects (prefix, delimiter → CommonPrefixes, max-keys, continuation tokens / markers, start-after, `encoding-type=url`), GetObject and HeadObject (Range → 206/416, If-Match / If-None-Match / If-Modified-Since / If-Unmodified-Since, `response-content-type` etc.), PutObject (user metadata `x-amz-meta-*`, Content-Type, Cache-Control and friends are kept), CopyObject (COPY or REPLACE metadata, `x-amz-copy-source-if-*`), DeleteObject (204, also for missing keys), DeleteObjects (with Quiet), multipart uploads (Create, UploadPart, ListParts, Complete, Abort, ListMultipartUploads; parts of at least 5 MiB except the last, ETags `"<md5>-<parts>"`). Anything else (tagging, ACL writes, versioning, lifecycle, UploadPartCopy, …) answers `501 NotImplemented`.
+- **Authentication:** real AWS Signature Version 4, in the `Authorization` header or as a presigned URL (`X-Amz-*` query parameters, up to 7 days). The credential scope must use the configured region (`AuthorizationHeaderMalformed` with the expected region otherwise) and the clock must be within 15 minutes. Payloads may be a hex SHA-256 (checked), `UNSIGNED-PAYLOAD`, or aws-chunked streaming (`STREAMING-AWS4-HMAC-SHA256-PAYLOAD` with every chunk signature checked, `STREAMING-UNSIGNED-PAYLOAD-TRAILER` and the signed trailer variant, as newer SDKs send). `Content-MD5` and `x-amz-checksum-crc32|sha1|sha256` (header or trailer) are verified. SigV2 and anonymous requests are refused. `AUTH_MODE` does not apply to the S3 API.
+- **Shared behaviour:** the rate limit, required headers, chaos (`X-Force-Error`, error rate, latency) and the inspector apply as on every protocol; errors use the S3 XML format (`<Error><Code>NoSuchKey</Code><Message>…</Message><RequestId>…</RequestId></Error>`). Uploads, downloads and deletes fire the file webhooks with `"via": "s3"`.
+- **ETags:** objects written through the S3 API have MD5 ETags like AWS; files that arrived through other protocols have their SHA-256 as the ETag.
+- **Not supported:** virtual-hosted-style addressing unless your DNS sends `<bucket>.<host>` to the tool, more than one bucket, object versions, and server-side encryption headers (ignored).
+
+```bash
+# curl 7.75+ signs requests itself
+S3="--aws-sigv4 aws:amz:us-east-1:s3 --user demo-access-key:demo-secret-key"
+curl -s $S3 "$B/files?list-type=2&prefix=in%2F&delimiter=%2F"
+curl -s $S3 -T orders.csv "$B/files/in/2026/orders.csv"
+curl -s $S3 -o employees.csv "$B/files/employees.csv"
+curl -s $S3 -X DELETE "$B/files/in/2026/orders.csv"
+
+# AWS CLI (uses path-style with --endpoint-url)
+export AWS_ACCESS_KEY_ID=demo-access-key AWS_SECRET_ACCESS_KEY=demo-secret-key AWS_REGION=us-east-1
+aws --endpoint-url "$B" s3 ls s3://files/
+aws --endpoint-url "$B" s3 cp report.pdf s3://files/reports/report.pdf
+```
+
+```js
+// AWS SDK for JavaScript v3
+const { S3Client, ListObjectsV2Command } = require('@aws-sdk/client-s3');
+const s3 = new S3Client({ endpoint: process.env.B, region: 'us-east-1', forcePathStyle: true,
+  credentials: { accessKeyId: 'demo-access-key', secretAccessKey: 'demo-secret-key' } });
+console.log((await s3.send(new ListObjectsV2Command({ Bucket: 'files' }))).Contents.map((o) => o.Key));
+```
+
+Change the keys from the demo values before sharing the URL (Protocols page or `S3_API_*`). The dashboard's **Protocols** page shows the connection details, holds the settings and has a console that signs requests in the browser. The test suite exercises the API with the AWS SDK for JavaScript v3 and curl; other clients (AWS CLI, boto3, rclone, your platform's connector) have not been verified yet.
+
+---
+
 ## Inspector
 
 Send anything to any non-reserved path and it shows up live on the dashboard's **Inspector** page with:
@@ -758,7 +813,7 @@ For WebSocket APIs you expose, load an **AsyncAPI 2.x or 3.0** document (upload,
 
 ## Postman and Newman
 
-- `postman/API-Test-Tool.postman_collection.json` has 124 requests with test scripts, covering:
+- `postman/API-Test-Tool.postman_collection.json` has 141 requests with test scripts, covering:
   - health, OpenAPI and discovery;
   - OAuth: token, introspect, revoke, error cases;
   - each auth mode (with and without credentials);
@@ -771,9 +826,10 @@ For WebSocket APIs you expose, load an **AsyncAPI 2.x or 3.0** document (upload,
   - Server-Sent Events: ticks (count, Last-Event-ID resume), request/stream in both formats, and errors before the stream starts;
   - GraphQL: SDL, queries (POST and GET), Relay pagination, filters, create/update/delete mutations, NOT_FOUND and BAD_USER_INPUT field errors, a 400 with `application/graphql-response+json`, injected field errors (partial data), 405 for a mutation over GET and an injected 503;
   - OData v4: service document, `$metadata`, filters (functions, lambdas), `$expand` with nested options, `$count`, `$value`, a walk through every page via `@odata.nextLink`, create with `@odata.bind`, If-Match (412 and 204), `return=representation`, delete, and error cases;
+  - the S3-compatible API with Postman's AWS Signature auth: ListBuckets, HeadBucket, paged ListObjectsV2, put with metadata (MD5 ETag), head, get, Range, copy, delimiter listing, DeleteObjects, and NoSuchKey / NoSuchBucket / SignatureDoesNotMatch / AccessDenied / injected 503 errors (multipart uploads are covered by `npm test`);
   - headers and the inspector.
   - WebSocket channels and GraphQL subscriptions are not covered (Postman collections cannot drive WebSockets); `npm test` covers them.
-- `postman/API-Test-Tool.postman_environment.json` holds `baseUrl`, `authMode` and credentials. Set `authMode` to the server's `AUTH_MODE`; the collection-level pre-request script then authenticates every `/v1` call, SOAP request, SSE stream, GraphQL and OData request, fetching and caching an OAuth token for `jwt` and `oauth2` and signing requests for `hmac`.
+- `postman/API-Test-Tool.postman_environment.json` holds `baseUrl`, `authMode` and credentials. Set `authMode` to the server's `AUTH_MODE`; the collection-level pre-request script then authenticates every `/v1` call, SOAP request, SSE stream, GraphQL and OData request, fetching and caching an OAuth token for `jwt` and `oauth2` and signing requests for `hmac`. The S3 requests sign themselves with `s3AccessKeyId`, `s3SecretAccessKey` and `s3Region` in every mode.
 - `npm run postman` boots a fresh server for each auth mode and runs Newman against it. `npm run postman -- --mode hmac` runs one mode, and `npm run postman -- --url https://your-app.fly.dev --mode none` runs against a deployed instance.
 - `.github/workflows/newman.yml` runs `npm test` and then a Newman matrix over all seven auth modes (SQLite + local files) on every push.
 - The collection is generated by `scripts/build-postman.js`. Edit that file and run `npm run postman:build`.
@@ -876,6 +932,9 @@ npm run postman        # Newman across all auth modes
 | Data disappears after a redeploy | There's no volume. Mount `/data`, or use Postgres + S3. |
 | 401 under `jwt`/`oauth2` with a token from another environment | The issuer is the base URL. Tokens from `localhost` aren't valid on the Fly URL. Set `JWT_ISSUER` to pin it. |
 | HMAC 401 "signature mismatch" | Compare your canonical string with the one in the 401 body's `errors[0]`. Usual causes: missing query string, wrong body bytes, or the hash for a streamed upload (use `UNSIGNED-PAYLOAD`). |
+| S3 client: `SignatureDoesNotMatch` | Check the secret, and that the client uses **path-style** addressing with the tool's base URL as the endpoint. The error body includes the `CanonicalRequest` and `StringToSign` the server computed, to compare with the client's. A proxy in front of the tool must not rewrite the `Host` header. |
+| S3 client: `AuthorizationHeaderMalformed` … region | The client signs with a different region; set it to `S3_API_REGION` (shown in the error), or change the setting. |
+| S3 client: DNS errors for `files.<host>` | The client uses virtual-hosted-style addressing; turn on path-style ("force path style"). |
 | `/v1/...` returns 400 "Missing required header" | `REQUIRED_HEADERS` is set (see the Headers page). |
 | Inspector doesn't show `/v1` or `/oauth` calls | Tick **Record /v1 & /oauth** on the Inspector page (or set `INSPECTOR_LOG_ALL=true`). The dashboard, docs and `/health` are never recorded. |
 | Tester: "No usable base URL" | The spec's servers are relative or placeholders. Set a base URL override on the Target tab. |

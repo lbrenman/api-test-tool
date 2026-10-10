@@ -38,6 +38,7 @@ const wsRouter = require('./protocols/ws/router');
 const sseRouter = require('./protocols/sse/router');
 const graphqlRouter = require('./protocols/graphql/router');
 const odataRouter = require('./protocols/odata/router');
+const s3Router = require('./protocols/s3/router');
 
 const LEVELS = { debug: 10, info: 20, warn: 30, error: 40 };
 
@@ -121,7 +122,11 @@ async function createApp(opts = {}) {
   app.use(requestId());
   app.use(responseHeaders(settings));
   app.use(cors(settings));
-  app.use(logAll(ctx)); // records /v1 and /oauth traffic when INSPECTOR_LOG_ALL is on
+  app.use(s3Router.detect(ctx)); // marks S3 API requests (req.s3): /<bucket>/…, or signed with AWS SigV4
+  app.use(logAll(ctx)); // records /v1, /oauth and the other protocols' traffic when INSPECTOR_LOG_ALL is on
+  // S3-compatible API over the file pool. Mounted before everything else so a signed GET / is ListBuckets
+  // (an unsigned GET / still redirects to the dashboard); requests that are not S3 pass straight through.
+  app.use(s3Router(ctx));
 
   // Platform + OAuth (always open)
   app.use(platformRouter(ctx, { adminAuth }));
