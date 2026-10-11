@@ -15,6 +15,7 @@ Contains:
 * OpenAPI Spec for use in your client application
 * Postman collection for making calls to the server
 * Employee and Product data exposed via configurable APIs to test authentication, pagination, errors, webhooks, file access
+* [Facade API sample](#facade-api-sample): an OpenAPI 3.0.1 experience API to build *in front of* this tool, with data-mapping instructions and a mobile-friendly web app (the Facade Console) to exercise it
 
 Everything runs in one Node.js process on one port, with a vanilla-JS dashboard (no build step). It is host-agnostic: Codespaces, Docker, Fly.io, Render and Northflank are configured with environment variables.
 
@@ -25,7 +26,7 @@ Ues Cases:
 * You are trying to learn how to implement some API feature such as pagination or header introspection
 * You need an http file upload/download endpoint for a file based flow
 * You need an S3 bucket to test an S3 connector, without an AWS account
-* You need to experiment with advanced orchestration/aggregation functions such as data aggregation/join/deduplication and you need a data source
+* You need to experiment with advanced orchestration/aggregation functions such as data aggregation/join/deduplication and you need a data source (the [facade sample](#facade-api-sample) gives you a ready-made contract and mapping)
 * You are debugging an http client call and need a web catcher to see what your platform is actually sending
 
 ![image](images/codespace.png)
@@ -61,7 +62,7 @@ Ues Cases:
   - [API tester walkthrough](#api-tester-walkthrough)
     - [SOAP services (WSDL)](#soap-services-wsdl)
     - [WebSocket APIs (AsyncAPI or a scenario)](#websocket-apis-asyncapi-or-a-scenario)
-    - [Facade API sample](#facade-api-sample)
+  - [Facade API sample](#facade-api-sample)
   - [Postman and Newman](#postman-and-newman)
   - [Deployment](#deployment)
     - [Fly.io](#flyio)
@@ -135,6 +136,7 @@ Fly.io, Render and Northflank are covered in [Deployment](#deployment).
 | **Generated OpenAPI** | Two OAS 3.1 specs, regenerated from the live settings. **Mock Data API** (`/openapi.json`, `/openapi.yaml`) is for integrations: `/v1` resources, every pagination path, the file endpoints, the SSE streams and the OAuth token endpoint, reflecting the server URL, date format, auth scheme, required headers and chaos headers. **Admin API** (`/admin/api/openapi.json`, `.yaml`, password protected) is for operators and scripts: settings, seeding, files, OAuth clients, inspector, tester, `/health` and `/ready`. Swagger UI at `/docs` shows both (`/docs?spec=admin` for the admin spec). |
 | **API tester** | Upload, paste or URL load for OAS 3.0, 3.1 and Swagger 2.0 (REST), WSDL 1.1 (SOAP 1.1/1.2, with XSD validation and WS-Security) and AsyncAPI 2.x/3.0 (WebSocket, with message validation, correlation and scripted scenarios). Spec lint, per-operation "try it" with generated samples that honour `pattern`/`format`/`enum`/limits, auth profiles (none, API key, Basic, Bearer, OAuth2 client credentials), response validation, run-all contract mode with ID chaining and negative tests, run history, and JSON and HTML reports. "Mock from spec" serves a spec's examples from this tool. |
 | **Back office app** | `/app` is a business-style app over the mock data, for demos and non-technical viewers: KPIs (headcount, payroll, stock value, stock health), charts, searchable and sortable lists, record pages with related records, and forms to create, edit and delete employees, products, departments and categories. It reads and writes the same data as `/v1` but through its own backend (`/admin/api/app/*`), so the `/v1` auth mode, chaos, rate limits and required headers never break it. Uses the dashboard password. |
+| **Facade API sample** | [`facade/`](facade/): a ready-made contract for an orchestration layer your platform builds in front of this tool. Four operations (person 360° profile, idempotent new-hire onboarding, department team snapshot, storefront catalog search), each combining several `/v1` calls into one business object; an OpenAPI 3.0.1 spec with examples, `DATA_MAPPING.md` (backend calls, field mappings, aggregation rules, error mapping), and the **Facade Console**, a single-file, mobile-friendly web app with demo mode and a settings tab for credentials (API key, Bearer, Basic, OAuth2 client credentials). |
 | **Dashboard** | Overview, Settings (with source badges and resets), Data, Inspector, Files, Auth, Chaos, Headers, Protocols (SOAP services, WebSocket channels, SSE streams, GraphQL, OData and the S3 API: endpoints, settings, a SOAP try-it panel, a live WebSocket console, a live SSE viewer and query consoles), OpenAPI, API Tester, and About & Help (what each page does, quick starts, reserved paths, handy headers). Every page has a "? Help" link, and every main component has a **"?" guide** (hover, focus or tap) with numbered steps for using it in your integration or tests and copy-ready curl commands. The curls use the resolved base URL, the auth mode that is active right now (from `AUTH_MODE` or a dashboard override — the guides never change it), and any required request headers; in `jwt`/`oauth2` mode they fetch a token first, and in `hmac` mode they sign the request with `openssl`. The tester's **Try it → Request** tab adds "Copy as curl" for the exact call it sent. Responsive, with light and dark themes. |
 
 ---
@@ -851,9 +853,31 @@ For WebSocket APIs you expose, load an **AsyncAPI 2.x or 3.0** document (upload,
 
 **Load "This tool (live AsyncAPI: WebSocket channels)"** to run it all against this server's own `/ws` channels.
 
-### Facade API sample
+---
 
-[`facade/`](facade/) holds an OpenAPI 3.0.1 contract for a small experience API that an integration platform can build *in front of* this tool: a person 360° profile, an idempotent new-hire onboarding, a department team snapshot and a storefront catalog search. Each operation orchestrates several `/v1` calls and aggregates the results. [`facade/DATA_MAPPING.md`](facade/DATA_MAPPING.md) gives the backend calls, field mappings, aggregation rules and error mapping for each one. Once your facade is built, load the same spec here and **Run all** against it.
+## Facade API sample
+
+Integration platforms often put a **facade** (experience API) in front of systems of record: one call
+for the consumer, several calls behind it. [`facade/`](facade/) gives you everything to build one on
+top of this tool.
+
+| File | What it is |
+|---|---|
+| [`facade/Workforce_Catalog_Experience_API_OpenAPI_3_0_1.yaml`](facade/Workforce_Catalog_Experience_API_OpenAPI_3_0_1.yaml) | The facade contract (OpenAPI 3.0.1), with examples for every response. Import it into your API framework. |
+| [`facade/DATA_MAPPING.md`](facade/DATA_MAPPING.md) | Per operation: which `/v1` calls to make and in what order, field-by-field mappings, aggregation rules, backend→facade error mapping, and the chaos settings that test each error path. |
+| [`facade/facade-app.html`](facade/facade-app.html) | **Facade Console**: one HTML file (no build, no dependencies) that exercises every operation from a phone or desktop. A settings tab takes the facade URL and credentials (API key, Bearer, Basic, OAuth2 client credentials); demo mode answers from the spec's examples so you can show it before the facade exists. |
+| [`facade/README.md`](facade/README.md) | How to build, run and contract-test the facade. |
+
+| Facade operation | What it combines |
+|---|---|
+| `GET /people/{employeeNumber}` | Employee lookup by business key, then manager and active direct reports in parallel; salary, home address and metadata removed; tenure and certification status derived |
+| `POST /people/hires` | Department and manager resolved by business key, duplicate-email check, idempotent create, new profile returned |
+| `GET /teams/{departmentCode}/snapshot` | Every member of a department paged in and aggregated: headcount, level mix, tenure, top skills, certifications, ratings, and payroll only with the `compensation.read` scope |
+| `GET /catalog/items` | Storefront search: category, availability, price-in-currency and tag filters, business sort orders, opaque page tokens |
+
+Then use the tool around it: **Record API calls** on the Inspector page shows each facade request as its
+backend calls (one `X-Correlation-Id`), the Chaos page exercises the facade's error mapping, and loading
+the facade spec in the **API tester** and pressing **Run all** contract-tests your implementation.
 
 ---
 
