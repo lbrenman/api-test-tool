@@ -61,6 +61,7 @@ Ues Cases:
   - [API tester walkthrough](#api-tester-walkthrough)
     - [SOAP services (WSDL)](#soap-services-wsdl)
     - [WebSocket APIs (AsyncAPI or a scenario)](#websocket-apis-asyncapi-or-a-scenario)
+    - [Facade API sample](#facade-api-sample)
   - [Postman and Newman](#postman-and-newman)
   - [Deployment](#deployment)
     - [Fly.io](#flyio)
@@ -849,6 +850,10 @@ For WebSocket APIs you expose, load an **AsyncAPI 2.x or 3.0** document (upload,
 - **Negative tests:** no credentials (the upgrade should be rejected with 401; accepting and closing with 1008 is a warning), a malformed message (an error reply or close 1003/1007/1008), an oversized message (close 1009; size on the Target tab), and invalid UTF-8 in a text frame (close 1007).
 
 **Load "This tool (live AsyncAPI: WebSocket channels)"** to run it all against this server's own `/ws` channels.
+
+### Facade API sample
+
+[`facade/`](facade/) holds an OpenAPI 3.0.1 contract for a small experience API that an integration platform can build *in front of* this tool: a person 360° profile, an idempotent new-hire onboarding, a department team snapshot and a storefront catalog search. Each operation orchestrates several `/v1` calls and aggregates the results. [`facade/DATA_MAPPING.md`](facade/DATA_MAPPING.md) gives the backend calls, field mappings, aggregation rules and error mapping for each one. Once your facade is built, load the same spec here and **Run all** against it.
 
 ---
 

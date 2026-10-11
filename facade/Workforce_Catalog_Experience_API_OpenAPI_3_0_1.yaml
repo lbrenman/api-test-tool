@@ -1,0 +1,1242 @@
+openapi: 3.0.1
+info:
+  title: Workforce & Catalog Experience API
+  version: 1.0.0
+  description: |
+    A facade (experience) API that an integration platform builds in front of the API Test Tool's
+    mock systems of record. It orchestrates several calls to the tool's `/v1` REST API and returns
+    aggregated, consumer-friendly business objects.
+
+    Design choices a real facade would make, and this one does:
+
+    - **Business keys, not database ids.** People are addressed by `employeeNumber`, teams by
+      department `code`, catalog items by `sku`. Backend integer ids never leave the facade.
+    - **Data minimisation.** Profiles leave out salary, home address, geo coordinates and free-form
+      metadata. Payroll totals appear only in the team snapshot, and only for callers holding the
+      `compensation.read` scope.
+    - **Derived values.** Tenure, certification status, stock availability and team statistics are
+      computed by the facade, not stored in the backend.
+    - **One error format.** Every error is RFC 9457 `application/problem+json` with a stable
+      `errorCode`, whatever the backend returned.
+
+    See `DATA_MAPPING.md` next to this file for the backend calls, field mappings and error mapping
+    of every operation.
+  contact:
+    name: Integration Platform Team
+    email: integration-team@example.com
+  license:
+    name: MIT
+    url: https://opensource.org/licenses/MIT
+servers:
+  - url: https://api.example.com/workforce-catalog/v1
+    description: Production (placeholder; replace with your gateway URL)
+  - url: https://sandbox.api.example.com/workforce-catalog/v1
+    description: Sandbox (placeholder)
+security:
+  - OAuth2ClientCredentials: []
+  - ApiKeyAuth: []
+tags:
+  - name: People
+    description: Employee profiles and new-hire onboarding.
+  - name: Teams
+    description: Aggregated department statistics.
+  - name: Catalog
+    description: Product search for storefronts and sales tools.
+
+paths:
+  /people/{employeeNumber}:
+    get:
+      tags: [People]
+      operationId: getPersonProfile
+      summary: Get a person's 360° profile
+      description: |
+        Returns one employee with their department, manager and direct reports in a single
+        response. Orchestrates up to three backend calls (employee lookup, then manager and direct
+        reports in parallel). Sensitive fields (salary, home address, metadata) are never returned.
+      security:
+        - OAuth2ClientCredentials: [people.read]
+        - ApiKeyAuth: []
+      parameters:
+        - $ref: '#/components/parameters/EmployeeNumberPath'
+        - $ref: '#/components/parameters/CorrelationIdHeader'
+      responses:
+        '200':
+          description: The person's profile.
+          headers:
+            X-Correlation-Id:
+              $ref: '#/components/headers/CorrelationId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PersonProfile'
+              examples:
+                manager:
+                  $ref: '#/components/examples/PersonProfileExample'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '502':
+          $ref: '#/components/responses/BadGateway'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '504':
+          $ref: '#/components/responses/GatewayTimeout'
+
+  /people/hires:
+    post:
+      tags: [People]
+      operationId: createHire
+      summary: Onboard a new hire
+      description: |
+        Creates an employee record from a business-friendly hire request. The facade resolves the
+        department by code and the manager by employee number, rejects duplicate emails, creates the
+        record in the system of record and returns the new person's profile.
+
+        `Idempotency-Key` is required. Retrying with the same key and body returns the original
+        result; the same key with a different body returns 409.
+      security:
+        - OAuth2ClientCredentials: [people.write]
+        - ApiKeyAuth: []
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKeyHeader'
+        - $ref: '#/components/parameters/CorrelationIdHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/HireRequest'
+            examples:
+              engineerWithManager:
+                summary: Engineer reporting to an existing manager
+                value:
+                  givenName: Priya
+                  familyName: Raman
+                  email: priya.raman.hire@example.com
+                  jobTitle: Senior Integration Engineer
+                  level: L4
+                  departmentCode: ENG
+                  managerEmployeeNumber: EMP-000005
+                  startDate: '2026-11-02'
+                  annualSalary:
+                    amount: '128000.00'
+                    currency: USD
+                  workLocation:
+                    city: Boston
+                    region: MA
+                    postalCode: '02110'
+                    countryCode: US
+                  workPhone: '+1 617 555 0142'
+                  skills: [JavaScript, Kubernetes, SQL]
+      responses:
+        '201':
+          description: Hire recorded; the body is the new person's profile.
+          headers:
+            Location:
+              description: URL of the new person's profile (`/people/{employeeNumber}`).
+              schema:
+                type: string
+                format: uri
+            X-Correlation-Id:
+              $ref: '#/components/headers/CorrelationId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PersonProfile'
+              examples:
+                newHire:
+                  $ref: '#/components/examples/NewHireProfileExample'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '502':
+          $ref: '#/components/responses/BadGateway'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '504':
+          $ref: '#/components/responses/GatewayTimeout'
+
+  /teams/{departmentCode}/snapshot:
+    get:
+      tags: [Teams]
+      operationId: getTeamSnapshot
+      summary: Get a department's team snapshot
+      description: |
+        Aggregates every employee of a department into headcount, level mix, tenure, skills,
+        certification coverage and performance statistics. The facade pages through the backend
+        until it has every member, then computes the figures.
+
+        The `payroll` block is returned only when the caller's token carries the
+        `compensation.read` scope; otherwise it is omitted (not null).
+      security:
+        - OAuth2ClientCredentials: [teams.read]
+        - ApiKeyAuth: []
+      parameters:
+        - $ref: '#/components/parameters/DepartmentCodePath'
+        - $ref: '#/components/parameters/CorrelationIdHeader'
+      responses:
+        '200':
+          description: The team snapshot.
+          headers:
+            X-Correlation-Id:
+              $ref: '#/components/headers/CorrelationId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TeamSnapshot'
+              examples:
+                engineering:
+                  $ref: '#/components/examples/TeamSnapshotExample'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '502':
+          $ref: '#/components/responses/BadGateway'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '504':
+          $ref: '#/components/responses/GatewayTimeout'
+
+  /catalog/items:
+    get:
+      tags: [Catalog]
+      operationId: searchCatalogItems
+      summary: Search the product catalog
+      description: |
+        Storefront-style product search with category, availability and price filters, business
+        sort orders and opaque page tokens. Discontinued products are excluded unless
+        `includeDiscontinued=true`.
+
+        Price filters are only meaningful within one currency, so `minPrice` or `maxPrice`
+        requires `currency` (400 `CURRENCY_REQUIRED` otherwise).
+      security:
+        - OAuth2ClientCredentials: [catalog.read]
+        - ApiKeyAuth: []
+      parameters:
+        - name: q
+          in: query
+          description: Free-text search across product name, description, tags and SKU.
+          schema:
+            type: string
+            minLength: 2
+            maxLength: 100
+          example: steel
+        - name: category
+          in: query
+          description: Category code.
+          schema:
+            $ref: '#/components/schemas/CategoryCode'
+          example: ELEC
+        - name: availability
+          in: query
+          description: |
+            Stock availability. `IN_STOCK` = at or above the low-stock threshold, `LOW_STOCK` = above
+            zero but below it, `OUT_OF_STOCK` = none on hand.
+          schema:
+            $ref: '#/components/schemas/AvailabilityStatus'
+          example: IN_STOCK
+        - name: currency
+          in: query
+          description: Only items priced in this currency. Required with `minPrice` or `maxPrice`.
+          schema:
+            $ref: '#/components/schemas/CurrencyCode'
+          example: USD
+        - name: minPrice
+          in: query
+          description: Minimum unit price (inclusive), in `currency`.
+          schema:
+            type: number
+            minimum: 0
+          example: 10
+        - name: maxPrice
+          in: query
+          description: Maximum unit price (inclusive), in `currency`.
+          schema:
+            type: number
+            minimum: 0
+          example: 500
+        - name: tag
+          in: query
+          description: Merchandising tag.
+          schema:
+            type: string
+            enum: [new, sale, eco, bestseller, clearance, imported, handmade, premium]
+          example: bestseller
+        - name: includeDiscontinued
+          in: query
+          description: Include discontinued products.
+          schema:
+            type: boolean
+            default: false
+        - name: sort
+          in: query
+          description: |
+            Sort order. `rating_desc` returns rated products only, highest first. Ties are broken by
+            name.
+          schema:
+            type: string
+            enum: [name, price_asc, price_desc, rating_desc, newest]
+            default: name
+        - name: pageSize
+          in: query
+          description: Items per page.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+        - name: pageToken
+          in: query
+          description: Opaque token from a previous page's `nextPageToken`. Valid only with the same filters and sort.
+          schema:
+            type: string
+            maxLength: 512
+        - $ref: '#/components/parameters/CorrelationIdHeader'
+      responses:
+        '200':
+          description: A page of matching catalog items.
+          headers:
+            X-Correlation-Id:
+              $ref: '#/components/headers/CorrelationId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CatalogItemPage'
+              examples:
+                electronicsInStock:
+                  $ref: '#/components/examples/CatalogItemPageExample'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '502':
+          $ref: '#/components/responses/BadGateway'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '504':
+          $ref: '#/components/responses/GatewayTimeout'
+
+components:
+  securitySchemes:
+    OAuth2ClientCredentials:
+      type: oauth2
+      description: Machine-to-machine access. Scopes are checked per operation.
+      flows:
+        clientCredentials:
+          tokenUrl: https://identity.example.com/oauth2/token
+          scopes:
+            people.read: Read person profiles.
+            people.write: Onboard new hires.
+            teams.read: Read team snapshots.
+            compensation.read: See payroll figures in team snapshots.
+            catalog.read: Search the product catalog.
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key
+      description: Alternative for internal consumers; grants the scopes assigned to the key.
+
+  parameters:
+    EmployeeNumberPath:
+      name: employeeNumber
+      in: path
+      required: true
+      description: Enterprise employee number.
+      schema:
+        $ref: '#/components/schemas/EmployeeNumber'
+      example: EMP-000005
+    DepartmentCodePath:
+      name: departmentCode
+      in: path
+      required: true
+      description: Department code.
+      schema:
+        $ref: '#/components/schemas/DepartmentCode'
+      example: ENG
+    CorrelationIdHeader:
+      name: X-Correlation-Id
+      in: header
+      required: false
+      description: Caller-supplied trace id, passed to every backend call. Generated when omitted.
+      schema:
+        type: string
+        minLength: 8
+        maxLength: 128
+      example: 7d1f3c2e-9a4b-4c7e-8f21-5b0e6a9d3c11
+    IdempotencyKeyHeader:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: Unique key for safe retries of the hire request.
+      schema:
+        type: string
+        minLength: 8
+        maxLength: 128
+      example: hire-2026-11-02-praman-01
+
+  headers:
+    CorrelationId:
+      description: The correlation id used for this request (echoed or generated).
+      schema:
+        type: string
+    RetryAfter:
+      description: Seconds to wait before retrying.
+      schema:
+        type: integer
+        minimum: 1
+
+  schemas:
+    EmployeeNumber:
+      type: string
+      pattern: '^EMP-[0-9]{6}$'
+      example: EMP-000005
+    DepartmentCode:
+      type: string
+      pattern: '^[A-Z]{2,10}$'
+      example: ENG
+    CategoryCode:
+      type: string
+      pattern: '^[A-Z]{2,10}$'
+      example: ELEC
+    Sku:
+      type: string
+      pattern: '^SKU-[0-9]{5}$'
+      example: SKU-00042
+    CurrencyCode:
+      type: string
+      enum: [USD, EUR, GBP, JPY, CAD]
+      example: USD
+    Level:
+      type: string
+      description: Career level, L1 (entry) to L7 (executive).
+      enum: [L1, L2, L3, L4, L5, L6, L7]
+      example: L4
+    Money:
+      type: object
+      additionalProperties: false
+      required: [amount, currency]
+      properties:
+        amount:
+          type: string
+          description: Decimal amount as a string, to avoid floating-point rounding.
+          pattern: '^-?[0-9]+(\.[0-9]{1,2})?$'
+          example: '128000.00'
+        currency:
+          $ref: '#/components/schemas/CurrencyCode'
+    DepartmentRef:
+      type: object
+      additionalProperties: false
+      required: [code, name]
+      properties:
+        code:
+          $ref: '#/components/schemas/DepartmentCode'
+        name:
+          type: string
+          example: Engineering
+    PersonSummary:
+      type: object
+      additionalProperties: false
+      required: [employeeNumber, displayName, jobTitle]
+      properties:
+        employeeNumber:
+          $ref: '#/components/schemas/EmployeeNumber'
+        displayName:
+          type: string
+          example: Dana Whitfield
+        jobTitle:
+          type: string
+          example: Director of Platform Engineering
+        email:
+          type: string
+          format: email
+          example: dana.whitfield@example.com
+    ManagerSummary:
+      type: object
+      nullable: true
+      description: The person's manager, or null at the top of the hierarchy.
+      additionalProperties: false
+      required: [employeeNumber, displayName, jobTitle]
+      properties:
+        employeeNumber:
+          $ref: '#/components/schemas/EmployeeNumber'
+        displayName:
+          type: string
+        jobTitle:
+          type: string
+        email:
+          type: string
+          format: email
+    WorkLocation:
+      type: object
+      additionalProperties: false
+      required: [countryCode]
+      properties:
+        city:
+          type: string
+          maxLength: 100
+          example: Boston
+        region:
+          type: string
+          maxLength: 100
+          example: MA
+        postalCode:
+          type: string
+          maxLength: 20
+          example: '02110'
+        countryCode:
+          type: string
+          pattern: '^[A-Z]{2}$'
+          example: US
+    Certification:
+      type: object
+      additionalProperties: false
+      required: [name, issuedOn, status]
+      properties:
+        name:
+          type: string
+          example: AWS Solutions Architect
+        issuedOn:
+          type: string
+          format: date
+        expiresOn:
+          type: string
+          format: date
+          nullable: true
+        status:
+          type: string
+          description: |
+            `VALID` = expires more than 90 days from today, `EXPIRING_SOON` = within 90 days,
+            `EXPIRED` = already expired, `NO_EXPIRY` = no expiry date.
+          enum: [VALID, EXPIRING_SOON, EXPIRED, NO_EXPIRY]
+    PersonProfile:
+      type: object
+      additionalProperties: false
+      required:
+        - employeeNumber
+        - displayName
+        - givenName
+        - familyName
+        - email
+        - jobTitle
+        - level
+        - employmentStatus
+        - hireDate
+        - tenureYears
+        - department
+        - manager
+        - directReports
+        - skills
+        - certifications
+        - contact
+        - hasPhoto
+        - lastUpdatedAt
+      properties:
+        employeeNumber:
+          $ref: '#/components/schemas/EmployeeNumber'
+        displayName:
+          type: string
+          description: '`givenName familyName`.'
+          example: Dana Whitfield
+        givenName:
+          type: string
+          example: Dana
+        familyName:
+          type: string
+          example: Whitfield
+        email:
+          type: string
+          format: email
+        jobTitle:
+          type: string
+        level:
+          $ref: '#/components/schemas/Level'
+        employmentStatus:
+          type: string
+          enum: [ACTIVE, INACTIVE]
+        hireDate:
+          type: string
+          format: date
+        tenureYears:
+          type: number
+          description: Whole years plus one decimal since `hireDate`; 0 for future start dates.
+          minimum: 0
+          example: 6.4
+        department:
+          $ref: '#/components/schemas/DepartmentRef'
+        manager:
+          $ref: '#/components/schemas/ManagerSummary'
+        directReports:
+          type: object
+          additionalProperties: false
+          required: [count, items]
+          properties:
+            count:
+              type: integer
+              minimum: 0
+              description: Total active direct reports (may exceed the items returned).
+            items:
+              type: array
+              maxItems: 50
+              description: Up to 50 active direct reports, sorted by family name.
+              items:
+                $ref: '#/components/schemas/PersonSummary'
+        skills:
+          type: array
+          items:
+            type: string
+        certifications:
+          type: array
+          items:
+            $ref: '#/components/schemas/Certification'
+        contact:
+          type: object
+          additionalProperties: false
+          required: [email, workPhone]
+          properties:
+            email:
+              type: string
+              format: email
+            workPhone:
+              type: string
+              nullable: true
+              description: Work number, else mobile, else null.
+            workLocation:
+              $ref: '#/components/schemas/WorkLocation'
+        hasPhoto:
+          type: boolean
+          description: Whether a profile photo is on file.
+        lastUpdatedAt:
+          type: string
+          format: date-time
+    HireRequest:
+      type: object
+      additionalProperties: false
+      required: [givenName, familyName, email, jobTitle, level, departmentCode, startDate, annualSalary]
+      properties:
+        givenName:
+          type: string
+          minLength: 1
+          maxLength: 100
+        familyName:
+          type: string
+          minLength: 1
+          maxLength: 100
+        email:
+          type: string
+          format: email
+          maxLength: 200
+        jobTitle:
+          type: string
+          minLength: 1
+          maxLength: 120
+        level:
+          $ref: '#/components/schemas/Level'
+        departmentCode:
+          $ref: '#/components/schemas/DepartmentCode'
+        managerEmployeeNumber:
+          $ref: '#/components/schemas/EmployeeNumber'
+        startDate:
+          type: string
+          format: date
+          description: First working day. Must be no more than 30 days in the past.
+        annualSalary:
+          $ref: '#/components/schemas/Money'
+        workLocation:
+          $ref: '#/components/schemas/WorkLocation'
+        workPhone:
+          type: string
+          maxLength: 40
+        skills:
+          type: array
+          maxItems: 20
+          uniqueItems: true
+          items:
+            type: string
+            minLength: 1
+            maxLength: 60
+    TeamSnapshot:
+      type: object
+      additionalProperties: false
+      required:
+        - department
+        - asOf
+        - headcount
+        - levelMix
+        - tenure
+        - performance
+        - topSkills
+        - certifications
+      properties:
+        department:
+          $ref: '#/components/schemas/DepartmentRef'
+        asOf:
+          type: string
+          format: date-time
+          description: When the snapshot was computed.
+        headcount:
+          type: object
+          additionalProperties: false
+          required: [total, active, inactive]
+          properties:
+            total:
+              type: integer
+              minimum: 0
+            active:
+              type: integer
+              minimum: 0
+            inactive:
+              type: integer
+              minimum: 0
+        levelMix:
+          type: array
+          description: Active headcount per level, always all seven levels in order L1 to L7.
+          minItems: 7
+          maxItems: 7
+          items:
+            type: object
+            additionalProperties: false
+            required: [level, count]
+            properties:
+              level:
+                $ref: '#/components/schemas/Level'
+              count:
+                type: integer
+                minimum: 0
+        tenure:
+          type: object
+          additionalProperties: false
+          required: [averageYears, newHiresLast12Months]
+          properties:
+            averageYears:
+              type: number
+              minimum: 0
+              description: Average tenure of active employees, one decimal.
+            newHiresLast12Months:
+              type: integer
+              minimum: 0
+        performance:
+          type: object
+          additionalProperties: false
+          required: [averageRating, ratedEmployees]
+          properties:
+            averageRating:
+              type: number
+              nullable: true
+              minimum: 1
+              maximum: 5
+              description: Mean rating of rated active employees, two decimals; null when nobody is rated.
+            ratedEmployees:
+              type: integer
+              minimum: 0
+        topSkills:
+          type: array
+          description: The five most common skills among active employees, most common first.
+          maxItems: 5
+          items:
+            type: object
+            additionalProperties: false
+            required: [skill, employees]
+            properties:
+              skill:
+                type: string
+              employees:
+                type: integer
+                minimum: 1
+        certifications:
+          type: object
+          additionalProperties: false
+          required: [certifiedEmployees, expiringWithin90Days]
+          properties:
+            certifiedEmployees:
+              type: integer
+              minimum: 0
+              description: Active employees with at least one non-expired certification.
+            expiringWithin90Days:
+              type: integer
+              minimum: 0
+              description: Certifications of active employees expiring in the next 90 days.
+        payroll:
+          type: object
+          additionalProperties: false
+          description: Only present for callers with the `compensation.read` scope.
+          required: [annualTotal, averageSalary, medianSalary]
+          properties:
+            annualTotal:
+              $ref: '#/components/schemas/Money'
+            averageSalary:
+              $ref: '#/components/schemas/Money'
+            medianSalary:
+              $ref: '#/components/schemas/Money'
+    AvailabilityStatus:
+      type: string
+      enum: [IN_STOCK, LOW_STOCK, OUT_OF_STOCK]
+    CatalogItem:
+      type: object
+      additionalProperties: false
+      required:
+        - sku
+        - name
+        - summary
+        - category
+        - price
+        - availability
+        - rating
+        - tags
+        - variantOptions
+        - releaseDate
+        - discontinued
+        - lastUpdatedAt
+      properties:
+        sku:
+          $ref: '#/components/schemas/Sku'
+        name:
+          type: string
+        summary:
+          type: string
+          maxLength: 160
+          description: First sentence of the description, at most 160 characters.
+        category:
+          type: object
+          additionalProperties: false
+          required: [code, name]
+          properties:
+            code:
+              $ref: '#/components/schemas/CategoryCode'
+            name:
+              type: string
+        price:
+          $ref: '#/components/schemas/Money'
+        availability:
+          type: object
+          additionalProperties: false
+          required: [status, quantityOnHand]
+          properties:
+            status:
+              $ref: '#/components/schemas/AvailabilityStatus'
+            quantityOnHand:
+              type: integer
+              minimum: 0
+        rating:
+          type: number
+          nullable: true
+          minimum: 1
+          maximum: 5
+        tags:
+          type: array
+          items:
+            type: string
+        variantOptions:
+          type: object
+          additionalProperties: false
+          required: [sizes, colors]
+          properties:
+            sizes:
+              type: array
+              description: Distinct sizes in XS-to-XL order.
+              items:
+                type: string
+                enum: [XS, S, M, L, XL]
+            colors:
+              type: array
+              description: Distinct colours, alphabetical.
+              items:
+                type: string
+        releaseDate:
+          type: string
+          format: date
+        discontinued:
+          type: boolean
+        lastUpdatedAt:
+          type: string
+          format: date-time
+    CatalogItemPage:
+      type: object
+      additionalProperties: false
+      required: [items, totalMatches, nextPageToken]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/CatalogItem'
+        totalMatches:
+          type: integer
+          minimum: 0
+        nextPageToken:
+          type: string
+          nullable: true
+          description: Token for the next page, or null on the last page.
+    Problem:
+      type: object
+      description: RFC 9457 problem details.
+      required: [type, title, status, errorCode, correlationId]
+      properties:
+        type:
+          type: string
+          format: uri-reference
+        title:
+          type: string
+        status:
+          type: integer
+          minimum: 400
+          maximum: 599
+        detail:
+          type: string
+        instance:
+          type: string
+          format: uri-reference
+        errorCode:
+          type: string
+          description: Stable machine-readable code (see DATA_MAPPING.md for the full list).
+        correlationId:
+          type: string
+        violations:
+          type: array
+          items:
+            type: object
+            required: [field, message]
+            properties:
+              field:
+                type: string
+              message:
+                type: string
+
+  responses:
+    BadRequest:
+      description: Invalid parameters or body.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          example:
+            type: https://api.example.com/problems/invalid-request
+            title: Invalid request
+            status: 400
+            detail: minPrice and maxPrice require currency.
+            instance: /workforce-catalog/v1/catalog/items
+            errorCode: CURRENCY_REQUIRED
+            correlationId: 7d1f3c2e-9a4b-4c7e-8f21-5b0e6a9d3c11
+            violations:
+              - field: currency
+                message: Required when minPrice or maxPrice is set.
+    Unauthorized:
+      description: Missing or invalid credentials.
+      headers:
+        WWW-Authenticate:
+          description: Authentication challenge.
+          schema:
+            type: string
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          example:
+            type: https://api.example.com/problems/unauthorized
+            title: Authentication required
+            status: 401
+            errorCode: AUTHENTICATION_REQUIRED
+            correlationId: 7d1f3c2e-9a4b-4c7e-8f21-5b0e6a9d3c11
+    Forbidden:
+      description: Authenticated, but missing the required scope.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          example:
+            type: https://api.example.com/problems/forbidden
+            title: Insufficient scope
+            status: 403
+            detail: This operation requires the people.write scope.
+            errorCode: INSUFFICIENT_SCOPE
+            correlationId: 7d1f3c2e-9a4b-4c7e-8f21-5b0e6a9d3c11
+    NotFound:
+      description: No such person or team.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          example:
+            type: https://api.example.com/problems/not-found
+            title: Not found
+            status: 404
+            detail: No person with employee number EMP-999999.
+            errorCode: PERSON_NOT_FOUND
+            correlationId: 7d1f3c2e-9a4b-4c7e-8f21-5b0e6a9d3c11
+    Conflict:
+      description: Duplicate hire, or an idempotency key reused with a different body.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          example:
+            type: https://api.example.com/problems/conflict
+            title: Person already exists
+            status: 409
+            detail: An employee with this email already exists (EMP-000187).
+            errorCode: PERSON_ALREADY_EXISTS
+            correlationId: 7d1f3c2e-9a4b-4c7e-8f21-5b0e6a9d3c11
+    UnprocessableEntity:
+      description: The hire request breaks a business rule.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          example:
+            type: https://api.example.com/problems/business-rule
+            title: Business rule violation
+            status: 422
+            detail: Department code ENGX does not exist.
+            errorCode: UNKNOWN_DEPARTMENT
+            correlationId: 7d1f3c2e-9a4b-4c7e-8f21-5b0e6a9d3c11
+            violations:
+              - field: departmentCode
+                message: No department with code ENGX.
+    TooManyRequests:
+      description: The caller exceeded its rate limit.
+      headers:
+        Retry-After:
+          $ref: '#/components/headers/RetryAfter'
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          example:
+            type: https://api.example.com/problems/rate-limit
+            title: Rate limit exceeded
+            status: 429
+            errorCode: RATE_LIMIT_EXCEEDED
+            correlationId: 7d1f3c2e-9a4b-4c7e-8f21-5b0e6a9d3c11
+    BadGateway:
+      description: A backend returned an invalid or unexpected response.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          example:
+            type: https://api.example.com/problems/backend-error
+            title: Backend error
+            status: 502
+            detail: The employee system returned an unreadable response.
+            errorCode: BACKEND_INVALID_RESPONSE
+            correlationId: 7d1f3c2e-9a4b-4c7e-8f21-5b0e6a9d3c11
+    ServiceUnavailable:
+      description: A backend is unavailable or throttling the facade.
+      headers:
+        Retry-After:
+          $ref: '#/components/headers/RetryAfter'
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          example:
+            type: https://api.example.com/problems/backend-unavailable
+            title: Service temporarily unavailable
+            status: 503
+            errorCode: BACKEND_UNAVAILABLE
+            correlationId: 7d1f3c2e-9a4b-4c7e-8f21-5b0e6a9d3c11
+    GatewayTimeout:
+      description: A backend did not answer in time.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          example:
+            type: https://api.example.com/problems/backend-timeout
+            title: Backend timeout
+            status: 504
+            errorCode: BACKEND_TIMEOUT
+            correlationId: 7d1f3c2e-9a4b-4c7e-8f21-5b0e6a9d3c11
+
+  examples:
+    PersonProfileExample:
+      summary: A manager with direct reports
+      value:
+        employeeNumber: EMP-000005
+        displayName: Dana Whitfield
+        givenName: Dana
+        familyName: Whitfield
+        email: dana.whitfield@example.com
+        jobTitle: Director of Platform Engineering
+        level: L6
+        employmentStatus: ACTIVE
+        hireDate: '2019-05-20'
+        tenureYears: 7.4
+        department:
+          code: ENG
+          name: Engineering
+        manager: null
+        directReports:
+          count: 2
+          items:
+            - employeeNumber: EMP-000118
+              displayName: Luis Alvarez
+              jobTitle: Senior Integration Engineer
+              email: luis.alvarez@example.com
+            - employeeNumber: EMP-000201
+              displayName: Mei Chen
+              jobTitle: Platform Engineer
+              email: mei.chen@example.com
+        skills: [Kubernetes, Go, Terraform]
+        certifications:
+          - name: AWS Solutions Architect
+            issuedOn: '2024-03-11'
+            expiresOn: '2027-03-11'
+            status: VALID
+          - name: ITIL v4
+            issuedOn: '2021-09-02'
+            expiresOn: null
+            status: NO_EXPIRY
+        contact:
+          email: dana.whitfield@example.com
+          workPhone: '+1 617 555 0100'
+          workLocation:
+            city: Boston
+            region: MA
+            postalCode: '02110'
+            countryCode: US
+        hasPhoto: true
+        lastUpdatedAt: '2025-11-03T14:22:31Z'
+    NewHireProfileExample:
+      summary: Profile returned after a hire
+      value:
+        employeeNumber: EMP-000251
+        displayName: Priya Raman
+        givenName: Priya
+        familyName: Raman
+        email: priya.raman.hire@example.com
+        jobTitle: Senior Integration Engineer
+        level: L4
+        employmentStatus: ACTIVE
+        hireDate: '2026-11-02'
+        tenureYears: 0
+        department:
+          code: ENG
+          name: Engineering
+        manager:
+          employeeNumber: EMP-000005
+          displayName: Dana Whitfield
+          jobTitle: Director of Platform Engineering
+          email: dana.whitfield@example.com
+        directReports:
+          count: 0
+          items: []
+        skills: [JavaScript, Kubernetes, SQL]
+        certifications: []
+        contact:
+          email: priya.raman.hire@example.com
+          workPhone: '+1 617 555 0142'
+          workLocation:
+            city: Boston
+            region: MA
+            postalCode: '02110'
+            countryCode: US
+        hasPhoto: false
+        lastUpdatedAt: '2026-10-11T15:04:12Z'
+    TeamSnapshotExample:
+      summary: Engineering, called with compensation.read
+      value:
+        department:
+          code: ENG
+          name: Engineering
+        asOf: '2026-10-11T15:00:00Z'
+        headcount:
+          total: 27
+          active: 24
+          inactive: 3
+        levelMix:
+          - level: L1
+            count: 3
+          - level: L2
+            count: 4
+          - level: L3
+            count: 5
+          - level: L4
+            count: 4
+          - level: L5
+            count: 3
+          - level: L6
+            count: 3
+          - level: L7
+            count: 2
+        tenure:
+          averageYears: 5.8
+          newHiresLast12Months: 2
+        performance:
+          averageRating: 3.12
+          ratedEmployees: 21
+        topSkills:
+          - skill: Python
+            employees: 8
+          - skill: SQL
+            employees: 7
+          - skill: Kubernetes
+            employees: 6
+          - skill: Go
+            employees: 5
+          - skill: Terraform
+            employees: 5
+        certifications:
+          certifiedEmployees: 11
+          expiringWithin90Days: 2
+        payroll:
+          annualTotal:
+            amount: '3412850.40'
+            currency: USD
+          averageSalary:
+            amount: '142202.10'
+            currency: USD
+          medianSalary:
+            amount: '138910.55'
+            currency: USD
+    CatalogItemPageExample:
+      summary: In-stock electronics priced in USD
+      value:
+        items:
+          - sku: SKU-00042
+            name: Ergonomic Steel Keyboard
+            summary: Ergonomic executive keyboard with adjustable tilt and wrist support.
+            category:
+              code: ELEC
+              name: Electronics
+            price:
+              amount: '129.99'
+              currency: USD
+            availability:
+              status: IN_STOCK
+              quantityOnHand: 412
+            rating: 4.6
+            tags: [bestseller, premium]
+            variantOptions:
+              sizes: [S, M]
+              colors: [black, charcoal]
+            releaseDate: '2024-02-14'
+            discontinued: false
+            lastUpdatedAt: '2025-08-19T09:41:07Z'
+        totalMatches: 37
+        nextPageToken: eyJvIjoyMCwiaCI6IjNmYTFjOSJ9
