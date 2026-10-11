@@ -1,0 +1,1006 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#f6f7f9" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#14161a" media="(prefers-color-scheme: dark)">
+<title>Facade Console</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --surface: #ffffff; --surface-2: #f0f2f5; --border: #dfe3e8;
+    --text: #1b1f24; --muted: #5d6673; --accent: #2457d6; --accent-ink: #ffffff; --accent-soft: #e6edfc;
+    --ok: #18794e; --ok-soft: #e3f4ea; --warn: #9a5b00; --warn-soft: #fdf1dc; --bad: #c4321c; --bad-soft: #fde7e3;
+    --radius: 12px; --shadow: 0 1px 2px rgba(16,24,40,.06), 0 1px 3px rgba(16,24,40,.08);
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #14161a; --surface: #1c1f25; --surface-2: #252930; --border: #333842;
+      --text: #e8eaee; --muted: #9aa3b0; --accent: #6f97ff; --accent-ink: #0c1020; --accent-soft: #23304f;
+      --ok: #4cc38a; --ok-soft: #173428; --warn: #e9b35a; --warn-soft: #3a2d14; --bad: #ff7a66; --bad-soft: #3d1e19;
+      --shadow: none; color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #14161a; --surface: #1c1f25; --surface-2: #252930; --border: #333842;
+    --text: #e8eaee; --muted: #9aa3b0; --accent: #6f97ff; --accent-ink: #0c1020; --accent-soft: #23304f;
+    --ok: #4cc38a; --ok-soft: #173428; --warn: #e9b35a; --warn-soft: #3a2d14; --bad: #ff7a66; --bad-soft: #3d1e19;
+    --shadow: none; color-scheme: dark;
+  }
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 15px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    -webkit-tap-highlight-color: transparent;
+    padding-bottom: calc(72px + env(safe-area-inset-bottom));
+  }
+  header {
+    position: sticky; top: 0; z-index: 5; background: var(--bg);
+    padding: calc(10px + env(safe-area-inset-top)) 16px 8px; border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; gap: 10px;
+  }
+  header h1 { font-size: 17px; margin: 0; letter-spacing: -.01em; flex: 1; }
+  .conn { font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 6px; max-width: 55%; }
+  .conn span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--warn); flex: none; }
+  .dot.live { background: var(--ok); }
+  main { max-width: 860px; margin: 0 auto; padding: 16px; }
+  nav.tabs {
+    position: fixed; left: 0; right: 0; bottom: 0; z-index: 6; background: var(--surface);
+    border-top: 1px solid var(--border); display: grid; grid-template-columns: repeat(5, 1fr);
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+  nav.tabs button {
+    background: none; border: 0; color: var(--muted); font: inherit; font-size: 11px; padding: 8px 2px 9px;
+    display: flex; flex-direction: column; align-items: center; gap: 3px; cursor: pointer; min-height: 56px;
+    touch-action: manipulation; user-select: none;
+  }
+  nav.tabs button svg { width: 22px; height: 22px; }
+  nav.tabs button[aria-selected="true"] { color: var(--accent); font-weight: 600; }
+  @media (min-width: 760px) {
+    body { padding-bottom: 0; }
+    nav.tabs {
+      position: sticky; top: 49px; bottom: auto; border-top: 0; border-bottom: 1px solid var(--border);
+      background: var(--bg); display: flex; justify-content: center; gap: 4px; padding: 6px 0;
+    }
+    nav.tabs button { flex-direction: row; font-size: 14px; min-height: 0; padding: 8px 14px; border-radius: 999px; gap: 7px; }
+    nav.tabs button svg { width: 18px; height: 18px; }
+    nav.tabs button[aria-selected="true"] { background: var(--accent-soft); }
+  }
+  section.panel { display: none; }
+  section.panel.active { display: block; }
+  h2 { font-size: 20px; margin: 4px 0 4px; letter-spacing: -.01em; }
+  .sub { color: var(--muted); margin: 0 0 14px; font-size: 14px; }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow); padding: 16px; margin-bottom: 14px; }
+  .card h3 { font-size: 13px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin: 0 0 10px; font-weight: 600; }
+  label { display: block; font-size: 13px; font-weight: 600; margin: 0 0 5px; }
+  .hint { font-weight: 400; color: var(--muted); }
+  input, select, textarea {
+    width: 100%; font: inherit; font-size: 16px; color: var(--text); background: var(--surface);
+    border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; min-height: 44px;
+  }
+  textarea { min-height: 70px; font-family: var(--mono); font-size: 14px; }
+  input:focus, select:focus, textarea:focus { outline: 2px solid var(--accent); outline-offset: -1px; border-color: transparent; }
+  .field { margin-bottom: 12px; }
+  .grid { display: grid; gap: 0 12px; grid-template-columns: 1fr; }
+  .grid.tight { grid-template-columns: 1fr 1fr; }
+  @media (min-width: 640px) { .grid.tight { grid-template-columns: repeat(4, 1fr); } }
+  @media (min-width: 560px) { .grid.two { grid-template-columns: 1fr 1fr; } .grid.three { grid-template-columns: 1fr 1fr 1fr; } }
+  .row { display: flex; gap: 8px; align-items: flex-end; }
+  .row > .grow { flex: 1; min-width: 0; }
+  button.btn {
+    font: inherit; font-weight: 600; border-radius: 10px; min-height: 44px; padding: 0 16px; cursor: pointer;
+    border: 1px solid transparent; background: var(--accent); color: var(--accent-ink); touch-action: manipulation; white-space: nowrap;
+  }
+  button.btn.secondary { background: var(--surface-2); color: var(--text); border-color: var(--border); }
+  button.btn.small { min-height: 34px; padding: 0 12px; font-size: 13px; }
+  button.btn:disabled { opacity: .55; cursor: default; }
+  .check { display: flex; gap: 10px; align-items: center; font-size: 14px; margin: 4px 0 12px; }
+  .check input { width: 20px; height: 20px; min-height: 0; flex: none; }
+  .actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 4px; }
+  .hidden { display: none !important; }
+
+  .status { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center; font-size: 12px; color: var(--muted); margin: 0 0 12px; }
+  .pill { font-size: 12px; font-weight: 600; border-radius: 999px; padding: 2px 9px; background: var(--surface-2); color: var(--text); }
+  .pill.ok { background: var(--ok-soft); color: var(--ok); }
+  .pill.warn { background: var(--warn-soft); color: var(--warn); }
+  .pill.bad { background: var(--bad-soft); color: var(--bad); }
+  .mono { font-family: var(--mono); font-size: 12px; word-break: break-all; }
+  .problem { border-color: var(--bad); }
+  .problem .title { color: var(--bad); font-weight: 700; margin-bottom: 4px; }
+  .problem ul { margin: 8px 0 0; padding-left: 18px; }
+
+  .person-head { display: flex; gap: 14px; align-items: center; margin-bottom: 14px; }
+  .avatar { width: 56px; height: 56px; border-radius: 50%; background: var(--accent-soft); color: var(--accent); display: grid; place-items: center; font-weight: 700; font-size: 20px; flex: none; }
+  .person-head .name { font-size: 19px; font-weight: 700; line-height: 1.2; }
+  .person-head .title { color: var(--muted); font-size: 14px; }
+  dl.kv { display: grid; grid-template-columns: max-content 1fr; gap: 6px 14px; margin: 0; font-size: 14px; }
+  dl.kv dt { color: var(--muted); }
+  dl.kv dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .chip { font-size: 12px; background: var(--surface-2); border: 1px solid var(--border); border-radius: 999px; padding: 3px 10px; }
+  .list { list-style: none; margin: 0; padding: 0; }
+  .list li { border-top: 1px solid var(--border); }
+  .list li:first-child { border-top: 0; }
+  .link-row { display: flex; width: 100%; text-align: left; gap: 10px; align-items: center; background: none; border: 0; color: inherit; font: inherit; padding: 10px 0; cursor: pointer; min-height: 48px; }
+  .link-row .who { flex: 1; min-width: 0; }
+  .link-row .who b { display: block; font-weight: 600; }
+  .link-row .who small { color: var(--muted); }
+  .link-row .arrow { color: var(--muted); }
+  .mini-avatar { width: 34px; height: 34px; font-size: 13px; }
+
+  .tiles { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; margin-bottom: 14px; }
+  @media (min-width: 560px) { .tiles { grid-template-columns: repeat(4, 1fr); } }
+  .tile { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px 14px; box-shadow: var(--shadow); }
+  .tile .v { font-size: 24px; font-weight: 700; letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
+  .tile .l { font-size: 12px; color: var(--muted); }
+  .bars { display: grid; gap: 7px; }
+  .bar { display: grid; grid-template-columns: 34px 1fr 30px; gap: 8px; align-items: center; font-size: 13px; }
+  .bar.wide { grid-template-columns: minmax(80px, 34%) 1fr 30px; }
+  .bar .track { height: 10px; background: var(--surface-2); border-radius: 999px; overflow: hidden; }
+  .bar .fill { height: 100%; background: var(--accent); border-radius: 999px; }
+  .bar .n { text-align: right; font-variant-numeric: tabular-nums; color: var(--muted); }
+  .bar .lab { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  .items { display: grid; gap: 10px; }
+  @media (min-width: 640px) { .items { grid-template-columns: 1fr 1fr; } }
+  .item { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px; box-shadow: var(--shadow); display: flex; flex-direction: column; gap: 6px; }
+  .item .top { display: flex; justify-content: space-between; gap: 10px; align-items: flex-start; }
+  .item .nm { font-weight: 700; line-height: 1.25; }
+  .item .price { font-weight: 700; white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .item .meta { font-size: 12px; color: var(--muted); }
+  .item .desc { font-size: 13px; color: var(--muted); }
+  .filters-toggle { margin-bottom: 10px; }
+
+  details.raw { margin-top: 4px; }
+  details.raw summary { cursor: pointer; color: var(--muted); font-size: 13px; padding: 6px 0; }
+  pre { background: var(--surface-2); border: 1px solid var(--border); border-radius: 10px; padding: 12px; overflow: auto; max-height: 360px; font-family: var(--mono); font-size: 12px; margin: 6px 0 0; }
+  .empty { color: var(--muted); text-align: center; padding: 28px 10px; font-size: 14px; }
+  .spinner { width: 18px; height: 18px; border: 2px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin .7s linear infinite; display: inline-block; vertical-align: middle; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) { .spinner { animation-duration: 2s; } }
+  .toast { position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(84px + env(safe-area-inset-bottom)); background: var(--text); color: var(--bg); padding: 10px 16px; border-radius: 10px; font-size: 14px; z-index: 20; max-width: calc(100% - 32px); }
+  @media (min-width: 760px) { .toast { bottom: 24px; } }
+  .notice { font-size: 13px; background: var(--warn-soft); color: var(--warn); border-radius: 10px; padding: 10px 12px; margin-bottom: 12px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Facade Console</h1>
+  <div class="conn" id="conn" title=""><i class="dot" id="connDot"></i><span id="connText">Not configured</span></div>
+</header>
+
+<nav class="tabs" role="tablist" aria-label="Sections">
+  <button role="tab" data-tab="people" aria-selected="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 4-6 8-6s8 2 8 6"/></svg>People</button>
+  <button role="tab" data-tab="hire" aria-selected="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="10" cy="8" r="4"/><path d="M2 21c0-4 4-6 8-6 1.5 0 3 .3 4.2.8M19 14v6M16 17h6"/></svg>Hire</button>
+  <button role="tab" data-tab="team" aria-selected="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg>Teams</button>
+  <button role="tab" data-tab="catalog" aria-selected="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7l9-4 9 4-9 4-9-4z"/><path d="M3 7v10l9 4 9-4V7M12 11v10"/></svg>Catalog</button>
+  <button role="tab" data-tab="settings" aria-selected="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>Settings</button>
+</nav>
+
+<main>
+  <!-- PEOPLE -->
+  <section class="panel active" id="panel-people" role="tabpanel">
+    <h2>Person profile</h2>
+    <p class="sub"><span class="mono">GET /people/{employeeNumber}</span> — employee, manager and direct reports in one call.</p>
+    <form class="card" id="peopleForm" autocomplete="off">
+      <div class="row">
+        <div class="grow">
+          <label for="empNo">Employee number</label>
+          <input id="empNo" placeholder="EMP-000005" value="EMP-000005" pattern="EMP-[0-9]{6}" autocapitalize="characters" required>
+        </div>
+        <button class="btn" type="submit">Look up</button>
+      </div>
+    </form>
+    <div id="peopleOut"></div>
+  </section>
+
+  <!-- HIRE -->
+  <section class="panel" id="panel-hire" role="tabpanel">
+    <h2>Onboard a new hire</h2>
+    <p class="sub"><span class="mono">POST /people/hires</span> — idempotent; retries with the same key return the same result.</p>
+    <form class="card" id="hireForm" autocomplete="off">
+      <div class="grid two">
+        <div class="field"><label for="h_given">Given name</label><input id="h_given" required maxlength="100" value="Priya"></div>
+        <div class="field"><label for="h_family">Family name</label><input id="h_family" required maxlength="100" value="Raman"></div>
+      </div>
+      <div class="field"><label for="h_email">Work email</label><input id="h_email" type="email" required maxlength="200" inputmode="email" value="priya.raman.hire@example.com"></div>
+      <div class="grid two">
+        <div class="field"><label for="h_title">Job title</label><input id="h_title" required maxlength="120" value="Senior Integration Engineer"></div>
+        <div class="field"><label for="h_level">Level</label>
+          <select id="h_level"><option>L1</option><option>L2</option><option>L3</option><option selected>L4</option><option>L5</option><option>L6</option><option>L7</option></select></div>
+      </div>
+      <div class="grid two">
+        <div class="field"><label for="h_dept">Department code</label><input id="h_dept" list="deptCodes" required pattern="[A-Z]{2,10}" autocapitalize="characters" value="ENG"></div>
+        <div class="field"><label for="h_mgr">Manager <span class="hint">(optional)</span></label><input id="h_mgr" pattern="EMP-[0-9]{6}" autocapitalize="characters" placeholder="EMP-000005" value="EMP-000005"></div>
+      </div>
+      <div class="grid two">
+        <div class="field"><label for="h_start">Start date</label><input id="h_start" type="date" required></div>
+        <div class="field"><label for="h_salary">Annual salary</label>
+          <div class="row"><input class="grow" id="h_salary" inputmode="decimal" required pattern="[0-9]+(\.[0-9]{1,2})?" value="128000.00">
+            <select id="h_cur" style="width:96px"><option>USD</option><option>EUR</option><option>GBP</option><option>JPY</option><option>CAD</option></select></div></div>
+      </div>
+      <div class="grid three">
+        <div class="field"><label for="h_city">City</label><input id="h_city" value="Boston"></div>
+        <div class="field"><label for="h_region">Region</label><input id="h_region" value="MA"></div>
+        <div class="field"><label for="h_postal">Postal code</label><input id="h_postal" value="02110"></div>
+      </div>
+      <div class="grid two">
+        <div class="field"><label for="h_country">Country <span class="hint">(2 letters)</span></label><input id="h_country" maxlength="2" pattern="[A-Z]{2}" autocapitalize="characters" value="US"></div>
+        <div class="field"><label for="h_phone">Work phone</label><input id="h_phone" type="tel" value="+1 617 555 0142"></div>
+      </div>
+      <div class="field"><label for="h_skills">Skills <span class="hint">(comma separated)</span></label><input id="h_skills" value="JavaScript, Kubernetes, SQL"></div>
+      <div class="field">
+        <label for="h_key">Idempotency-Key</label>
+        <div class="row"><input class="grow mono" id="h_key" required minlength="8" maxlength="128"><button class="btn secondary small" type="button" id="newKey">New key</button></div>
+      </div>
+      <div class="actions"><button class="btn" type="submit">Submit hire</button></div>
+    </form>
+    <div id="hireOut"></div>
+  </section>
+
+  <!-- TEAM -->
+  <section class="panel" id="panel-team" role="tabpanel">
+    <h2>Team snapshot</h2>
+    <p class="sub"><span class="mono">GET /teams/{departmentCode}/snapshot</span> — headcount, levels, tenure, skills and (with the scope) payroll.</p>
+    <form class="card" id="teamForm" autocomplete="off">
+      <div class="row">
+        <div class="grow"><label for="deptCode">Department code</label>
+          <input id="deptCode" list="deptCodes" value="ENG" pattern="[A-Z]{2,10}" autocapitalize="characters" required></div>
+        <button class="btn" type="submit">Load</button>
+      </div>
+    </form>
+    <div id="teamOut"></div>
+  </section>
+
+  <!-- CATALOG -->
+  <section class="panel" id="panel-catalog" role="tabpanel">
+    <h2>Catalog search</h2>
+    <p class="sub"><span class="mono">GET /catalog/items</span> — filters, sort and page tokens.</p>
+    <form class="card" id="catForm" autocomplete="off">
+      <div class="row">
+        <div class="grow"><label for="c_q">Search</label><input id="c_q" type="search" placeholder="e.g. steel" minlength="2" maxlength="100"></div>
+        <button class="btn" type="submit">Search</button>
+      </div>
+      <button class="btn secondary small filters-toggle" type="button" id="toggleFilters" aria-expanded="false" style="margin-top:10px">More filters</button>
+      <div id="moreFilters" class="hidden">
+        <div class="grid tight">
+          <div class="field"><label for="c_cat">Category</label><input id="c_cat" list="catCodes" pattern="[A-Z]{2,10}" autocapitalize="characters" placeholder="Any"></div>
+          <div class="field"><label for="c_avail">Availability</label>
+            <select id="c_avail"><option value="">Any</option><option value="IN_STOCK">In stock</option><option value="LOW_STOCK">Low stock</option><option value="OUT_OF_STOCK">Out of stock</option></select></div>
+          <div class="field"><label for="c_min">Min price</label><input id="c_min" inputmode="decimal"></div>
+          <div class="field"><label for="c_max">Max price</label><input id="c_max" inputmode="decimal"></div>
+          <div class="field"><label for="c_cur">Currency</label>
+            <select id="c_cur"><option value="">Any</option><option>USD</option><option>EUR</option><option>GBP</option><option>JPY</option><option>CAD</option></select></div>
+          <div class="field"><label for="c_tag">Tag</label>
+            <select id="c_tag"><option value="">Any</option><option>new</option><option>sale</option><option>eco</option><option>bestseller</option><option>clearance</option><option>imported</option><option>handmade</option><option>premium</option></select></div>
+          <div class="field"><label for="c_sort">Sort</label>
+            <select id="c_sort"><option value="name">Name</option><option value="price_asc">Price ↑</option><option value="price_desc">Price ↓</option><option value="rating_desc">Top rated</option><option value="newest">Newest</option></select></div>
+          <div class="field"><label for="c_size">Page size</label><input id="c_size" type="number" min="1" max="100" value="20" inputmode="numeric"></div>
+        </div>
+        <label class="check"><input type="checkbox" id="c_disc"> Include discontinued</label>
+      </div>
+    </form>
+    <div id="catOut"></div>
+  </section>
+
+  <!-- SETTINGS -->
+  <section class="panel" id="panel-settings" role="tabpanel">
+    <h2>Settings</h2>
+    <p class="sub">Where the facade lives and how to authenticate. Calls go straight from this browser, so the facade must allow CORS from this page's origin.</p>
+    <form class="card" id="settingsForm" autocomplete="off">
+      <h3>Connection</h3>
+      <label class="check"><input type="checkbox" id="s_demo"> Demo mode — answer with the spec's sample responses, no network</label>
+      <div class="field"><label for="s_base">Facade base URL</label>
+        <input id="s_base" type="url" inputmode="url" placeholder="https://api.example.com/workforce-catalog/v1"></div>
+
+      <h3 style="margin-top:16px">Authentication</h3>
+      <div class="field"><label for="s_auth">Method</label>
+        <select id="s_auth">
+          <option value="none">None</option>
+          <option value="apikey">API key</option>
+          <option value="bearer">Bearer token (paste)</option>
+          <option value="basic">Basic</option>
+          <option value="oauth2">OAuth 2.0 client credentials</option>
+        </select></div>
+      <div data-auth="apikey">
+        <div class="grid two">
+          <div class="field"><label for="s_keyName">Header name</label><input id="s_keyName" value="X-API-Key"></div>
+          <div class="field"><label for="s_key">API key</label><input id="s_key" type="password" autocomplete="off"></div>
+        </div>
+      </div>
+      <div data-auth="bearer">
+        <div class="field"><label for="s_bearer">Access token</label><textarea id="s_bearer" spellcheck="false"></textarea></div>
+      </div>
+      <div data-auth="basic">
+        <div class="grid two">
+          <div class="field"><label for="s_user">Username</label><input id="s_user" autocapitalize="off"></div>
+          <div class="field"><label for="s_pass">Password</label><input id="s_pass" type="password" autocomplete="off"></div>
+        </div>
+      </div>
+      <div data-auth="oauth2">
+        <div class="field"><label for="s_tokenUrl">Token URL</label><input id="s_tokenUrl" type="url" inputmode="url" placeholder="https://identity.example.com/oauth2/token"></div>
+        <div class="grid two">
+          <div class="field"><label for="s_cid">Client ID</label><input id="s_cid" autocapitalize="off"></div>
+          <div class="field"><label for="s_csecret">Client secret</label><input id="s_csecret" type="password" autocomplete="off"></div>
+        </div>
+        <div class="grid two">
+          <div class="field"><label for="s_scope">Scopes <span class="hint">(space separated)</span></label>
+            <input id="s_scope" autocapitalize="off" value="people.read people.write teams.read compensation.read catalog.read"></div>
+          <div class="field"><label for="s_clientAuth">Send client credentials</label>
+            <select id="s_clientAuth"><option value="basic">Basic header</option><option value="body">In the form body</option></select></div>
+        </div>
+        <div class="actions" style="margin-bottom:12px">
+          <button class="btn secondary small" type="button" id="getToken">Get token now</button>
+          <button class="btn secondary small" type="button" id="clearToken">Forget token</button>
+        </div>
+        <div id="tokenInfo" class="status"></div>
+      </div>
+
+      <h3 style="margin-top:16px">Extra headers</h3>
+      <div class="field"><label for="s_headers">One per line, <span class="mono">Name: value</span> <span class="hint">(sent on every call)</span></label>
+        <textarea id="s_headers" spellcheck="false" placeholder="X-Tenant: acme"></textarea></div>
+
+      <h3 style="margin-top:16px">This device</h3>
+      <label class="check"><input type="checkbox" id="s_remember" checked> Remember settings in this browser</label>
+      <label class="check"><input type="checkbox" id="s_rememberSecrets"> Also remember secrets (keys, passwords, tokens)</label>
+      <div class="field"><label for="s_theme">Theme</label>
+        <select id="s_theme"><option value="">System</option><option value="light">Light</option><option value="dark">Dark</option></select></div>
+      <div class="actions">
+        <button class="btn" type="submit">Save</button>
+        <button class="btn secondary" type="button" id="testConn">Test connection</button>
+        <button class="btn secondary" type="button" id="resetSettings">Reset</button>
+      </div>
+      <div id="testOut" style="margin-top:12px"></div>
+    </form>
+  </section>
+</main>
+
+<datalist id="deptCodes">
+  <option value="ENG">Engineering</option><option value="SALES">Sales</option><option value="MKT">Marketing</option>
+  <option value="FIN">Finance</option><option value="HR">Human Resources</option><option value="OPS">Operations</option>
+  <option value="CS">Customer Success</option><option value="LEGAL">Legal</option><option value="PROD">Product</option>
+  <option value="SCM">Supply Chain</option>
+</datalist>
+<datalist id="catCodes">
+  <option value="ELEC">Electronics</option><option value="HOME">Home &amp; Kitchen</option><option value="OUT">Outdoor</option>
+  <option value="OFFICE">Office Supplies</option><option value="APP">Apparel</option><option value="TOYS">Toys &amp; Games</option>
+  <option value="HEALTH">Health</option><option value="AUTO">Automotive</option><option value="BOOKS">Books</option>
+  <option value="IND">Industrial</option><option value="GARDEN">Garden</option><option value="PANTRY">Café &amp; Pantry</option>
+</datalist>
+
+<script>
+'use strict';
+/* Facade Console — exercises the Workforce & Catalog Experience API (facade/ in api-test-tool). */
+
+// ---------- small DOM helpers (all text goes through textContent; nothing from the API is parsed as HTML) ----------
+const $ = (s, root = document) => root.querySelector(s);
+const $$ = (s, root = document) => Array.from(root.querySelectorAll(s));
+function h(tag, attrs, ...kids) {
+  const el = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs || {})) {
+    if (v === null || v === undefined || v === false) continue;
+    if (k === 'class') el.className = v;
+    else if (k.startsWith('on')) el.addEventListener(k.slice(2), v);
+    else if (k === 'style') el.style.cssText = v;
+    else el.setAttribute(k, v === true ? '' : v);
+  }
+  for (const kid of kids.flat()) if (kid !== null && kid !== undefined && kid !== false) el.append(kid instanceof Node ? kid : String(kid));
+  return el;
+}
+const uuid = () => (crypto.randomUUID ? crypto.randomUUID() : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+  const r = (Math.random() * 16) | 0; return (c === 'x' ? r : (r & 3) | 8).toString(16);
+}));
+function toast(msg) {
+  const t = h('div', { class: 'toast', role: 'status' }, msg);
+  document.body.append(t);
+  setTimeout(() => t.remove(), 2600);
+}
+const initials = (name) => (name || '?').split(/\s+/).filter(Boolean).slice(0, 2).map((p) => p[0].toUpperCase()).join('');
+const fmtDate = (d) => { if (!d) return '—'; const x = new Date(d.length === 10 ? d + 'T00:00:00Z' : d); return isNaN(x) ? d : x.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric', timeZone: 'UTC' }); };
+function fmtMoney(m) {
+  if (!m) return '—';
+  const n = Number(m.amount);
+  try { return new Intl.NumberFormat(undefined, { style: 'currency', currency: m.currency }).format(n); } catch { return `${m.amount} ${m.currency}`; }
+}
+const human = (s) => String(s || '').toLowerCase().replace(/_/g, ' ').replace(/^./, (c) => c.toUpperCase());
+
+// ---------- settings ----------
+const STORE = 'facadeConsole.settings.v1';
+const SECRET_KEYS = ['key', 'bearer', 'pass', 'csecret'];
+const DEFAULTS = {
+  demo: true, base: '', auth: 'none', keyName: 'X-API-Key', key: '', bearer: '', user: '', pass: '',
+  tokenUrl: '', cid: '', csecret: '', scope: 'people.read people.write teams.read compensation.read catalog.read',
+  clientAuth: 'basic', headers: '', remember: true, rememberSecrets: false, theme: '',
+};
+let settings = { ...DEFAULTS };
+let token = null; // { value, expiresAt, scope }
+
+function loadSettings() {
+  try {
+    const raw = localStorage.getItem(STORE);
+    if (raw) settings = { ...DEFAULTS, ...JSON.parse(raw) };
+  } catch { /* storage unavailable: keep defaults */ }
+}
+function persistSettings() {
+  try {
+    if (!settings.remember) { localStorage.removeItem(STORE); return; }
+    const out = { ...settings };
+    if (!settings.rememberSecrets) for (const k of SECRET_KEYS) out[k] = '';
+    localStorage.setItem(STORE, JSON.stringify(out));
+  } catch { /* ignore */ }
+}
+const FIELD_MAP = {
+  demo: 's_demo', base: 's_base', auth: 's_auth', keyName: 's_keyName', key: 's_key', bearer: 's_bearer', user: 's_user',
+  pass: 's_pass', tokenUrl: 's_tokenUrl', cid: 's_cid', csecret: 's_csecret', scope: 's_scope', clientAuth: 's_clientAuth',
+  headers: 's_headers', remember: 's_remember', rememberSecrets: 's_rememberSecrets', theme: 's_theme',
+};
+function settingsToForm() {
+  for (const [k, id] of Object.entries(FIELD_MAP)) {
+    const el = document.getElementById(id);
+    if (el.type === 'checkbox') el.checked = !!settings[k]; else el.value = settings[k] ?? '';
+  }
+  showAuthFields();
+}
+function formToSettings() {
+  for (const [k, id] of Object.entries(FIELD_MAP)) {
+    const el = document.getElementById(id);
+    settings[k] = el.type === 'checkbox' ? el.checked : el.value.trim();
+  }
+  settings.base = settings.base.replace(/\/+$/, '');
+  settings.tokenUrl = settings.tokenUrl.replace(/\/+$/, '');
+}
+function showAuthFields() {
+  const mode = $('#s_auth').value;
+  for (const el of $$('[data-auth]')) el.classList.toggle('hidden', el.dataset.auth !== mode);
+}
+function applyTheme() {
+  if (settings.theme) document.documentElement.dataset.theme = settings.theme;
+  else delete document.documentElement.dataset.theme;
+}
+function updateConn() {
+  const live = !settings.demo && settings.base;
+  $('#connDot').classList.toggle('live', !!live);
+  let text = 'Not configured';
+  if (settings.demo) text = 'Demo mode';
+  else if (settings.base) { try { text = new URL(settings.base).host; } catch { text = settings.base; } }
+  $('#connText').textContent = text;
+  $('#conn').title = settings.demo ? 'Using sample responses' : settings.base;
+}
+function extraHeaders() {
+  const out = {};
+  for (const line of (settings.headers || '').split('\n')) {
+    const i = line.indexOf(':');
+    if (i > 0) out[line.slice(0, i).trim()] = line.slice(i + 1).trim();
+  }
+  return out;
+}
+
+// ---------- OAuth 2.0 client credentials ----------
+async function getToken(force) {
+  if (!force && token && token.expiresAt > Date.now() + 30000) return token.value;
+  if (!settings.tokenUrl || !settings.cid) throw new UiError('OAuth settings incomplete', 'Set the token URL and client ID on the Settings tab.');
+  const body = new URLSearchParams({ grant_type: 'client_credentials' });
+  if (settings.scope) body.set('scope', settings.scope);
+  const headers = { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' };
+  if (settings.clientAuth === 'basic') {
+    headers.Authorization = 'Basic ' + btoa(unescape(encodeURIComponent(`${encodeURIComponent(settings.cid)}:${encodeURIComponent(settings.csecret)}`)));
+  } else { body.set('client_id', settings.cid); if (settings.csecret) body.set('client_secret', settings.csecret); }
+  let res;
+  try { res = await fetch(settings.tokenUrl, { method: 'POST', headers, body }); }
+  catch (e) { throw new UiError('Token request failed', `${e.message}. The token endpoint may not allow CORS from this page; paste a token under "Bearer token" instead.`); }
+  const json = await res.json().catch(() => null);
+  if (!res.ok || !json || !json.access_token) {
+    throw new UiError(`Token request returned ${res.status}`, json ? (json.error_description || json.error || JSON.stringify(json)) : 'No JSON body');
+  }
+  token = { value: json.access_token, expiresAt: Date.now() + (Number(json.expires_in) || 3600) * 1000, scope: json.scope || settings.scope };
+  showTokenInfo();
+  return token.value;
+}
+function showTokenInfo() {
+  const box = $('#tokenInfo'); box.replaceChildren();
+  if (!token) { box.append(h('span', { class: 'pill' }, 'No token yet')); return; }
+  const mins = Math.max(0, Math.round((token.expiresAt - Date.now()) / 60000));
+  box.append(h('span', { class: 'pill ok' }, 'Token cached'), h('span', null, `expires in ~${mins} min`), h('span', { class: 'mono' }, token.scope || ''));
+}
+
+// ---------- API client ----------
+class UiError extends Error { constructor(title, detail) { super(title); this.title = title; this.detail = detail; } }
+
+async function authHeaders() {
+  switch (settings.auth) {
+    case 'apikey': return settings.key ? { [settings.keyName || 'X-API-Key']: settings.key } : {};
+    case 'bearer': return settings.bearer ? { Authorization: 'Bearer ' + settings.bearer.replace(/^Bearer\s+/i, '') } : {};
+    case 'basic': return { Authorization: 'Basic ' + btoa(unescape(encodeURIComponent(`${settings.user}:${settings.pass}`))) };
+    case 'oauth2': return { Authorization: 'Bearer ' + await getToken(false) };
+    default: return {};
+  }
+}
+
+/** Calls the facade. Returns { status, ok, ms, correlationId, body, headers, url, method }. */
+async function api(method, path, { query, body, headers: extra } = {}) {
+  const correlationId = uuid();
+  const qs = new URLSearchParams();
+  for (const [k, v] of Object.entries(query || {})) if (v !== '' && v !== null && v !== undefined && v !== false) qs.set(k, String(v));
+  const url = path + (qs.toString() ? '?' + qs : '');
+  if (settings.demo) return demoCall(method, url, path, query || {}, body, correlationId);
+  if (!settings.base) throw new UiError('No facade URL', 'Enter the facade base URL on the Settings tab, or turn on demo mode.');
+  const headers = { Accept: 'application/json', 'X-Correlation-Id': correlationId, ...extraHeaders(), ...(await authHeaders()), ...(extra || {}) };
+  if (body !== undefined) headers['Content-Type'] = 'application/json';
+  const t0 = performance.now();
+  const doFetch = () => fetch(settings.base + url, { method, headers, body: body !== undefined ? JSON.stringify(body) : undefined });
+  let res;
+  try {
+    res = await doFetch();
+    if (res.status === 401 && settings.auth === 'oauth2') { // token may have been revoked: refresh once
+      headers.Authorization = 'Bearer ' + await getToken(true);
+      res = await doFetch();
+    }
+  } catch (e) {
+    throw new UiError('Network error', `${e.message}. Check the URL, that the facade is reachable over HTTPS, and that it allows CORS from ${location.origin === 'null' ? 'this file' : location.origin}.`);
+  }
+  const ms = Math.round(performance.now() - t0);
+  const text = await res.text();
+  let parsed = null;
+  try { parsed = text ? JSON.parse(text) : null; } catch { parsed = null; }
+  const hdrs = {};
+  res.headers.forEach((v, k) => { hdrs[k] = v; });
+  return { method, url, status: res.status, ok: res.ok, ms, correlationId: res.headers.get('x-correlation-id') || correlationId, body: parsed, raw: text, headers: hdrs };
+}
+
+// ---------- rendering helpers shared by panels ----------
+function statusLine(r) {
+  const cls = r.status < 300 ? 'ok' : r.status < 500 ? 'warn' : 'bad';
+  return h('div', { class: 'status' },
+    h('span', { class: 'pill ' + cls }, `${r.status}`),
+    h('span', { class: 'mono' }, `${r.method} ${r.url}`),
+    h('span', null, settings.demo ? 'demo' : `${r.ms} ms`),
+    h('span', { class: 'mono', title: 'X-Correlation-Id' }, `corr ${r.correlationId.slice(0, 8)}…`));
+}
+function rawBlock(r) {
+  const headers = Object.entries(r.headers || {}).map(([k, v]) => `${k}: ${v}`).join('\n');
+  return h('details', { class: 'raw' }, h('summary', null, 'Raw response'),
+    h('pre', null, `HTTP ${r.status}\n${headers}\n\n${r.body ? JSON.stringify(r.body, null, 2) : (r.raw || '(empty body)')}`));
+}
+function problemCard(r) {
+  const p = r.body && typeof r.body === 'object' ? r.body : {};
+  return h('div', { class: 'card problem', role: 'alert' },
+    h('div', { class: 'title' }, `${p.title || 'Request failed'} (${r.status})`),
+    p.detail ? h('div', null, p.detail) : (!r.body ? h('div', null, r.raw ? r.raw.slice(0, 300) : 'No body') : null),
+    p.errorCode ? h('div', { class: 'mono', style: 'margin-top:6px' }, p.errorCode) : null,
+    Array.isArray(p.violations) && p.violations.length ? h('ul', null, p.violations.map((v) => h('li', null, h('b', null, v.field), ': ', v.message))) : null,
+    rawBlock(r));
+}
+function errorCard(e) {
+  return h('div', { class: 'card problem', role: 'alert' }, h('div', { class: 'title' }, e.title || 'Error'), h('div', null, e.detail || e.message));
+}
+function loading(target, msg = 'Calling the facade…') {
+  target.replaceChildren(h('div', { class: 'empty' }, h('span', { class: 'spinner' }), ' ', msg));
+}
+async function run(target, fn) {
+  try { await fn(); } catch (e) { target.replaceChildren(errorCard(e)); }
+}
+
+// ---------- People ----------
+function personRow(p, onClick) {
+  return h('li', null, h('button', { class: 'link-row', type: 'button', onclick: onClick },
+    h('span', { class: 'avatar mini-avatar' }, initials(p.displayName)),
+    h('span', { class: 'who' }, h('b', null, p.displayName), h('small', null, `${p.jobTitle || '—'} · ${p.employeeNumber}`)),
+    h('span', { class: 'arrow', 'aria-hidden': 'true' }, '›')));
+}
+function renderProfile(p) {
+  const goto = (num) => () => { $('#empNo').value = num; lookupPerson(); window.scrollTo({ top: 0, behavior: 'smooth' }); };
+  const certPill = (s) => h('span', { class: 'pill ' + ({ VALID: 'ok', NO_EXPIRY: 'ok', EXPIRING_SOON: 'warn', EXPIRED: 'bad' }[s] || '') }, human(s));
+  const loc = p.contact && p.contact.workLocation;
+  return h('div', null,
+    h('div', { class: 'card' },
+      h('div', { class: 'person-head' },
+        h('div', { class: 'avatar' }, initials(p.displayName)),
+        h('div', null,
+          h('div', { class: 'name' }, p.displayName),
+          h('div', { class: 'title' }, `${p.jobTitle || '—'} · ${p.level}`),
+          h('div', { style: 'margin-top:6px' }, h('span', { class: 'pill ' + (p.employmentStatus === 'ACTIVE' ? 'ok' : 'bad') }, human(p.employmentStatus))))),
+      h('dl', { class: 'kv' },
+        h('dt', null, 'Employee #'), h('dd', { class: 'mono' }, p.employeeNumber),
+        h('dt', null, 'Department'), h('dd', null, `${p.department.name} (${p.department.code})`),
+        h('dt', null, 'Hired'), h('dd', null, `${fmtDate(p.hireDate)} · ${p.tenureYears} yrs`),
+        h('dt', null, 'Email'), h('dd', null, h('a', { href: 'mailto:' + p.contact.email }, p.contact.email)),
+        h('dt', null, 'Phone'), h('dd', null, p.contact.workPhone ? h('a', { href: 'tel:' + p.contact.workPhone.replace(/\s/g, '') }, p.contact.workPhone) : '—'),
+        h('dt', null, 'Location'), h('dd', null, loc ? [loc.city, loc.region, loc.countryCode].filter(Boolean).join(', ') : '—'),
+        h('dt', null, 'Photo'), h('dd', null, p.hasPhoto ? 'On file' : 'None'),
+        h('dt', null, 'Updated'), h('dd', null, fmtDate(p.lastUpdatedAt)))),
+    h('div', { class: 'card' }, h('h3', null, 'Manager'),
+      p.manager ? h('ul', { class: 'list' }, personRow(p.manager, goto(p.manager.employeeNumber))) : h('div', { class: 'sub', style: 'margin:0' }, 'Top of the hierarchy')),
+    h('div', { class: 'card' }, h('h3', null, `Direct reports · ${p.directReports.count}`),
+      p.directReports.items.length ? h('ul', { class: 'list' }, p.directReports.items.map((r) => personRow(r, goto(r.employeeNumber)))) : h('div', { class: 'sub', style: 'margin:0' }, 'No active direct reports'),
+      p.directReports.count > p.directReports.items.length ? h('div', { class: 'sub', style: 'margin:8px 0 0' }, `Showing ${p.directReports.items.length} of ${p.directReports.count}`) : null),
+    h('div', { class: 'card' }, h('h3', null, 'Skills'),
+      p.skills.length ? h('div', { class: 'chips' }, p.skills.map((s) => h('span', { class: 'chip' }, s))) : h('div', { class: 'sub', style: 'margin:0' }, 'None listed')),
+    h('div', { class: 'card' }, h('h3', null, 'Certifications'),
+      p.certifications.length ? h('ul', { class: 'list' }, p.certifications.map((c) => h('li', { style: 'padding:9px 0;display:flex;gap:10px;justify-content:space-between;align-items:center' },
+        h('div', null, h('b', null, c.name), h('div', { class: 'sub', style: 'margin:0;font-size:12px' }, `Issued ${fmtDate(c.issuedOn)}${c.expiresOn ? ' · expires ' + fmtDate(c.expiresOn) : ''}`)),
+        certPill(c.status)))) : h('div', { class: 'sub', style: 'margin:0' }, 'None')));
+}
+async function lookupPerson() {
+  const out = $('#peopleOut');
+  const num = $('#empNo').value.trim().toUpperCase();
+  $('#empNo').value = num;
+  if (!/^EMP-[0-9]{6}$/.test(num)) { out.replaceChildren(errorCard(new UiError('Invalid employee number', 'Use the format EMP-000123.'))); return; }
+  loading(out);
+  await run(out, async () => {
+    const r = await api('GET', `/people/${encodeURIComponent(num)}`);
+    out.replaceChildren(statusLine(r), r.ok && r.body ? renderProfile(r.body) : problemCard(r), r.ok ? rawBlock(r) : '');
+  });
+}
+
+// ---------- Hire ----------
+function hireBody() {
+  const v = (id) => $('#' + id).value.trim();
+  const body = {
+    givenName: v('h_given'), familyName: v('h_family'), email: v('h_email'), jobTitle: v('h_title'), level: v('h_level'),
+    departmentCode: v('h_dept').toUpperCase(), startDate: v('h_start'),
+    annualSalary: { amount: v('h_salary'), currency: v('h_cur') },
+  };
+  if (v('h_mgr')) body.managerEmployeeNumber = v('h_mgr').toUpperCase();
+  const loc = { city: v('h_city'), region: v('h_region'), postalCode: v('h_postal'), countryCode: v('h_country').toUpperCase() };
+  if (loc.countryCode) body.workLocation = Object.fromEntries(Object.entries(loc).filter(([, x]) => x));
+  if (v('h_phone')) body.workPhone = v('h_phone');
+  const skills = [...new Set(v('h_skills').split(',').map((s) => s.trim()).filter(Boolean))];
+  if (skills.length) body.skills = skills;
+  return body;
+}
+let lastHireBody = null;
+function newKey() { $('#h_key').value = 'hire-' + uuid(); lastHireBody = null; }
+async function submitHire(e) {
+  e.preventDefault();
+  const out = $('#hireOut');
+  const body = hireBody();
+  const sig = JSON.stringify(body);
+  // Same body as the last attempt → keep the key (a safe retry). Changed body → a new key, so it is a new request.
+  if (lastHireBody !== null && lastHireBody !== sig) $('#h_key').value = 'hire-' + uuid();
+  lastHireBody = sig;
+  const key = $('#h_key').value.trim();
+  loading(out, 'Submitting hire…');
+  await run(out, async () => {
+    const r = await api('POST', '/people/hires', { body, headers: { 'Idempotency-Key': key } });
+    if (r.ok && r.body) {
+      const num = r.body.employeeNumber;
+      out.replaceChildren(statusLine(r),
+        h('div', { class: 'card', style: 'border-color:var(--ok)' },
+          h('div', { style: 'font-weight:700;color:var(--ok);margin-bottom:4px' }, `Hired ${r.body.displayName} as ${num}`),
+          r.headers.location ? h('div', { class: 'mono' }, `Location: ${r.headers.location}`) : null,
+          h('div', { class: 'actions', style: 'margin-top:10px' },
+            h('button', { class: 'btn small', type: 'button', onclick: () => { $('#empNo').value = num; selectTab('people'); lookupPerson(); } }, 'Open profile'),
+            h('button', { class: 'btn secondary small', type: 'button', onclick: () => { newKey(); toast('New idempotency key'); } }, 'Start another hire'))),
+        rawBlock(r));
+    } else out.replaceChildren(statusLine(r), problemCard(r));
+  });
+}
+
+// ---------- Team ----------
+function bars(rows, labelKey, valueKey, wide) {
+  const max = Math.max(1, ...rows.map((r) => r[valueKey]));
+  return h('div', { class: 'bars' }, rows.map((r) => h('div', { class: 'bar' + (wide ? ' wide' : '') },
+    h('span', { class: 'lab', title: r[labelKey] }, r[labelKey]),
+    h('span', { class: 'track' }, h('span', { class: 'fill', style: `width:${(r[valueKey] / max) * 100}%;display:block` })),
+    h('span', { class: 'n' }, r[valueKey]))));
+}
+function tile(v, l) { return h('div', { class: 'tile' }, h('div', { class: 'v' }, v), h('div', { class: 'l' }, l)); }
+function renderTeam(s) {
+  return h('div', null,
+    h('div', { class: 'card', style: 'padding:12px 16px' }, h('b', null, `${s.department.name} (${s.department.code})`), h('span', { class: 'sub' }, ` · as of ${new Date(s.asOf).toLocaleString()}`)),
+    h('div', { class: 'tiles' },
+      tile(s.headcount.active, `Active of ${s.headcount.total}`),
+      tile(s.tenure.averageYears, 'Avg tenure (yrs)'),
+      tile(s.performance.averageRating ?? '—', `Avg rating (${s.performance.ratedEmployees} rated)`),
+      tile(s.tenure.newHiresLast12Months, 'Hires, last 12 mo')),
+    h('div', { class: 'card' }, h('h3', null, 'Level mix (active)'), bars(s.levelMix, 'level', 'count')),
+    h('div', { class: 'card' }, h('h3', null, 'Top skills'),
+      s.topSkills.length ? bars(s.topSkills, 'skill', 'employees', true) : h('div', { class: 'sub', style: 'margin:0' }, 'No skills recorded')),
+    h('div', { class: 'card' }, h('h3', null, 'Certifications'),
+      h('dl', { class: 'kv' },
+        h('dt', null, 'Certified employees'), h('dd', null, s.certifications.certifiedEmployees),
+        h('dt', null, 'Expiring within 90 days'), h('dd', null, s.certifications.expiringWithin90Days))),
+    s.payroll
+      ? h('div', { class: 'card' }, h('h3', null, 'Payroll'),
+        h('dl', { class: 'kv' },
+          h('dt', null, 'Annual total'), h('dd', null, fmtMoney(s.payroll.annualTotal)),
+          h('dt', null, 'Average salary'), h('dd', null, fmtMoney(s.payroll.averageSalary)),
+          h('dt', null, 'Median salary'), h('dd', null, fmtMoney(s.payroll.medianSalary))))
+      : h('div', { class: 'card sub', style: 'margin-bottom:14px' }, 'Payroll hidden — the caller lacks the compensation.read scope.'));
+}
+async function loadTeam(e) {
+  if (e) e.preventDefault();
+  const out = $('#teamOut');
+  const code = $('#deptCode').value.trim().toUpperCase();
+  $('#deptCode').value = code;
+  loading(out);
+  await run(out, async () => {
+    const r = await api('GET', `/teams/${encodeURIComponent(code)}/snapshot`);
+    out.replaceChildren(statusLine(r), r.ok && r.body ? renderTeam(r.body) : problemCard(r), r.ok ? rawBlock(r) : '');
+  });
+}
+
+// ---------- Catalog ----------
+let catState = { query: null, items: [], next: null, total: 0, last: null };
+function catalogQuery() {
+  const v = (id) => $('#' + id).value.trim();
+  return {
+    q: v('c_q'), category: v('c_cat').toUpperCase(), availability: v('c_avail'), currency: v('c_cur'),
+    minPrice: v('c_min'), maxPrice: v('c_max'), tag: v('c_tag'), sort: v('c_sort'),
+    pageSize: v('c_size') || 20, includeDiscontinued: $('#c_disc').checked ? 'true' : '',
+  };
+}
+function itemCard(it) {
+  const st = it.availability.status;
+  return h('article', { class: 'item' },
+    h('div', { class: 'top' }, h('div', { class: 'nm' }, it.name), h('div', { class: 'price' }, fmtMoney(it.price))),
+    h('div', { class: 'meta' }, `${it.sku} · ${it.category.name}${it.rating != null ? ' · ★ ' + it.rating : ''}`),
+    h('div', { class: 'desc' }, it.summary),
+    h('div', { class: 'chips' },
+      h('span', { class: 'pill ' + (st === 'IN_STOCK' ? 'ok' : st === 'LOW_STOCK' ? 'warn' : 'bad') }, `${human(st)} · ${it.availability.quantityOnHand}`),
+      it.discontinued ? h('span', { class: 'pill bad' }, 'Discontinued') : null,
+      it.tags.map((t) => h('span', { class: 'chip' }, t))),
+    (it.variantOptions.sizes.length || it.variantOptions.colors.length)
+      ? h('div', { class: 'meta' }, [it.variantOptions.sizes.join(' / '), it.variantOptions.colors.join(', ')].filter(Boolean).join(' · ')) : null);
+}
+function renderCatalog() {
+  const out = $('#catOut');
+  const r = catState.last;
+  const kids = [statusLine(r)];
+  if (!r.ok) { out.replaceChildren(...kids, problemCard(r)); return; }
+  kids.push(h('div', { class: 'sub' }, `${catState.total} match${catState.total === 1 ? '' : 'es'} · showing ${catState.items.length}`));
+  kids.push(catState.items.length ? h('div', { class: 'items' }, catState.items.map(itemCard)) : h('div', { class: 'empty' }, 'No items match these filters.'));
+  if (catState.next) kids.push(h('div', { class: 'actions', style: 'justify-content:center;margin-top:14px' }, h('button', { class: 'btn secondary', type: 'button', onclick: moreCatalog }, 'Load more')));
+  kids.push(rawBlock(r));
+  out.replaceChildren(...kids);
+}
+async function searchCatalog(e) {
+  if (e) e.preventDefault();
+  const out = $('#catOut');
+  const q = catalogQuery();
+  catState = { query: q, items: [], next: null, total: 0, last: null };
+  loading(out);
+  await run(out, async () => {
+    const r = await api('GET', '/catalog/items', { query: q });
+    catState.last = r;
+    if (r.ok && r.body) { catState.items = r.body.items; catState.next = r.body.nextPageToken; catState.total = r.body.totalMatches; }
+    renderCatalog();
+  });
+}
+async function moreCatalog() {
+  const out = $('#catOut');
+  await run(out, async () => {
+    const r = await api('GET', '/catalog/items', { query: { ...catState.query, pageToken: catState.next } });
+    catState.last = r;
+    if (r.ok && r.body) { catState.items = catState.items.concat(r.body.items); catState.next = r.body.nextPageToken; catState.total = r.body.totalMatches; }
+    renderCatalog();
+  });
+}
+
+// ---------- Demo mode: the spec's sample responses, with the facade's validation rules ----------
+const DEMO = (() => {
+  const dana = { employeeNumber: 'EMP-000005', displayName: 'Dana Whitfield', jobTitle: 'Director of Platform Engineering', email: 'dana.whitfield@example.com' };
+  const reports = [
+    { employeeNumber: 'EMP-000118', displayName: 'Luis Alvarez', jobTitle: 'Senior Integration Engineer', email: 'luis.alvarez@example.com' },
+    { employeeNumber: 'EMP-000201', displayName: 'Mei Chen', jobTitle: 'Platform Engineer', email: 'mei.chen@example.com' },
+  ];
+  const profile = (s, extra) => ({
+    employeeNumber: s.employeeNumber, displayName: s.displayName, givenName: s.displayName.split(' ')[0], familyName: s.displayName.split(' ').slice(1).join(' '),
+    email: s.email, jobTitle: s.jobTitle, level: 'L4', employmentStatus: 'ACTIVE', hireDate: '2022-03-14', tenureYears: 4.5,
+    department: { code: 'ENG', name: 'Engineering' }, manager: dana, directReports: { count: 0, items: [] },
+    skills: ['Python', 'SQL'], certifications: [], contact: { email: s.email, workPhone: null, workLocation: { city: 'Boston', region: 'MA', countryCode: 'US' } },
+    hasPhoto: false, lastUpdatedAt: '2025-11-03T14:22:31Z', ...extra,
+  });
+  const people = {
+    'EMP-000005': profile(dana, {
+      level: 'L6', hireDate: '2019-05-20', tenureYears: 7.4, manager: null, directReports: { count: 2, items: reports },
+      skills: ['Kubernetes', 'Go', 'Terraform'], hasPhoto: true,
+      certifications: [
+        { name: 'AWS Solutions Architect', issuedOn: '2024-03-11', expiresOn: '2027-03-11', status: 'VALID' },
+        { name: 'ITIL v4', issuedOn: '2021-09-02', expiresOn: null, status: 'NO_EXPIRY' },
+        { name: 'Scrum Master', issuedOn: '2024-12-01', expiresOn: '2026-12-01', status: 'EXPIRING_SOON' },
+      ],
+      contact: { email: dana.email, workPhone: '+1 617 555 0100', workLocation: { city: 'Boston', region: 'MA', postalCode: '02110', countryCode: 'US' } },
+    }),
+    'EMP-000118': profile(reports[0], { skills: ['JavaScript', 'Kubernetes'] }),
+    'EMP-000201': profile(reports[1], { level: 'L3', hireDate: '2024-01-08', tenureYears: 2.7 }),
+  };
+  const teams = {
+    ENG: {
+      department: { code: 'ENG', name: 'Engineering' }, headcount: { total: 27, active: 24, inactive: 3 },
+      levelMix: [3, 4, 5, 4, 3, 3, 2].map((count, i) => ({ level: 'L' + (i + 1), count })),
+      tenure: { averageYears: 5.8, newHiresLast12Months: 2 }, performance: { averageRating: 3.12, ratedEmployees: 21 },
+      topSkills: [['Python', 8], ['SQL', 7], ['Kubernetes', 6], ['Go', 5], ['Terraform', 5]].map(([skill, employees]) => ({ skill, employees })),
+      certifications: { certifiedEmployees: 11, expiringWithin90Days: 2 },
+      payroll: { annualTotal: { amount: '3412850.40', currency: 'USD' }, averageSalary: { amount: '142202.10', currency: 'USD' }, medianSalary: { amount: '138910.55', currency: 'USD' } },
+    },
+  };
+  const names = ['Ergonomic Steel Keyboard', 'Rustic Cotton Chair', 'Sleek Granite Lamp', 'Handcrafted Bamboo Desk', 'Smart Fresh Speaker', 'Incredible Wooden Mouse',
+    'Tasty Frozen Gloves', 'Generic Rubber Bag', 'Modern Concrete Clock', 'Elegant Metal Bottle', 'Practical Plastic Hat', 'Refined Bronze Watch',
+    'Oriental Silk Scarf', 'Licensed Marble Tray', 'Unbranded Soft Pillow', 'Awesome Steel Kettle', 'Gorgeous Glass Vase', 'Fantastic Linen Towel',
+    'Recycled Wool Socks', 'Luxurious Leather Wallet', 'Compact Aluminum Tripod', 'Portable Solar Charger', 'Café Ceramic Mug', 'Bold Titanium Pen', 'Quiet Fan'];
+  const cats = [['ELEC', 'Electronics'], ['HOME', 'Home & Kitchen'], ['OFFICE', 'Office Supplies'], ['OUT', 'Outdoor'], ['PANTRY', 'Café & Pantry']];
+  const curs = ['USD', 'USD', 'EUR', 'GBP', 'USD'];
+  const tagsets = [['bestseller', 'premium'], ['sale'], ['eco', 'new'], [], ['clearance'], ['handmade', 'eco']];
+  const items = names.map((name, i) => {
+    const qty = [412, 0, 18, 250, 7, 90][i % 6];
+    const [code, cname] = cats[i % cats.length];
+    return {
+      sku: `SKU-${String(i * 17 + 42).padStart(5, '0')}`, name,
+      summary: `${name.split(' ').slice(-1)[0]} built for everyday use — “édition spéciale” ✨`.slice(0, 160),
+      category: { code, name: cname }, price: { amount: (9.99 + i * 23.5).toFixed(2), currency: curs[i % curs.length] },
+      availability: { status: qty === 0 ? 'OUT_OF_STOCK' : qty < 25 ? 'LOW_STOCK' : 'IN_STOCK', quantityOnHand: qty },
+      rating: i % 4 === 3 ? null : Math.round((3 + ((i * 7) % 20) / 10) * 10) / 10, tags: tagsets[i % tagsets.length],
+      variantOptions: { sizes: i % 3 ? ['S', 'M', 'L'] : [], colors: i % 2 ? ['black', 'charcoal'] : ['sand'] },
+      releaseDate: `202${3 + (i % 3)}-0${1 + (i % 9)}-1${i % 9}`, discontinued: i % 11 === 10, lastUpdatedAt: '2025-08-19T09:41:07Z',
+    };
+  });
+  return { people, teams, items };
+})();
+function problem(status, title, errorCode, detail, violations) {
+  return { status, body: { type: 'https://api.example.com/problems/' + errorCode.toLowerCase().replace(/_/g, '-'), title, status, detail, errorCode, violations } };
+}
+async function demoCall(method, url, path, query, body, correlationId) {
+  await new Promise((r) => setTimeout(r, 180 + Math.random() * 220));
+  let out;
+  let m;
+  if (method === 'GET' && (m = path.match(/^\/people\/(EMP-[0-9]{6})$/))) {
+    const p = DEMO.people[m[1]];
+    out = p ? { status: 200, body: JSON.parse(JSON.stringify(strip(p))) } : problem(404, 'Not found', 'PERSON_NOT_FOUND', `No person with employee number ${m[1]}.`);
+  } else if (method === 'POST' && path === '/people/hires') {
+    out = demoHire(body);
+  } else if (method === 'GET' && (m = path.match(/^\/teams\/([A-Z]{2,10})\/snapshot$/))) {
+    const t = DEMO.teams[m[1]] || (/^(SALES|MKT|FIN|HR|OPS|CS|LEGAL|PROD|SCM)$/.test(m[1]) ? scaledTeam(m[1]) : null);
+    out = t ? { status: 200, body: { ...JSON.parse(JSON.stringify(t)), asOf: new Date().toISOString() } } : problem(404, 'Not found', 'TEAM_NOT_FOUND', `No department with code ${m[1]}.`);
+    if (t && settings.auth === 'oauth2' && !/\bcompensation\.read\b/.test(settings.scope)) delete out.body.payroll;
+  } else if (method === 'GET' && path === '/catalog/items') {
+    out = demoSearch(query);
+  } else out = problem(404, 'Not found', 'NOT_FOUND', `No route for ${method} ${path}.`);
+  const headers = { 'content-type': out.status < 300 ? 'application/json' : 'application/problem+json', 'x-correlation-id': correlationId, ...(out.headers || {}) };
+  if (out.status >= 400) Object.assign(out.body, { instance: '/workforce-catalog/v1' + path, correlationId });
+  return { method, url, status: out.status, ok: out.status < 300, ms: 0, correlationId, body: out.body, raw: JSON.stringify(out.body), headers };
+}
+const DEPT_NAMES = { SALES: 'Sales', MKT: 'Marketing', FIN: 'Finance', HR: 'Human Resources', OPS: 'Operations', CS: 'Customer Success', LEGAL: 'Legal', PROD: 'Product', SCM: 'Supply Chain' };
+function scaledTeam(code) {
+  const base = JSON.parse(JSON.stringify(DEMO.teams.ENG));
+  const k = 0.5 + (code.charCodeAt(0) % 7) / 10;
+  base.department = { code, name: DEPT_NAMES[code] };
+  base.levelMix.forEach((l) => { l.count = Math.round(l.count * k); });
+  base.headcount.active = base.levelMix.reduce((a, l) => a + l.count, 0);
+  base.headcount.total = base.headcount.active + 2; base.headcount.inactive = 2;
+  base.topSkills = base.topSkills.reverse();
+  return base;
+}
+function demoHire(b) {
+  const v = [];
+  for (const f of ['givenName', 'familyName', 'email', 'jobTitle', 'level', 'departmentCode', 'startDate']) if (!b[f]) v.push({ field: f, message: 'Required.' });
+  if (!b.annualSalary || !b.annualSalary.amount) v.push({ field: 'annualSalary.amount', message: 'Required.' });
+  if (v.length) return problem(400, 'Invalid request', 'REQUEST_VALIDATION_FAILED', 'The hire request is invalid.', v);
+  if (!/^(ENG|SALES|MKT|FIN|HR|OPS|CS|LEGAL|PROD|SCM)$/.test(b.departmentCode)) return problem(422, 'Business rule violation', 'UNKNOWN_DEPARTMENT', `Department code ${b.departmentCode} does not exist.`, [{ field: 'departmentCode', message: `No department with code ${b.departmentCode}.` }]);
+  if (b.managerEmployeeNumber && !DEMO.people[b.managerEmployeeNumber]) return problem(422, 'Business rule violation', 'UNKNOWN_MANAGER', `No employee ${b.managerEmployeeNumber}.`, [{ field: 'managerEmployeeNumber', message: 'Unknown employee number.' }]);
+  if (b.annualSalary.currency !== 'USD') return problem(422, 'Business rule violation', 'UNSUPPORTED_SALARY_CURRENCY', 'Salaries are recorded in USD.', [{ field: 'annualSalary.currency', message: 'Must be USD.' }]);
+  const existing = Object.values(DEMO.people).find((p) => p.email.toLowerCase() === b.email.toLowerCase());
+  if (existing) {
+    if (existing._key && existing._key === $('#h_key').value.trim()) return { status: 201, body: strip(existing), headers: { location: '/workforce-catalog/v1/people/' + existing.employeeNumber } };
+    return problem(409, 'Person already exists', 'PERSON_ALREADY_EXISTS', `An employee with this email already exists (${existing.employeeNumber}).`);
+  }
+  const num = 'EMP-' + String(251 + Object.keys(DEMO.people).length).padStart(6, '0');
+  const mgr = b.managerEmployeeNumber ? DEMO.people[b.managerEmployeeNumber] : null;
+  const p = {
+    employeeNumber: num, displayName: `${b.givenName} ${b.familyName}`, givenName: b.givenName, familyName: b.familyName, email: b.email.toLowerCase(),
+    jobTitle: b.jobTitle, level: b.level, employmentStatus: 'ACTIVE', hireDate: b.startDate, tenureYears: 0,
+    department: { code: b.departmentCode, name: b.departmentCode === 'ENG' ? 'Engineering' : DEPT_NAMES[b.departmentCode] },
+    manager: mgr ? { employeeNumber: mgr.employeeNumber, displayName: mgr.displayName, jobTitle: mgr.jobTitle, email: mgr.email } : null,
+    directReports: { count: 0, items: [] }, skills: b.skills || [], certifications: [],
+    contact: { email: b.email.toLowerCase(), workPhone: b.workPhone || null, ...(b.workLocation ? { workLocation: b.workLocation } : {}) },
+    hasPhoto: false, lastUpdatedAt: new Date().toISOString(),
+  };
+  DEMO.people[num] = { ...p, _key: $('#h_key').value.trim() };
+  return { status: 201, body: p, headers: { location: '/workforce-catalog/v1/people/' + num } };
+}
+function strip(p) { const c = { ...p }; delete c._key; return c; }
+function demoSearch(q) {
+  if ((q.minPrice || q.maxPrice) && !q.currency) return problem(400, 'Invalid request', 'CURRENCY_REQUIRED', 'minPrice and maxPrice require currency.', [{ field: 'currency', message: 'Required when minPrice or maxPrice is set.' }]);
+  if (q.minPrice && q.maxPrice && Number(q.minPrice) > Number(q.maxPrice)) return problem(400, 'Invalid request', 'INVALID_PRICE_RANGE', 'minPrice is greater than maxPrice.');
+  if (q.category && !/^(ELEC|HOME|OUT|OFFICE|APP|TOYS|HEALTH|AUTO|BOOKS|IND|GARDEN|PANTRY)$/.test(q.category)) return problem(400, 'Invalid request', 'UNKNOWN_CATEGORY', `No category with code ${q.category}.`, [{ field: 'category', message: 'Unknown category code.' }]);
+  let list = DEMO.items.filter((it) => {
+    if (q.q && !JSON.stringify(it).toLowerCase().includes(String(q.q).toLowerCase())) return false;
+    if (q.category && it.category.code !== q.category) return false;
+    if (q.availability && it.availability.status !== q.availability) return false;
+    if (q.currency && it.price.currency !== q.currency) return false;
+    if (q.minPrice && Number(it.price.amount) < Number(q.minPrice)) return false;
+    if (q.maxPrice && Number(it.price.amount) > Number(q.maxPrice)) return false;
+    if (q.tag && !it.tags.includes(q.tag)) return false;
+    if (q.includeDiscontinued !== 'true' && it.discontinued) return false;
+    if (q.sort === 'rating_desc' && it.rating == null) return false;
+    return true;
+  });
+  const by = {
+    name: (a, b) => a.name.localeCompare(b.name), price_asc: (a, b) => a.price.amount - b.price.amount || a.name.localeCompare(b.name),
+    price_desc: (a, b) => b.price.amount - a.price.amount || a.name.localeCompare(b.name), rating_desc: (a, b) => b.rating - a.rating || a.name.localeCompare(b.name),
+    newest: (a, b) => b.releaseDate.localeCompare(a.releaseDate) || a.name.localeCompare(b.name),
+  }[q.sort || 'name'];
+  list.sort(by);
+  const size = Math.min(100, Math.max(1, Number(q.pageSize) || 20));
+  let offset = 0;
+  if (q.pageToken) { try { offset = JSON.parse(atob(q.pageToken)).o; } catch { return problem(400, 'Invalid request', 'INVALID_PAGE_TOKEN', 'The page token is not valid.'); } }
+  const page = list.slice(offset, offset + size);
+  return { status: 200, body: { items: page, totalMatches: list.length, nextPageToken: offset + size < list.length ? btoa(JSON.stringify({ o: offset + size })) : null } };
+}
+
+// ---------- Settings actions ----------
+async function testConnection() {
+  formToSettings();
+  const out = $('#testOut');
+  loading(out, 'Calling GET /catalog/items?pageSize=1…');
+  await run(out, async () => {
+    const r = await api('GET', '/catalog/items', { query: { pageSize: 1 } });
+    out.replaceChildren(statusLine(r), r.ok
+      ? h('div', { class: 'card', style: 'border-color:var(--ok)' }, h('b', { style: 'color:var(--ok)' }, 'Connected. '), `${r.body ? r.body.totalMatches : '?'} catalog items visible.`)
+      : problemCard(r));
+  });
+}
+
+// ---------- tabs ----------
+function selectTab(name) {
+  for (const b of $$('nav.tabs button')) b.setAttribute('aria-selected', String(b.dataset.tab === name));
+  for (const p of $$('section.panel')) p.classList.toggle('active', p.id === 'panel-' + name);
+  try { sessionStorage.setItem('facadeConsole.tab', name); } catch { /* ignore */ }
+  window.scrollTo({ top: 0 });
+}
+
+// ---------- wire up ----------
+loadSettings();
+settingsToForm();
+applyTheme();
+updateConn();
+showTokenInfo();
+newKey();
+(() => { const d = new Date(Date.now() + 21 * 864e5); $('#h_start').value = d.toISOString().slice(0, 10); })();
+
+$$('nav.tabs button').forEach((b) => b.addEventListener('click', () => selectTab(b.dataset.tab)));
+$('#peopleForm').addEventListener('submit', (e) => { e.preventDefault(); lookupPerson(); });
+$('#hireForm').addEventListener('submit', submitHire);
+$('#newKey').addEventListener('click', () => { newKey(); toast('New idempotency key'); });
+$('#teamForm').addEventListener('submit', loadTeam);
+$('#catForm').addEventListener('submit', searchCatalog);
+$('#toggleFilters').addEventListener('click', (e) => {
+  const box = $('#moreFilters'); const open = box.classList.toggle('hidden') === false;
+  e.currentTarget.setAttribute('aria-expanded', String(open)); e.currentTarget.textContent = open ? 'Fewer filters' : 'More filters';
+});
+$('#s_auth').addEventListener('change', showAuthFields);
+$('#s_theme').addEventListener('change', () => { settings.theme = $('#s_theme').value; applyTheme(); });
+$('#settingsForm').addEventListener('submit', (e) => {
+  e.preventDefault();
+  const prevKey = `${settings.tokenUrl}|${settings.cid}|${settings.csecret}|${settings.scope}|${settings.clientAuth}`;
+  formToSettings();
+  if (prevKey !== `${settings.tokenUrl}|${settings.cid}|${settings.csecret}|${settings.scope}|${settings.clientAuth}`) { token = null; showTokenInfo(); }
+  persistSettings(); applyTheme(); updateConn();
+  toast(settings.remember ? 'Settings saved on this device' : 'Settings applied (not stored)');
+});
+$('#testConn').addEventListener('click', testConnection);
+$('#resetSettings').addEventListener('click', () => {
+  if (!confirm('Reset all settings and forget stored credentials?')) return;
+  settings = { ...DEFAULTS }; token = null;
+  try { localStorage.removeItem(STORE); } catch { /* ignore */ }
+  settingsToForm(); applyTheme(); updateConn(); showTokenInfo(); $('#testOut').replaceChildren(); toast('Settings reset');
+});
+$('#getToken').addEventListener('click', async () => {
+  formToSettings();
+  const box = $('#tokenInfo');
+  box.replaceChildren(h('span', { class: 'spinner' }));
+  try { await getToken(true); toast('Token received'); } catch (e) { box.replaceChildren(h('span', { class: 'pill bad' }, e.title), h('span', null, e.detail)); }
+});
+$('#clearToken').addEventListener('click', () => { token = null; showTokenInfo(); });
+
+let startTab = settings.demo || settings.base ? 'people' : 'settings';
+try { startTab = sessionStorage.getItem('facadeConsole.tab') || startTab; } catch { /* ignore */ }
+selectTab(startTab);
+if (startTab === 'people') lookupPerson();
+</script>
+</body>
+</html>

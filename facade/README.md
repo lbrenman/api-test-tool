@@ -9,6 +9,7 @@ data minimisation, idempotent writes and backend error mapping against a realist
 |---|---|
 | [`Workforce_Catalog_Experience_API_OpenAPI_3_0_1.yaml`](Workforce_Catalog_Experience_API_OpenAPI_3_0_1.yaml) | The facade contract (OpenAPI 3.0.1), with examples for every response |
 | [`DATA_MAPPING.md`](DATA_MAPPING.md) | For each operation: the backend calls, their order, field-by-field mappings, aggregation rules, error mapping and configuration |
+| [`facade-app.html`](facade-app.html) | **Facade Console**: a single-file, mobile-friendly web app that exercises all four operations (no build, no dependencies) |
 
 ## The four operations
 
@@ -47,6 +48,41 @@ the facade. Every error is RFC 9457 problem+json with a stable `errorCode`.
   `PERSON_ALREADY_EXISTS`. Change the email in **Try it**, or re-seed the tool, to create again.
 - The tester chains the new `employeeNumber` from the 201 into `GET /people/{employeeNumber}`.
 - `ENG` and `EMP-000005` exist with the default seed (`SEED_RANDOM_SEED=42`, 250 employees).
+
+## Facade Console (`facade-app.html`)
+
+One HTML file with its CSS and JavaScript inline. Open it straight from disk, or host it anywhere static
+(a web server, a bucket, your API gateway's portal). It works on a phone: bottom tab bar, large touch
+targets, no horizontal scrolling, light and dark themes.
+
+| Tab | What it does |
+|---|---|
+| **People** | Look up a profile; tap the manager or a direct report to open theirs |
+| **Hire** | Submit a hire. The `Idempotency-Key` is kept when you resubmit the same form (a safe retry) and replaced when you change it; on success, open the new profile |
+| **Teams** | Department snapshot with tiles and bar charts; payroll shows only when the facade returns it |
+| **Catalog** | Search with every filter and sort, and **Load more** through `nextPageToken` |
+| **Settings** | Facade base URL, authentication, extra headers, theme, and **Test connection** |
+
+Every call shows the HTTP status, method and path, duration and `X-Correlation-Id`, plus the raw
+response. Errors render the problem+json `title`, `detail`, `errorCode` and `violations`.
+
+**Authentication** (Settings tab): none, API key (header name configurable), Bearer token (paste),
+Basic, or OAuth 2.0 client credentials (token URL, client id/secret, scopes, client auth via Basic header
+or form body). OAuth tokens are cached until they expire and refreshed once on a 401.
+
+**Demo mode** is on until you turn it off: the app answers from the spec's examples, including the
+facade's validation and business-rule errors (try `EMP-999999`, a price filter without a currency, or
+submitting the same hire twice with a new key). Use it to show the UI before the facade exists.
+
+**Storage:** settings are kept in this browser's `localStorage` only when "Remember settings" is ticked;
+secrets (keys, passwords, tokens, client secret) only when "Also remember secrets" is ticked too.
+**Reset** clears everything.
+
+**CORS:** the browser calls the facade (and the OAuth token URL) directly, so both must allow CORS from
+the page's origin and allow the `Authorization`, `X-API-Key`, `Idempotency-Key`, `X-Correlation-Id` and
+`Content-Type` request headers. Expose `Location` and `X-Correlation-Id` so the app can show them. A
+page opened from disk has the origin `null`. If the token endpoint has no CORS, get a token elsewhere
+and paste it under **Bearer token**.
 
 ## Same facade, other backend protocols
 
