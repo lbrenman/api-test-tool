@@ -3,87 +3,138 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="theme-color" content="#f6f7f9" media="(prefers-color-scheme: light)">
-<meta name="theme-color" content="#14161a" media="(prefers-color-scheme: dark)">
-<title>Facade Console</title>
+<meta name="theme-color" content="#0f3b34" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0a2621" media="(prefers-color-scheme: dark)">
+<title>Acme Front Office — Experience console</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500..800&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
+  /* Acme Front Office — "front desk" theme: evergreen chrome, cool paper, one lanyard-yellow accent.
+     Department colours are data: the same hue marks a department everywhere it appears. */
   :root {
-    --bg: #f6f7f9; --surface: #ffffff; --surface-2: #f0f2f5; --border: #dfe3e8;
-    --text: #1b1f24; --muted: #5d6673; --accent: #2457d6; --accent-ink: #ffffff; --accent-soft: #e6edfc;
-    --ok: #18794e; --ok-soft: #e3f4ea; --warn: #9a5b00; --warn-soft: #fdf1dc; --bad: #c4321c; --bad-soft: #fde7e3;
-    --radius: 12px; --shadow: 0 1px 2px rgba(16,24,40,.06), 0 1px 3px rgba(16,24,40,.08);
+    --chrome: #0f3b34; --chrome-ink: #e8f1ed; --chrome-muted: #9fc1b6;
+    --paper: #edf2ef; --surface: #ffffff; --surface-2: #f4f7f5; --line: #d3ddd8; --line-strong: #b8c7c0;
+    --ink: #14201d; --muted: #566661; --accent: #f5c84c; --accent-ink: #2b2208;
+    --primary: #0f3b34; --primary-ink: #ffffff; --focus: #2a7d6c;
+    --ok: #237a52; --ok-soft: #e1f2e9; --warn: #8f5d00; --warn-soft: #fbf0d4; --bad: #b53a24; --bad-soft: #fbe6e1;
+    --r-lg: 18px; --r-md: 12px; --r-sm: 8px;
+    --display: "Bricolage Grotesque", "Avenir Next", "Segoe UI", system-ui, sans-serif;
+    --body: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
     --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
     color-scheme: light;
   }
   @media (prefers-color-scheme: dark) {
     :root:not([data-theme="light"]) {
-      --bg: #14161a; --surface: #1c1f25; --surface-2: #252930; --border: #333842;
-      --text: #e8eaee; --muted: #9aa3b0; --accent: #6f97ff; --accent-ink: #0c1020; --accent-soft: #23304f;
-      --ok: #4cc38a; --ok-soft: #173428; --warn: #e9b35a; --warn-soft: #3a2d14; --bad: #ff7a66; --bad-soft: #3d1e19;
-      --shadow: none; color-scheme: dark;
+      --chrome: #0a2621; --chrome-ink: #e2eee9; --chrome-muted: #8bb0a4;
+      --paper: #0e1916; --surface: #15231f; --surface-2: #1b2c27; --line: #29403a; --line-strong: #37534b;
+      --ink: #e4ece8; --muted: #9db2ab; --primary: #f5c84c; --primary-ink: #2b2208; --focus: #f5c84c;
+      --ok: #5fcf97; --ok-soft: #173528; --warn: #f0bd5a; --warn-soft: #3a2d12; --bad: #ff8a73; --bad-soft: #3f1d16;
+      color-scheme: dark;
     }
   }
   :root[data-theme="dark"] {
-    --bg: #14161a; --surface: #1c1f25; --surface-2: #252930; --border: #333842;
-    --text: #e8eaee; --muted: #9aa3b0; --accent: #6f97ff; --accent-ink: #0c1020; --accent-soft: #23304f;
-    --ok: #4cc38a; --ok-soft: #173428; --warn: #e9b35a; --warn-soft: #3a2d14; --bad: #ff7a66; --bad-soft: #3d1e19;
-    --shadow: none; color-scheme: dark;
+    --chrome: #0a2621; --chrome-ink: #e2eee9; --chrome-muted: #8bb0a4;
+    --paper: #0e1916; --surface: #15231f; --surface-2: #1b2c27; --line: #29403a; --line-strong: #37534b;
+    --ink: #e4ece8; --muted: #9db2ab; --primary: #f5c84c; --primary-ink: #2b2208; --focus: #f5c84c;
+    --ok: #5fcf97; --ok-soft: #173528; --warn: #f0bd5a; --warn-soft: #3a2d12; --bad: #ff8a73; --bad-soft: #3f1d16;
+    color-scheme: dark;
   }
   * { box-sizing: border-box; }
   html { -webkit-text-size-adjust: 100%; }
   body {
-    margin: 0; background: var(--bg); color: var(--text);
-    font: 15px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-    -webkit-tap-highlight-color: transparent;
-    padding-bottom: calc(72px + env(safe-area-inset-bottom));
+    margin: 0; background: var(--paper); color: var(--ink);
+    font: 15px/1.5 var(--body); -webkit-tap-highlight-color: transparent;
+    padding-bottom: calc(76px + env(safe-area-inset-bottom));
   }
+  a { color: inherit; text-decoration-color: var(--line-strong); text-underline-offset: 3px; }
+  :focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; border-radius: 6px; }
+
+  /* ---- chrome ---- */
   header {
-    position: sticky; top: 0; z-index: 5; background: var(--bg);
-    padding: calc(10px + env(safe-area-inset-top)) 16px 8px; border-bottom: 1px solid var(--border);
-    display: flex; align-items: center; gap: 10px;
+    position: sticky; top: 0; z-index: 5; background: var(--chrome); color: var(--chrome-ink);
+    padding: calc(12px + env(safe-area-inset-top)) 18px 12px; display: flex; align-items: center; gap: 12px;
   }
-  header h1 { font-size: 17px; margin: 0; letter-spacing: -.01em; flex: 1; }
-  .conn { font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 6px; max-width: 55%; }
+  .brand { display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0; color: inherit; text-decoration: none; border-radius: 12px; }
+  .brand:hover .brand-mark { transform: rotate(-6deg); }
+  .brand-mark { transition: transform .2s ease; }
+  .brand-mark { width: 30px; height: 30px; border-radius: 9px; background: var(--accent); display: grid; place-items: center; flex: none; }
+  .brand-mark svg { width: 18px; height: 18px; }
+  .brand h1 { font: 700 19px/1 var(--display); letter-spacing: -.02em; margin: 0; white-space: nowrap; }
+  .brand small { display: block; font-size: 12px; color: var(--chrome-muted); margin-top: 3px; white-space: nowrap; }
+  .conn { font: 500 12px var(--body); color: var(--chrome-ink); cursor: pointer; display: flex; align-items: center; gap: 7px; max-width: 40%; min-height: 32px;
+    background: rgba(255,255,255,.08); border: 1px solid rgba(255,255,255,.14); padding: 5px 10px; border-radius: 999px; }
   .conn span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--warn); flex: none; }
-  .dot.live { background: var(--ok); }
-  main { max-width: 860px; margin: 0 auto; padding: 16px; }
+  .help-btn { flex: none; width: 34px; height: 34px; border-radius: 50%; border: 1px solid rgba(255,255,255,.22); background: rgba(255,255,255,.08);
+    color: var(--chrome-ink); font: 700 17px/1 var(--display); cursor: pointer; }
+  .help-btn:hover { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+  @media (max-width: 400px) { .brand small { display: none; } .brand h1 { font-size: 17px; } header { gap: 8px; padding-left: 14px; padding-right: 14px; } }
+
+  /* ---- help sheet ---- */
+  dialog.help { border: 0; padding: 0; margin: auto auto 0; width: 100%; max-width: 640px; max-height: 88vh; border-radius: 22px 22px 0 0;
+    background: var(--surface); color: var(--ink); overflow: hidden; display: none; flex-direction: column; }
+  dialog.help[open] { display: flex; }
+  @media (min-width: 760px) { dialog.help { margin: auto; border-radius: 22px; } }
+  dialog.help::backdrop { background: rgba(6, 22, 19, .55); }
+  .help-head { background: var(--chrome); color: var(--chrome-ink); padding: 18px 20px 16px; display: flex; gap: 12px; align-items: flex-start; }
+  .help-head h2 { font-size: 24px; margin: 0; color: var(--chrome-ink); }
+  .help-head p { margin: 4px 0 0; color: var(--chrome-muted); font-size: 14px; }
+  .help-head .x { margin-left: auto; flex: none; width: 34px; height: 34px; border-radius: 50%; border: 0; background: rgba(255,255,255,.12); color: var(--chrome-ink); font-size: 20px; cursor: pointer; }
+  .help-body { padding: 6px 20px calc(20px + env(safe-area-inset-bottom)); overflow-y: auto; }
+  .help-body h3 { font: 700 17px var(--display); margin: 18px 0 6px; }
+  .help-body p, .help-body li { font-size: 14.5px; line-height: 1.55; }
+  .help-body p { margin: 0 0 10px; }
+  .help-body ul { margin: 0 0 10px; padding-left: 18px; }
+  .help-body li { margin-bottom: 6px; }
+  .flow { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin: 8px 0 14px; font-size: 13px; }
+  .flow span { background: var(--surface-2); border: 1px solid var(--line); border-radius: 10px; padding: 7px 10px; font-weight: 600; }
+  .flow span.me { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+  .flow i { font-style: normal; color: var(--muted); }
+  .repo-link { display: flex; align-items: center; gap: 12px; padding: 12px 14px; border: 1px solid var(--line); border-radius: var(--r-md); text-decoration: none; margin: 6px 0 8px; }
+  .repo-link:hover { border-color: var(--ink); }
+  .repo-link svg { width: 26px; height: 26px; flex: none; }
+  .repo-link b { display: block; font-weight: 600; }
+  .repo-link small { color: var(--muted); font-size: 12.5px; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); flex: none; }
+  .dot.live { background: #5fcf97; box-shadow: 0 0 0 3px rgba(95,207,151,.25); }
+
   nav.tabs {
-    position: fixed; left: 0; right: 0; bottom: 0; z-index: 6; background: var(--surface);
-    border-top: 1px solid var(--border); display: grid; grid-template-columns: repeat(5, 1fr);
-    padding-bottom: env(safe-area-inset-bottom);
+    position: fixed; left: 0; right: 0; bottom: 0; z-index: 6; background: var(--chrome);
+    display: grid; grid-template-columns: repeat(6, 1fr); padding: 6px 4px calc(6px + env(safe-area-inset-bottom)); gap: 2px;
   }
   nav.tabs button {
-    background: none; border: 0; color: var(--muted); font: inherit; font-size: 11px; padding: 8px 2px 9px;
-    display: flex; flex-direction: column; align-items: center; gap: 3px; cursor: pointer; min-height: 56px;
-    touch-action: manipulation; user-select: none;
+    background: none; border: 0; color: var(--chrome-muted); font: 500 11px/1 var(--body); padding: 7px 2px 8px;
+    display: flex; flex-direction: column; align-items: center; gap: 5px; cursor: pointer; min-height: 56px;
+    touch-action: manipulation; user-select: none; border-radius: 14px;
   }
   nav.tabs button svg { width: 22px; height: 22px; }
-  nav.tabs button[aria-selected="true"] { color: var(--accent); font-weight: 600; }
+  nav.tabs button[aria-selected="true"] { color: var(--accent-ink); background: var(--accent); font-weight: 700; }
   @media (min-width: 760px) {
     body { padding-bottom: 0; }
-    nav.tabs {
-      position: sticky; top: 49px; bottom: auto; border-top: 0; border-bottom: 1px solid var(--border);
-      background: var(--bg); display: flex; justify-content: center; gap: 4px; padding: 6px 0;
-    }
-    nav.tabs button { flex-direction: row; font-size: 14px; min-height: 0; padding: 8px 14px; border-radius: 999px; gap: 7px; }
+    nav.tabs { position: sticky; top: 58px; bottom: auto; display: flex; justify-content: center; gap: 6px; padding: 0 0 12px; }
+    nav.tabs button { flex-direction: row; font-size: 14px; min-height: 0; padding: 9px 16px; gap: 8px; }
     nav.tabs button svg { width: 18px; height: 18px; }
-    nav.tabs button[aria-selected="true"] { background: var(--accent-soft); }
   }
+
+  main { max-width: 880px; margin: 0 auto; padding: 22px 16px 28px; overflow-x: clip; }
   section.panel { display: none; }
   section.panel.active { display: block; }
-  h2 { font-size: 20px; margin: 4px 0 4px; letter-spacing: -.01em; }
-  .sub { color: var(--muted); margin: 0 0 14px; font-size: 14px; }
-  .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow); padding: 16px; margin-bottom: 14px; }
-  .card h3 { font-size: 13px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin: 0 0 10px; font-weight: 600; }
-  label { display: block; font-size: 13px; font-weight: 600; margin: 0 0 5px; }
+  h2 { font: 700 30px/1.1 var(--display); letter-spacing: -.03em; margin: 0 0 6px; }
+  .sub { color: var(--muted); margin: 0 0 16px; font-size: 14px; }
+  .sub .mono { color: var(--ink); }
+  .card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-lg); padding: 16px; margin-bottom: 14px; }
+  .card h3 { font: 650 16px/1.3 var(--display); letter-spacing: -.01em; margin: 0 0 10px; display: flex; justify-content: space-between; gap: 10px; align-items: baseline; }
+  .card h3 .count { font: 500 13px var(--body); color: var(--muted); }
+
+  /* ---- forms ---- */
+  label { display: block; font-size: 13px; font-weight: 600; margin: 0 0 6px; }
   .hint { font-weight: 400; color: var(--muted); }
   input, select, textarea {
-    width: 100%; font: inherit; font-size: 16px; color: var(--text); background: var(--surface);
-    border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; min-height: 44px;
+    width: 100%; font: inherit; font-size: 16px; color: var(--ink); background: var(--surface-2);
+    border: 1px solid var(--line); border-radius: var(--r-md); padding: 10px 12px; min-height: 46px;
   }
-  textarea { min-height: 70px; font-family: var(--mono); font-size: 14px; }
-  input:focus, select:focus, textarea:focus { outline: 2px solid var(--accent); outline-offset: -1px; border-color: transparent; }
+  textarea { min-height: 72px; font-family: var(--mono); font-size: 14px; }
+  input:focus, select:focus, textarea:focus { outline: 2px solid var(--focus); outline-offset: -1px; border-color: transparent; background: var(--surface); }
   .field { margin-bottom: 12px; }
   .grid { display: grid; gap: 0 12px; grid-template-columns: 1fr; }
   .grid.tight { grid-template-columns: 1fr 1fr; }
@@ -92,85 +143,170 @@
   .row { display: flex; gap: 8px; align-items: flex-end; }
   .row > .grow { flex: 1; min-width: 0; }
   button.btn {
-    font: inherit; font-weight: 600; border-radius: 10px; min-height: 44px; padding: 0 16px; cursor: pointer;
-    border: 1px solid transparent; background: var(--accent); color: var(--accent-ink); touch-action: manipulation; white-space: nowrap;
+    font: 650 15px/1 var(--body); border-radius: var(--r-md); min-height: 46px; padding: 0 18px; cursor: pointer;
+    border: 1px solid transparent; background: var(--primary); color: var(--primary-ink); touch-action: manipulation; white-space: nowrap;
   }
-  button.btn.secondary { background: var(--surface-2); color: var(--text); border-color: var(--border); }
-  button.btn.small { min-height: 34px; padding: 0 12px; font-size: 13px; }
+  button.btn:active { transform: translateY(1px); }
+  button.btn.secondary { background: var(--surface); color: var(--ink); border-color: var(--line-strong); }
+  button.btn.small { min-height: 36px; padding: 0 14px; font-size: 13px; }
   button.btn:disabled { opacity: .55; cursor: default; }
-  .check { display: flex; gap: 10px; align-items: center; font-size: 14px; margin: 4px 0 12px; }
-  .check input { width: 20px; height: 20px; min-height: 0; flex: none; }
+  .check { display: flex; gap: 10px; align-items: center; font-size: 14px; margin: 4px 0 12px; font-weight: 400; }
+  .check input { width: 20px; height: 20px; min-height: 0; flex: none; accent-color: var(--primary); }
   .actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 4px; }
   .hidden { display: none !important; }
+  .back { background: none; border: 0; padding: 6px 0; font: 600 14px var(--body); color: var(--muted); cursor: pointer; display: inline-flex; gap: 6px; align-items: center; margin-bottom: 8px; }
+  .back:hover { color: var(--ink); }
 
-  .status { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center; font-size: 12px; color: var(--muted); margin: 0 0 12px; }
-  .pill { font-size: 12px; font-weight: 600; border-radius: 999px; padding: 2px 9px; background: var(--surface-2); color: var(--text); }
+  /* ---- request strip: what was called, how it went ---- */
+  .status { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; font-size: 12px; color: var(--muted);
+    margin: 0 0 14px; padding: 8px 10px; border-radius: var(--r-md); background: var(--surface-2); border: 1px dashed var(--line-strong); }
+  .status .call { font-family: var(--mono); color: var(--ink); overflow-wrap: anywhere; flex: 1 1 200px; }
+  .status .call b { font-weight: 700; margin-right: 6px; }
+  .status .meta-r { display: flex; gap: 10px; font-family: var(--mono); }
+  .pill { font-size: 12px; font-weight: 650; border-radius: 999px; padding: 3px 10px; background: var(--surface-2); color: var(--ink); white-space: nowrap; }
   .pill.ok { background: var(--ok-soft); color: var(--ok); }
   .pill.warn { background: var(--warn-soft); color: var(--warn); }
   .pill.bad { background: var(--bad-soft); color: var(--bad); }
   .mono { font-family: var(--mono); font-size: 12px; word-break: break-all; }
-  .problem { border-color: var(--bad); }
-  .problem .title { color: var(--bad); font-weight: 700; margin-bottom: 4px; }
+  .problem { border-color: var(--bad); border-width: 1px 1px 1px 5px; }
+  .problem .title { color: var(--bad); font: 700 17px var(--display); margin-bottom: 4px; }
   .problem ul { margin: 8px 0 0; padding-left: 18px; }
+  .count-line { display: flex; justify-content: space-between; align-items: baseline; margin: 0 2px 10px; color: var(--muted); font-size: 13px; }
+  .count-line strong { font: 700 22px var(--display); color: var(--ink); letter-spacing: -.02em; }
 
-  .person-head { display: flex; gap: 14px; align-items: center; margin-bottom: 14px; }
-  .avatar { width: 56px; height: 56px; border-radius: 50%; background: var(--accent-soft); color: var(--accent); display: grid; place-items: center; font-weight: 700; font-size: 20px; flex: none; }
-  .person-head .name { font-size: 19px; font-weight: 700; line-height: 1.2; }
-  .person-head .title { color: var(--muted); font-size: 14px; }
-  dl.kv { display: grid; grid-template-columns: max-content 1fr; gap: 6px 14px; margin: 0; font-size: 14px; }
+  /* ---- department colour ---- */
+  .avatar { --d: #5f7d74; width: 44px; height: 44px; border-radius: 50%; display: grid; place-items: center; flex: none;
+    font: 700 15px var(--display); color: var(--d); background: color-mix(in srgb, var(--d) 16%, var(--surface)); border: 2px solid color-mix(in srgb, var(--d) 45%, transparent); }
+  .dept-tag { --d: #5f7d74; display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; color: var(--ink); }
+  .dept-tag::before { content: ""; width: 9px; height: 9px; border-radius: 3px; background: var(--d); }
+
+  /* ---- lists ---- */
+  .list { list-style: none; margin: 0; padding: 0; }
+  .list li + li { border-top: 1px solid var(--line); }
+  .list-card { padding: 4px 14px; }
+  .link-row { display: flex; width: 100%; text-align: left; gap: 12px; align-items: center; background: none; border: 0; color: inherit; font: inherit; padding: 11px 0; cursor: pointer; min-height: 56px; }
+  .link-row .who { flex: 1; min-width: 0; display: grid; gap: 2px; }
+  .link-row .who b { font-weight: 600; font-size: 15px; }
+  .link-row .who small { color: var(--muted); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .link-row .who .tags { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .link-row .who .num { font-family: var(--mono); font-size: 11px; color: var(--muted); }
+  .link-row .arrow { color: var(--line-strong); font-size: 22px; line-height: 1; }
+  .link-row:hover .arrow { color: var(--ink); }
+
+  /* ---- the ID badge (the one bold thing) ---- */
+  .lanyard { display: flex; justify-content: center; margin: 4px 0 -6px; position: relative; z-index: 1; }
+  .lanyard .strap { width: 34px; height: 26px; background: repeating-linear-gradient(90deg, var(--accent) 0 6px, color-mix(in srgb, var(--accent) 75%, #000) 6px 8px); border-radius: 4px 4px 0 0; }
+  .lanyard .clip { position: absolute; top: 20px; width: 46px; height: 14px; border-radius: 7px; background: #9aa6a2; border: 2px solid #6f7b77; }
+  .badge { --d: #5f7d74; position: relative; max-width: 380px; margin: 0 auto 18px; background: var(--surface); border-radius: 22px;
+    border: 1px solid var(--line); overflow: hidden; box-shadow: 0 18px 40px -22px rgba(15,59,52,.55); transform-origin: 50% -30px; }
+  .badge .band { height: 74px; background: var(--d); position: relative; }
+  .badge .band::after { content: ""; position: absolute; left: 50%; top: 12px; width: 56px; height: 10px; margin-left: -28px; border-radius: 6px; background: var(--paper); opacity: .9; }
+  .badge .band .org { position: absolute; left: 18px; bottom: 10px; color: #fff; font: 600 12px var(--body); opacity: .92; }
+  .badge .band .lvl { position: absolute; right: 16px; bottom: 9px; background: rgba(255,255,255,.92); color: var(--d); font: 800 13px var(--display); padding: 3px 9px; border-radius: 999px; }
+  .badge .photo { width: 104px; height: 104px; margin: -46px auto 0; position: relative; border-radius: 26px; display: grid; place-items: center;
+    font: 800 38px var(--display); letter-spacing: -.03em; color: var(--d); background: color-mix(in srgb, var(--d) 14%, var(--surface)); border: 4px solid var(--surface); box-shadow: 0 0 0 2px color-mix(in srgb, var(--d) 50%, transparent); }
+  .badge .body { padding: 12px 20px 18px; text-align: center; }
+  .person-head .name { font: 800 27px/1.1 var(--display); letter-spacing: -.03em; }
+  .person-head .title { color: var(--muted); margin-top: 4px; }
+  .badge .status-row { display: flex; justify-content: center; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+  .badge .barcode { margin: 16px auto 4px; display: block; height: 38px; width: 100%; max-width: 250px; color: var(--ink); }
+  .badge .num { font: 600 13px var(--mono); letter-spacing: .18em; color: var(--ink); }
+  @keyframes swing { 0% { transform: rotate(-7deg) translateY(-14px); opacity: 0; } 45% { transform: rotate(4deg); opacity: 1; } 75% { transform: rotate(-1.5deg); } 100% { transform: rotate(0); } }
+  .badge.enter { animation: swing .75s cubic-bezier(.3,.7,.3,1) both; }
+  @media (prefers-reduced-motion: reduce) { .badge.enter { animation: none; } }
+
+  dl.kv { display: grid; grid-template-columns: max-content 1fr; gap: 8px 16px; margin: 0; font-size: 14px; }
   dl.kv dt { color: var(--muted); }
   dl.kv dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
   .chips { display: flex; flex-wrap: wrap; gap: 6px; }
-  .chip { font-size: 12px; background: var(--surface-2); border: 1px solid var(--border); border-radius: 999px; padding: 3px 10px; }
-  .list { list-style: none; margin: 0; padding: 0; }
-  .list li { border-top: 1px solid var(--border); }
-  .list li:first-child { border-top: 0; }
-  .link-row { display: flex; width: 100%; text-align: left; gap: 10px; align-items: center; background: none; border: 0; color: inherit; font: inherit; padding: 10px 0; cursor: pointer; min-height: 48px; }
-  .link-row .who { flex: 1; min-width: 0; }
-  .link-row .who b { display: block; font-weight: 600; }
-  .link-row .who small { color: var(--muted); }
-  .link-row .arrow { color: var(--muted); }
-  .mini-avatar { width: 34px; height: 34px; font-size: 13px; }
+  .chip { font-size: 12.5px; background: var(--surface-2); border: 1px solid var(--line); border-radius: 999px; padding: 4px 11px; }
 
+  /* ---- teams ---- */
+  .team-row .swatch { width: 12px; align-self: stretch; border-radius: 6px; background: var(--d, #5f7d74); flex: none; }
+  .team-row .gauge { width: 30%; max-width: 170px; height: 10px; background: var(--surface-2); border-radius: 999px; overflow: hidden; }
+  .team-row .gauge span { display: block; height: 100%; background: var(--d, #5f7d74); border-radius: 999px; }
+  .team-row .n { font: 700 18px var(--display); width: 34px; text-align: right; font-variant-numeric: tabular-nums; }
+  .team-hero { border-radius: var(--r-lg); background: var(--d, #5f7d74); color: #fff; padding: 18px 18px 16px; margin-bottom: 14px; position: relative; overflow: hidden; }
+  .team-hero::after { content: attr(data-code); position: absolute; right: -6px; bottom: -22px; font: 800 92px/1 var(--display); letter-spacing: -.05em; opacity: .16; }
+  .team-hero h3 { font: 800 26px/1.1 var(--display); letter-spacing: -.03em; margin: 0; }
+  .team-hero p { margin: 4px 0 0; opacity: .85; font-size: 13px; }
   .tiles { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; margin-bottom: 14px; }
   @media (min-width: 560px) { .tiles { grid-template-columns: repeat(4, 1fr); } }
-  .tile { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px 14px; box-shadow: var(--shadow); }
-  .tile .v { font-size: 24px; font-weight: 700; letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
-  .tile .l { font-size: 12px; color: var(--muted); }
-  .bars { display: grid; gap: 7px; }
-  .bar { display: grid; grid-template-columns: 34px 1fr 30px; gap: 8px; align-items: center; font-size: 13px; }
+  .tile { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-md); padding: 12px 14px; }
+  .tile .v { font: 800 30px/1.1 var(--display); letter-spacing: -.03em; font-variant-numeric: tabular-nums; }
+  .tile .l { font-size: 12.5px; color: var(--muted); margin-top: 2px; }
+  .bars { display: grid; gap: 8px; }
+  .bar { display: grid; grid-template-columns: 34px 1fr 30px; gap: 10px; align-items: center; font-size: 13px; }
   .bar.wide { grid-template-columns: minmax(80px, 34%) 1fr 30px; }
-  .bar .track { height: 10px; background: var(--surface-2); border-radius: 999px; overflow: hidden; }
-  .bar .fill { height: 100%; background: var(--accent); border-radius: 999px; }
-  .bar .n { text-align: right; font-variant-numeric: tabular-nums; color: var(--muted); }
+  .bar .track { height: 12px; background: var(--surface-2); border-radius: 999px; overflow: hidden; }
+  .bar .fill { height: 100%; background: var(--d, var(--primary)); border-radius: 999px; }
+  .bar .n { text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; }
   .bar .lab { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .figures { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .figures div b { display: block; font: 800 22px var(--display); letter-spacing: -.02em; }
+  .figures div span { font-size: 12.5px; color: var(--muted); }
 
-  .items { display: grid; gap: 10px; }
+  /* ---- catalog ---- */
+  .items { display: grid; gap: 12px; }
   @media (min-width: 640px) { .items { grid-template-columns: 1fr 1fr; } }
-  .item { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px; box-shadow: var(--shadow); display: flex; flex-direction: column; gap: 6px; }
-  .item .top { display: flex; justify-content: space-between; gap: 10px; align-items: flex-start; }
-  .item .nm { font-weight: 700; line-height: 1.25; }
-  .item .price { font-weight: 700; white-space: nowrap; font-variant-numeric: tabular-nums; }
-  .item .meta { font-size: 12px; color: var(--muted); }
-  .item .desc { font-size: 13px; color: var(--muted); }
-  .filters-toggle { margin-bottom: 10px; }
+  .item { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-lg); padding: 14px 16px 14px; display: flex; flex-direction: column; gap: 8px; }
+  .item .top { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; }
+  .item .nm { font: 700 17px/1.2 var(--display); letter-spacing: -.015em; }
+  .item .price { font: 800 17px var(--display); white-space: nowrap; font-variant-numeric: tabular-nums; background: var(--accent); color: var(--accent-ink); padding: 3px 10px 3px 14px; border-radius: 4px 999px 999px 4px; position: relative; }
+  .item .price::before { content: ""; position: absolute; left: 5px; top: 50%; width: 5px; height: 5px; margin-top: -2.5px; border-radius: 50%; background: var(--surface); }
+  .item .meta { font-size: 12.5px; color: var(--muted); display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
+  .item .meta .sku { font-family: var(--mono); }
+  .item .desc { font-size: 13.5px; color: var(--muted); }
+  .stock { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; font-weight: 600; }
+  .stock::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
+  .stock.ok { color: var(--ok); } .stock.warn { color: var(--warn); } .stock.bad { color: var(--bad); }
+  .filters-toggle { margin-top: 10px; }
 
-  details.raw { margin-top: 4px; }
+  /* ---- trace ---- */
+  .tab-ico { position: relative; display: inline-flex; }
+  .tab-badge { position: absolute; top: -5px; right: -10px; min-width: 17px; height: 17px; padding: 0 4px; border-radius: 999px; background: var(--accent); color: var(--accent-ink); font: 700 10px/17px var(--body); font-style: normal; text-align: center; }
+  nav.tabs button[aria-selected="true"] .tab-badge { background: var(--chrome); color: var(--chrome-ink); }
+  .trace-bar { display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center; justify-content: space-between; padding: 12px 14px; }
+  .trace-count { font: 700 15px var(--display); }
+  .trace-count span { font: 400 13px var(--body); color: var(--muted); margin-left: 6px; }
+  .tr { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-md); margin-bottom: 8px; overflow: hidden; }
+  .tr.err { border-left: 4px solid var(--bad); }
+  .tr summary { list-style: none; cursor: pointer; display: grid; grid-template-columns: auto 1fr auto; gap: 4px 10px; align-items: center; padding: 10px 12px; }
+  .tr summary::-webkit-details-marker { display: none; }
+  .tr summary .call { font-family: var(--mono); font-size: 12.5px; overflow-wrap: anywhere; }
+  .tr summary .call b { margin-right: 6px; }
+  .tr summary .when { font-size: 11.5px; color: var(--muted); text-align: right; white-space: nowrap; }
+  .tr summary .src { grid-column: 2 / -1; font-size: 11.5px; color: var(--muted); display: flex; gap: 10px; flex-wrap: wrap; }
+  .tr[open] summary { background: var(--surface-2); border-bottom: 1px solid var(--line); }
+  .tr .tr-body { padding: 4px 12px 12px; }
+  .tr h4 { font: 650 14px var(--display); margin: 12px 0 6px; display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+  .tr table { width: 100%; border-collapse: collapse; font-family: var(--mono); font-size: 12px; }
+  .tr td { padding: 4px 0; vertical-align: top; border-top: 1px solid var(--line); overflow-wrap: anywhere; }
+  .tr td:first-child { color: var(--muted); padding-right: 12px; white-space: nowrap; width: 1%; }
+  .tr pre { max-height: 320px; margin: 0; }
+  .tr .note { font-size: 12px; color: var(--muted); margin: 6px 0 0; }
+  .tr .err-msg { color: var(--bad); font-size: 13px; margin: 8px 0 0; }
+  details.raw { margin-top: 6px; }
   details.raw summary { cursor: pointer; color: var(--muted); font-size: 13px; padding: 6px 0; }
-  pre { background: var(--surface-2); border: 1px solid var(--border); border-radius: 10px; padding: 12px; overflow: auto; max-height: 360px; font-family: var(--mono); font-size: 12px; margin: 6px 0 0; }
-  .empty { color: var(--muted); text-align: center; padding: 28px 10px; font-size: 14px; }
-  .spinner { width: 18px; height: 18px; border: 2px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin .7s linear infinite; display: inline-block; vertical-align: middle; }
+  pre { background: var(--surface-2); border: 1px solid var(--line); border-radius: var(--r-md); padding: 12px; overflow: auto; max-height: 360px; font-family: var(--mono); font-size: 12px; margin: 6px 0 0; }
+  .empty { color: var(--muted); text-align: center; padding: 32px 10px; font-size: 14px; }
+  .spinner { width: 18px; height: 18px; border: 2px solid var(--line); border-top-color: var(--focus); border-radius: 50%; animation: spin .7s linear infinite; display: inline-block; vertical-align: middle; }
   @keyframes spin { to { transform: rotate(360deg); } }
   @media (prefers-reduced-motion: reduce) { .spinner { animation-duration: 2s; } }
-  .toast { position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(84px + env(safe-area-inset-bottom)); background: var(--text); color: var(--bg); padding: 10px 16px; border-radius: 10px; font-size: 14px; z-index: 20; max-width: calc(100% - 32px); }
+  .toast { position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(88px + env(safe-area-inset-bottom)); background: var(--chrome); color: var(--chrome-ink); padding: 11px 18px; border-radius: 999px; font-size: 14px; z-index: 20; max-width: calc(100% - 32px); box-shadow: 0 10px 30px -10px rgba(0,0,0,.4); }
   @media (min-width: 760px) { .toast { bottom: 24px; } }
-  .notice { font-size: 13px; background: var(--warn-soft); color: var(--warn); border-radius: 10px; padding: 10px 12px; margin-bottom: 12px; }
+  .success { border-color: var(--ok); border-width: 1px 1px 1px 5px; }
+  .success .title { color: var(--ok); font: 700 18px var(--display); margin-bottom: 4px; }
 </style>
 </head>
 <body>
 <header>
-  <h1>Facade Console</h1>
-  <div class="conn" id="conn" title=""><i class="dot" id="connDot"></i><span id="connText">Not configured</span></div>
+  <a class="brand" href="#" id="homeLink" aria-label="Acme Front Office home: the people directory" title="Home">
+    <div class="brand-mark" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="#2b2208" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="6" width="14" height="15" rx="3"/><path d="M9 3h6v4H9z"/><circle cx="12" cy="12" r="2.2"/><path d="M8.5 18c.8-1.6 2-2.3 3.5-2.3s2.7.7 3.5 2.3"/></svg></div>
+    <div><h1>Acme Front Office</h1><small>Experience console</small></div>
+  </a>
+  <button class="conn" id="conn" type="button" title="Connection settings"><i class="dot" id="connDot"></i><span id="connText">Not configured</span></button>
+  <button class="help-btn" id="helpBtn" type="button" aria-label="Help: what this app is" aria-haspopup="dialog">?</button>
 </header>
 
 <nav class="tabs" role="tablist" aria-label="Sections">
@@ -178,6 +314,7 @@
   <button role="tab" data-tab="hire" aria-selected="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="10" cy="8" r="4"/><path d="M2 21c0-4 4-6 8-6 1.5 0 3 .3 4.2.8M19 14v6M16 17h6"/></svg>Hire</button>
   <button role="tab" data-tab="team" aria-selected="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg>Teams</button>
   <button role="tab" data-tab="catalog" aria-selected="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7l9-4 9 4-9 4-9-4z"/><path d="M3 7v10l9 4 9-4V7M12 11v10"/></svg>Catalog</button>
+  <button role="tab" data-tab="trace" aria-selected="false"><span class="tab-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg><i class="tab-badge hidden" id="traceBadge"></i></span>Trace</button>
   <button role="tab" data-tab="settings" aria-selected="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>Settings</button>
 </nav>
 
@@ -205,7 +342,7 @@
       <div id="peopleList"></div>
     </div>
     <div id="peopleProfileView" class="hidden">
-      <div class="actions" style="margin:0 0 12px"><button class="btn secondary small" type="button" id="backToPeople">‹ People</button></div>
+      <button class="back" type="button" id="backToPeople">‹ Back to people</button>
       <h2>Person profile</h2>
       <p class="sub"><span class="mono">GET /people/{employeeNumber}</span> — employee, manager and direct reports in one call.</p>
       <div id="peopleOut"></div>
@@ -264,7 +401,7 @@
       <div id="teamList"></div>
     </div>
     <div id="teamSnapView" class="hidden">
-      <div class="actions" style="margin:0 0 12px"><button class="btn secondary small" type="button" id="backToTeams">‹ Teams</button></div>
+      <button class="back" type="button" id="backToTeams">‹ Back to teams</button>
       <h2>Team snapshot</h2>
       <p class="sub"><span class="mono">GET /teams/{departmentCode}/snapshot</span> — headcount, levels, tenure, skills and (with the scope) payroll.</p>
       <div id="teamOut"></div>
@@ -280,7 +417,7 @@
         <div class="grow"><label for="c_q">Search</label><input id="c_q" type="search" placeholder="e.g. steel" minlength="2" maxlength="100"></div>
         <button class="btn" type="submit">Search</button>
       </div>
-      <button class="btn secondary small filters-toggle" type="button" id="toggleFilters" aria-expanded="false" style="margin-top:10px">More filters</button>
+      <button class="btn secondary small filters-toggle" type="button" id="toggleFilters" aria-expanded="false">More filters</button>
       <div id="moreFilters" class="hidden">
         <div class="grid tight">
           <div class="field"><label for="c_cat">Category</label><input id="c_cat" list="catCodes" pattern="[A-Z]{2,10}" autocapitalize="characters" placeholder="Any"></div>
@@ -300,6 +437,21 @@
       </div>
     </form>
     <div id="catOut"></div>
+  </section>
+
+  <!-- TRACE -->
+  <section class="panel" id="panel-trace" role="tabpanel">
+    <h2>Trace</h2>
+    <p class="sub">Every call this page made, newest first, with headers and payloads. Kept in memory until you clear it or reload.</p>
+    <div class="trace-bar card">
+      <div class="trace-count" id="traceCount"></div>
+      <label class="check" style="margin:0"><input type="checkbox" id="traceSecrets"> Show secrets</label>
+      <div class="actions" style="margin:0">
+        <button class="btn secondary small" type="button" id="traceCopy">Copy all as JSON</button>
+        <button class="btn small" type="button" id="traceClear">Clear trace</button>
+      </div>
+    </div>
+    <div id="traceList"></div>
   </section>
 
   <!-- SETTINGS -->
@@ -374,6 +526,44 @@
   </section>
 </main>
 
+
+<dialog class="help" id="helpDialog" aria-labelledby="helpTitle">
+  <div class="help-head">
+    <div><h2 id="helpTitle">About Acme Front Office</h2><p>The experience console for Acme's people and product data.</p></div>
+    <button class="x" type="button" id="helpClose" aria-label="Close help">×</button>
+  </div>
+  <div class="help-body">
+    <p>Acme Front Office is a small, phone-friendly app for looking people up, onboarding new hires, checking on teams and browsing the product catalog. It never talks to Acme's systems of record directly. Every screen calls the <b>Workforce &amp; Catalog Experience API</b>, a facade that your integration platform builds and runs.</p>
+    <div class="flow" aria-label="How a request flows">
+      <span class="me">Acme Front Office</span><i>calls</i><span>Experience API (your facade)</span><i>calls</i><span>Acme Back Office APIs</span>
+    </div>
+    <p>One tap here can become several back-office calls: a profile joins the employee, their manager and their reports; a team snapshot pages through a whole department and adds it up. That orchestration lives in the facade, which is what this app is for testing and demoing.</p>
+
+    <h3>The tabs</h3>
+    <ul>
+      <li><b>People</b>: search the directory, open a profile badge, then jump to the manager or a direct report.</li>
+      <li><b>Hire</b>: onboard someone. Resubmitting the same form reuses its idempotency key, so a retry never creates a duplicate.</li>
+      <li><b>Teams</b>: every department with its active headcount, and a snapshot of each (payroll only appears when your credentials allow it).</li>
+      <li><b>Catalog</b>: search products by category, stock, price, tag and sort order.</li>
+      <li><b>Trace</b>: every request and response this page made, with headers and bodies, for debugging.</li>
+      <li><b>Settings</b>: the facade's address and your credentials (API key, bearer token, basic or OAuth 2.0 client credentials).</li>
+    </ul>
+
+    <h3>Demo mode or live</h3>
+    <p>With demo mode on, the app answers from built-in sample data, including the facade's error cases, so you can try everything before a facade exists. Turn it off in Settings and enter your facade's URL to call it for real. The dot in the header is yellow in demo mode and green when connected to a facade; tap it to open Settings. Tap the Acme Front Office name to come back to the people directory.</p>
+
+    <h3>Source and documentation</h3>
+    <a class="repo-link" href="https://github.com/lbrenman/api-test-tool" target="_blank" rel="noopener">
+      <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 .5a11.5 11.5 0 0 0-3.64 22.41c.58.1.79-.25.79-.56v-2c-3.2.7-3.88-1.37-3.88-1.37-.52-1.33-1.28-1.69-1.28-1.69-1.05-.71.08-.7.08-.7 1.16.08 1.77 1.19 1.77 1.19 1.03 1.77 2.7 1.26 3.36.96.1-.75.4-1.26.73-1.55-2.55-.29-5.24-1.28-5.24-5.68 0-1.26.45-2.28 1.19-3.09-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.17 1.18a11 11 0 0 1 5.77 0c2.2-1.49 3.17-1.18 3.17-1.18.63 1.59.23 2.76.11 3.05.74.81 1.19 1.83 1.19 3.09 0 4.41-2.69 5.38-5.25 5.67.41.36.78 1.06.78 2.14v3.17c0 .31.21.67.8.56A11.5 11.5 0 0 0 12 .5z"/></svg>
+      <span><b>lbrenman/api-test-tool on GitHub</b><small>The mock back office, the API test tool and this app</small></span>
+    </a>
+    <a class="repo-link" href="https://github.com/lbrenman/api-test-tool/tree/master/facade" target="_blank" rel="noopener">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 4h10l6 6v10H4z"/><path d="M14 4v6h6M8 14h8M8 17h5"/></svg>
+      <span><b>The facade folder</b><small>The Experience API spec, the data-mapping guide and this file</small></span>
+    </a>
+  </div>
+</dialog>
+
 <datalist id="deptCodes">
   <option value="ENG">Engineering</option><option value="SALES">Sales</option><option value="MKT">Marketing</option>
   <option value="FIN">Finance</option><option value="HR">Human Resources</option><option value="OPS">Operations</option>
@@ -389,7 +579,8 @@
 
 <script>
 'use strict';
-/* Facade Console — exercises the Workforce & Catalog Experience API (facade/ in api-test-tool). */
+/* Acme Front Office (Experience console) — exercises the Workforce & Catalog Experience API, the facade
+   in front of Acme Back Office (facade/ in api-test-tool). */
 
 // ---------- small DOM helpers (all text goes through textContent; nothing from the API is parsed as HTML) ----------
 const $ = (s, root = document) => root.querySelector(s);
@@ -410,6 +601,7 @@ const uuid = () => (crypto.randomUUID ? crypto.randomUUID() : 'xxxxxxxx-xxxx-4xx
   const r = (Math.random() * 16) | 0; return (c === 'x' ? r : (r & 3) | 8).toString(16);
 }));
 function toast(msg) {
+  document.querySelectorAll('.toast').forEach((x) => x.remove());
   const t = h('div', { class: 'toast', role: 'status' }, msg);
   document.body.append(t);
   setTimeout(() => t.remove(), 2600);
@@ -424,7 +616,7 @@ function fmtMoney(m) {
 const human = (s) => String(s || '').toLowerCase().replace(/_/g, ' ').replace(/^./, (c) => c.toUpperCase());
 
 // ---------- settings ----------
-const STORE = 'facadeConsole.settings.v1';
+const STORE = 'facadeConsole.settings.v1'; // key kept so saved settings survive the rename
 const SECRET_KEYS = ['key', 'bearer', 'pass', 'csecret'];
 const DEFAULTS = {
   demo: true, base: '', auth: 'none', keyName: 'X-API-Key', key: '', bearer: '', user: '', pass: '',
@@ -494,6 +686,106 @@ function extraHeaders() {
   return out;
 }
 
+// ---------- trace: every request and response, in memory ----------
+const TRACE_MAX = 200;
+let trace = [];
+let traceSeq = 0;
+function traceAdd(e) {
+  trace.unshift({ id: ++traceSeq, at: new Date(), ...e });
+  if (trace.length > TRACE_MAX) trace.length = TRACE_MAX;
+  updateTraceBadge();
+  if ($('#panel-trace').classList.contains('active')) renderTrace();
+}
+function updateTraceBadge() {
+  const b = $('#traceBadge');
+  b.textContent = trace.length > 99 ? '99+' : String(trace.length);
+  b.classList.toggle('hidden', trace.length === 0);
+}
+function headersObj(hd) {
+  const out = {};
+  if (!hd) return out;
+  if (typeof Headers !== 'undefined' && hd instanceof Headers) hd.forEach((v, k) => { out[k] = v; });
+  else Object.assign(out, hd);
+  return out;
+}
+// Mask credentials unless "Show secrets" is ticked: keep the scheme and a few characters for recognition.
+function maskSecret(v) {
+  const m = String(v).match(/^(Bearer|Basic)\s+(.+)$/i);
+  const val = m ? m[2] : String(v);
+  const shown = val.length > 10 ? `${val.slice(0, 4)}…${val.slice(-3)}` : '•••';
+  return m ? `${m[1]} ${shown}` : shown;
+}
+function isSecretHeader(k) {
+  const n = k.toLowerCase();
+  return n === 'authorization' || n === 'proxy-authorization' || n === 'cookie' || n === (settings.keyName || 'x-api-key').toLowerCase() || n === 'x-api-key';
+}
+function showHeaders(hd, reveal) {
+  const out = {};
+  for (const [k, v] of Object.entries(hd || {})) out[k] = !reveal && isSecretHeader(k) ? maskSecret(v) : v;
+  return out;
+}
+function showBody(body, reveal) {
+  if (body == null || body === '') return '';
+  let text = String(body);
+  if (!reveal) {
+    text = text.replace(/(client_secret=)[^&]*/g, '$1•••')
+      .replace(/("(?:access_token|refresh_token|id_token)"\s*:\s*")([^"]*)(")/g, (_m, a, v, z) => a + maskSecret(v) + z);
+  }
+  try { return JSON.stringify(JSON.parse(text), null, 2); } catch { return text; }
+}
+function shq(v) { return "'" + String(v).replace(/'/g, "'\\''") + "'"; }
+function curlOf(e, reveal) {
+  const parts = ['curl', '-i', '-X', e.method, shq(e.fullUrl)];
+  for (const [k, v] of Object.entries(showHeaders(e.reqHeaders, reveal))) parts.push('-H', shq(`${k}: ${v}`));
+  if (e.reqBody) parts.push('--data-raw', shq(reveal ? e.reqBody : showBody(e.reqBody, false).replace(/\n\s*/g, '')));
+  return parts.join(' ');
+}
+async function copyText(text, what) {
+  try { await navigator.clipboard.writeText(text); }
+  catch {
+    const ta = h('textarea', { style: 'position:fixed;opacity:0' }); ta.value = text; document.body.append(ta); ta.select();
+    try { document.execCommand('copy'); } catch { /* ignore */ }
+    ta.remove();
+  }
+  toast(`${what} copied`);
+}
+function kvTable(obj) {
+  const rows = Object.entries(obj || {});
+  if (!rows.length) return h('p', { class: 'note' }, 'None.');
+  return h('table', null, h('tbody', null, rows.map(([k, v]) => h('tr', null, h('td', null, k), h('td', null, v)))));
+}
+function renderTrace() {
+  const reveal = $('#traceSecrets').checked;
+  const count = $('#traceCount');
+  const errors = trace.filter((e) => !e.status || e.status >= 400).length;
+  count.replaceChildren(`${trace.length} ${trace.length === 1 ? 'call' : 'calls'}`, trace.length ? ' ' : '', trace.length ? h('span', null, errors ? `${errors} failed` : 'none failed') : '');
+  const list = $('#traceList');
+  if (!trace.length) { list.replaceChildren(h('div', { class: 'empty' }, 'No calls yet. Use any tab and its requests show up here.')); return; }
+  list.replaceChildren(...trace.map((e) => {
+    const cls = !e.status ? 'bad' : e.status < 300 ? 'ok' : e.status < 500 ? 'warn' : 'bad';
+    const path = e.fullUrl.replace(/^https?:\/\/[^/]+/, '');
+    return h('details', { class: 'tr' + (!e.status || e.status >= 400 ? ' err' : '') },
+      h('summary', null,
+        h('span', { class: 'pill ' + cls }, e.status ? String(e.status) : 'ERR'),
+        h('span', { class: 'call' }, h('b', null, e.method), path),
+        h('span', { class: 'when' }, e.at.toLocaleTimeString()),
+        h('span', { class: 'src' },
+          h('span', null, e.kind === 'token' ? 'Token request' : e.demo ? 'Demo response' : 'Facade'),
+          h('span', null, e.demo ? 'no network' : `${e.ms} ms`),
+          e.correlationId ? h('span', { class: 'mono' }, e.correlationId) : null)),
+      h('div', { class: 'tr-body' },
+        h('h4', null, 'Request', h('button', { class: 'btn secondary small', type: 'button', onclick: () => copyText(curlOf(e, $('#traceSecrets').checked), 'curl') }, 'Copy as curl')),
+        h('p', { class: 'mono', style: 'margin:0 0 6px' }, `${e.method} ${e.fullUrl}`),
+        kvTable(showHeaders(e.reqHeaders, reveal)),
+        e.reqBody ? h('pre', { style: 'margin-top:8px' }, showBody(e.reqBody, reveal)) : null,
+        h('h4', null, e.status ? `Response ${e.status}` : 'Response'),
+        e.error ? h('p', { class: 'err-msg' }, e.error) : null,
+        e.status ? kvTable(e.resHeaders) : null,
+        e.status && !e.demo ? h('p', { class: 'note' }, 'Browsers only show the response headers the server lists in Access-Control-Expose-Headers.') : null,
+        e.status ? h('pre', { style: 'margin-top:8px' }, showBody(e.resBody, reveal) || '(empty body)') : null));
+  }));
+}
+
 // ---------- OAuth 2.0 client credentials ----------
 async function getToken(force) {
   if (!force && token && token.expiresAt > Date.now() + 30000) return token.value;
@@ -505,9 +797,17 @@ async function getToken(force) {
     headers.Authorization = 'Basic ' + btoa(unescape(encodeURIComponent(`${encodeURIComponent(settings.cid)}:${encodeURIComponent(settings.csecret)}`)));
   } else { body.set('client_id', settings.cid); if (settings.csecret) body.set('client_secret', settings.csecret); }
   let res;
+  const t0 = performance.now();
+  const tr = { kind: 'token', demo: false, method: 'POST', fullUrl: settings.tokenUrl, reqHeaders: { ...headers }, reqBody: body.toString() };
   try { res = await fetch(settings.tokenUrl, { method: 'POST', headers, body }); }
-  catch (e) { throw new UiError('Token request failed', `${e.message}. The token endpoint may not allow CORS from this page; paste a token under "Bearer token" instead.`); }
-  const json = await res.json().catch(() => null);
+  catch (e) {
+    traceAdd({ ...tr, status: 0, ms: Math.round(performance.now() - t0), error: e.message });
+    throw new UiError('Token request failed', `${e.message}. The token endpoint may not allow CORS from this page; paste a token under "Bearer token" instead.`);
+  }
+  const text = await res.text();
+  traceAdd({ ...tr, status: res.status, ms: Math.round(performance.now() - t0), resHeaders: headersObj(res.headers), resBody: text });
+  let json = null;
+  try { json = JSON.parse(text); } catch { json = null; }
   if (!res.ok || !json || !json.access_token) {
     throw new UiError(`Token request returned ${res.status}`, json ? (json.error_description || json.error || JSON.stringify(json)) : 'No JSON body');
   }
@@ -541,29 +841,69 @@ async function api(method, path, { query, body, headers: extra } = {}) {
   const qs = new URLSearchParams();
   for (const [k, v] of Object.entries(query || {})) if (v !== '' && v !== null && v !== undefined && v !== false) qs.set(k, String(v));
   const url = path + (qs.toString() ? '?' + qs : '');
-  if (settings.demo) return demoCall(method, url, path, query || {}, body, correlationId);
+  const bodyText = body !== undefined ? JSON.stringify(body) : undefined;
+  if (settings.demo) {
+    const r = await demoCall(method, url, path, query || {}, body, correlationId);
+    const reqHeaders = { Accept: 'application/json', 'X-Correlation-Id': correlationId, ...extraHeaders(), ...(extra || {}) };
+    if (bodyText) reqHeaders['Content-Type'] = 'application/json';
+    traceAdd({ kind: 'api', demo: true, method, fullUrl: 'https://demo.invalid/workforce-catalog/v1' + url, reqHeaders, reqBody: bodyText, status: r.status, ms: 0, correlationId, resHeaders: r.headers, resBody: r.raw });
+    return r;
+  }
   if (!settings.base) throw new UiError('No facade URL', 'Enter the facade base URL on the Settings tab, or turn on demo mode.');
   const headers = { Accept: 'application/json', 'X-Correlation-Id': correlationId, ...extraHeaders(), ...(await authHeaders()), ...(extra || {}) };
-  if (body !== undefined) headers['Content-Type'] = 'application/json';
-  const t0 = performance.now();
-  const doFetch = () => fetch(settings.base + url, { method, headers, body: body !== undefined ? JSON.stringify(body) : undefined });
-  let res;
-  try {
-    res = await doFetch();
-    if (res.status === 401 && settings.auth === 'oauth2') { // token may have been revoked: refresh once
-      headers.Authorization = 'Bearer ' + await getToken(true);
-      res = await doFetch();
+  if (bodyText) headers['Content-Type'] = 'application/json';
+  const fullUrl = settings.base + url;
+  // One traced fetch: records the exact headers sent and everything the browser lets us see of the reply.
+  const tracedFetch = async () => {
+    const t0 = performance.now();
+    const sent = { ...headers };
+    try {
+      const res = await fetch(fullUrl, { method, headers: sent, body: bodyText });
+      const text = await res.text();
+      const ms = Math.round(performance.now() - t0);
+      const resHeaders = headersObj(res.headers);
+      traceAdd({ kind: 'api', demo: false, method, fullUrl, reqHeaders: sent, reqBody: bodyText, status: res.status, ms, correlationId: res.headers.get('x-correlation-id') || correlationId, resHeaders, resBody: text });
+      return { res, text, ms, resHeaders };
+    } catch (e) {
+      traceAdd({ kind: 'api', demo: false, method, fullUrl, reqHeaders: sent, reqBody: bodyText, status: 0, ms: Math.round(performance.now() - t0), correlationId, error: e.message });
+      throw new UiError('Network error', `${e.message}. Check the URL, that the facade is reachable over HTTPS, and that it allows CORS from ${location.origin === 'null' ? 'this file' : location.origin}.`);
     }
-  } catch (e) {
-    throw new UiError('Network error', `${e.message}. Check the URL, that the facade is reachable over HTTPS, and that it allows CORS from ${location.origin === 'null' ? 'this file' : location.origin}.`);
+  };
+  let out = await tracedFetch();
+  if (out.res.status === 401 && settings.auth === 'oauth2') { // token may have been revoked: refresh once
+    headers.Authorization = 'Bearer ' + await getToken(true);
+    out = await tracedFetch();
   }
-  const ms = Math.round(performance.now() - t0);
-  const text = await res.text();
   let parsed = null;
-  try { parsed = text ? JSON.parse(text) : null; } catch { parsed = null; }
-  const hdrs = {};
-  res.headers.forEach((v, k) => { hdrs[k] = v; });
-  return { method, url, status: res.status, ok: res.ok, ms, correlationId: res.headers.get('x-correlation-id') || correlationId, body: parsed, raw: text, headers: hdrs };
+  try { parsed = out.text ? JSON.parse(out.text) : null; } catch { parsed = null; }
+  return { method, url, status: out.res.status, ok: out.res.ok, ms: out.ms, correlationId: out.res.headers.get('x-correlation-id') || correlationId, body: parsed, raw: out.text, headers: out.resHeaders };
+}
+
+// ---------- department colour and badge helpers ----------
+const DEPT_COLORS = { ENG: '#3a6fd8', SALES: '#d9822b', MKT: '#c2457a', FIN: '#2f8a5b', HR: '#8a5cc7', OPS: '#3f8e9c', CS: '#c99a14', LEGAL: '#66788c', PROD: '#de5a43', SCM: '#5f8a2e' };
+const deptColor = (code) => DEPT_COLORS[code] || '#5f7d74';
+const tint = (code) => `--d:${deptColor(code)}`;
+function avatar(name, code) { return h('span', { class: 'avatar', style: tint(code), 'aria-hidden': 'true' }, initials(name)); }
+function deptTag(dept) { return h('span', { class: 'dept-tag', style: tint(dept.code) }, dept.name); }
+// A decorative barcode drawn from the employee number's digits (not a real symbology).
+function barcode(num) {
+  const ns = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(ns, 'svg');
+  svg.setAttribute('class', 'barcode'); svg.setAttribute('aria-hidden', 'true'); svg.setAttribute('preserveAspectRatio', 'none');
+  const bars = [2, 1, 1];
+  for (const ch of num.replace(/\D/g, '')) { const d = Number(ch); bars.push(1 + (d % 3), 1 + ((d + 1) % 2), 1 + ((d * 7) % 4), 1); }
+  bars.push(1, 1, 2);
+  const width = bars.reduce((a, b) => a + b, 0);
+  svg.setAttribute('viewBox', `0 0 ${width} 10`);
+  let x = 0;
+  bars.forEach((w, i) => {
+    if (i % 2 === 0) { const r = document.createElementNS(ns, 'rect'); r.setAttribute('x', x); r.setAttribute('y', 0); r.setAttribute('width', w); r.setAttribute('height', 10); r.setAttribute('fill', 'currentColor'); svg.append(r); }
+    x += w;
+  });
+  return svg;
+}
+function countLine(total, noun, shown) {
+  return h('div', { class: 'count-line' }, h('span', null, h('strong', null, total), ' ', noun), shown < total ? h('span', null, `Showing ${shown}`) : null);
 }
 
 // ---------- rendering helpers shared by panels ----------
@@ -571,9 +911,10 @@ function statusLine(r) {
   const cls = r.status < 300 ? 'ok' : r.status < 500 ? 'warn' : 'bad';
   return h('div', { class: 'status' },
     h('span', { class: 'pill ' + cls }, `${r.status}`),
-    h('span', { class: 'mono' }, `${r.method} ${r.url}`),
-    h('span', null, settings.demo ? 'demo' : `${r.ms} ms`),
-    h('span', { class: 'mono', title: 'X-Correlation-Id' }, `corr ${r.correlationId.slice(0, 8)}…`));
+    h('span', { class: 'call' }, h('b', null, r.method), r.url),
+    h('span', { class: 'meta-r' },
+      h('span', null, settings.demo ? 'demo' : `${r.ms} ms`),
+      h('span', { title: `X-Correlation-Id: ${r.correlationId}` }, `#${r.correlationId.slice(0, 8)}`)));
 }
 function rawBlock(r) {
   const headers = Object.entries(r.headers || {}).map(([k, v]) => `${k}: ${v}`).join('\n');
@@ -600,48 +941,55 @@ async function run(target, fn) {
 }
 
 // ---------- People ----------
-function personRow(p, onClick) {
+function personRow(p, onClick, deptCode) {
   return h('li', null, h('button', { class: 'link-row', type: 'button', onclick: onClick },
-    h('span', { class: 'avatar mini-avatar' }, initials(p.displayName)),
-    h('span', { class: 'who' }, h('b', null, p.displayName), h('small', null, `${p.jobTitle || '—'} · ${p.employeeNumber}`)),
+    avatar(p.displayName, deptCode),
+    h('span', { class: 'who' }, h('b', null, p.displayName), h('small', null, p.jobTitle || '—'), h('span', { class: 'num' }, p.employeeNumber)),
     h('span', { class: 'arrow', 'aria-hidden': 'true' }, '›')));
 }
 function renderProfile(p) {
   const goto = (num) => () => { lookupPerson(num); window.scrollTo({ top: 0, behavior: 'smooth' }); };
   const certPill = (s) => h('span', { class: 'pill ' + ({ VALID: 'ok', NO_EXPIRY: 'ok', EXPIRING_SOON: 'warn', EXPIRED: 'bad' }[s] || '') }, human(s));
   const loc = p.contact && p.contact.workLocation;
+  const code = p.department.code;
+  const reportsCount = p.directReports.count;
   return h('div', null,
-    h('div', { class: 'card' },
-      h('div', { class: 'person-head' },
-        h('div', { class: 'avatar' }, initials(p.displayName)),
-        h('div', null,
-          h('div', { class: 'name' }, p.displayName),
-          h('div', { class: 'title' }, `${p.jobTitle || '—'} · ${p.level}`),
-          h('div', { style: 'margin-top:6px' }, h('span', { class: 'pill ' + (p.employmentStatus === 'ACTIVE' ? 'ok' : 'bad') }, human(p.employmentStatus))))),
+    h('div', { class: 'lanyard', 'aria-hidden': 'true' }, h('span', { class: 'strap' }), h('span', { class: 'clip' })),
+    h('div', { class: 'badge enter', style: tint(code) },
+      h('div', { class: 'band' }, h('span', { class: 'org' }, p.department.name), h('span', { class: 'lvl', title: 'Career level' }, p.level)),
+      h('div', { class: 'photo', 'aria-hidden': 'true' }, initials(p.displayName)),
+      h('div', { class: 'body person-head' },
+        h('div', { class: 'name' }, p.displayName),
+        h('div', { class: 'title' }, p.jobTitle || '—'),
+        h('div', { class: 'status-row' },
+          h('span', { class: 'pill ' + (p.employmentStatus === 'ACTIVE' ? 'ok' : 'bad') }, human(p.employmentStatus)),
+          h('span', { class: 'pill' }, `${p.tenureYears} yrs here`)),
+        barcode(p.employeeNumber),
+        h('div', { class: 'num' }, p.employeeNumber))),
+    h('div', { class: 'card' }, h('h3', null, 'Contact'),
       h('dl', { class: 'kv' },
-        h('dt', null, 'Employee #'), h('dd', { class: 'mono' }, p.employeeNumber),
-        h('dt', null, 'Department'), h('dd', null, `${p.department.name} (${p.department.code})`),
-        h('dt', null, 'Hired'), h('dd', null, `${fmtDate(p.hireDate)} · ${p.tenureYears} yrs`),
         h('dt', null, 'Email'), h('dd', null, h('a', { href: 'mailto:' + p.contact.email }, p.contact.email)),
         h('dt', null, 'Phone'), h('dd', null, p.contact.workPhone ? h('a', { href: 'tel:' + p.contact.workPhone.replace(/\s/g, '') }, p.contact.workPhone) : '—'),
         h('dt', null, 'Location'), h('dd', null, loc ? [loc.city, loc.region, loc.countryCode].filter(Boolean).join(', ') : '—'),
+        h('dt', null, 'Hired'), h('dd', null, fmtDate(p.hireDate)),
         h('dt', null, 'Photo'), h('dd', null, p.hasPhoto ? 'On file' : 'None'),
         h('dt', null, 'Updated'), h('dd', null, fmtDate(p.lastUpdatedAt)))),
-    h('div', { class: 'card' }, h('h3', null, 'Manager'),
-      p.manager ? h('ul', { class: 'list' }, personRow(p.manager, goto(p.manager.employeeNumber))) : h('div', { class: 'sub', style: 'margin:0' }, 'Top of the hierarchy')),
-    h('div', { class: 'card' }, h('h3', null, `Direct reports · ${p.directReports.count}`),
-      p.directReports.items.length ? h('ul', { class: 'list' }, p.directReports.items.map((r) => personRow(r, goto(r.employeeNumber)))) : h('div', { class: 'sub', style: 'margin:0' }, 'No active direct reports'),
-      p.directReports.count > p.directReports.items.length ? h('div', { class: 'sub', style: 'margin:8px 0 0' }, `Showing ${p.directReports.items.length} of ${p.directReports.count}`) : null),
+    h('div', { class: 'card list-card' }, h('h3', { style: 'margin:10px 0 0' }, 'Reports to'),
+      p.manager ? h('ul', { class: 'list' }, personRow(p.manager, goto(p.manager.employeeNumber))) : h('p', { class: 'sub', style: 'margin:6px 0 12px' }, 'Nobody: top of the hierarchy.')),
+    h('div', { class: 'card list-card' }, h('h3', { style: 'margin:10px 0 0' }, 'Direct reports', h('span', { class: 'count' }, reportsCount ? `${reportsCount} active` : '')),
+      p.directReports.items.length ? h('ul', { class: 'list' }, p.directReports.items.map((r) => personRow(r, goto(r.employeeNumber), code))) : h('p', { class: 'sub', style: 'margin:6px 0 12px' }, 'No active direct reports.'),
+      reportsCount > p.directReports.items.length ? h('p', { class: 'sub', style: 'margin:0 0 12px' }, `Showing ${p.directReports.items.length} of ${reportsCount}.`) : null),
     h('div', { class: 'card' }, h('h3', null, 'Skills'),
-      p.skills.length ? h('div', { class: 'chips' }, p.skills.map((s) => h('span', { class: 'chip' }, s))) : h('div', { class: 'sub', style: 'margin:0' }, 'None listed')),
-    h('div', { class: 'card' }, h('h3', null, 'Certifications'),
-      p.certifications.length ? h('ul', { class: 'list' }, p.certifications.map((c) => h('li', { style: 'padding:9px 0;display:flex;gap:10px;justify-content:space-between;align-items:center' },
-        h('div', null, h('b', null, c.name), h('div', { class: 'sub', style: 'margin:0;font-size:12px' }, `Issued ${fmtDate(c.issuedOn)}${c.expiresOn ? ' · expires ' + fmtDate(c.expiresOn) : ''}`)),
-        certPill(c.status)))) : h('div', { class: 'sub', style: 'margin:0' }, 'None')));
+      p.skills.length ? h('div', { class: 'chips' }, p.skills.map((s) => h('span', { class: 'chip' }, s))) : h('p', { class: 'sub', style: 'margin:0' }, 'None listed.')),
+    h('div', { class: 'card list-card' }, h('h3', { style: 'margin:10px 0 0' }, 'Certifications'),
+      p.certifications.length ? h('ul', { class: 'list' }, p.certifications.map((c) => h('li', { style: 'padding:11px 0;display:flex;gap:10px;justify-content:space-between;align-items:center' },
+        h('div', null, h('b', { style: 'font-weight:600' }, c.name), h('div', { class: 'sub', style: 'margin:2px 0 0;font-size:12.5px' }, c.expiresOn ? `Issued ${fmtDate(c.issuedOn)}, expires ${fmtDate(c.expiresOn)}` : `Issued ${fmtDate(c.issuedOn)}`)),
+        certPill(c.status)))) : h('p', { class: 'sub', style: 'margin:6px 0 12px' }, 'None on file.')));
 }
 // People: search → list → profile. Profiles opened from the list (or from manager/report links)
 // keep a small history so "‹ People" returns to the results where you left them.
 let peopleState = { query: null, items: [], next: null, total: 0, last: null, searched: false };
+let peopleSeq = 0;
 function showPeopleView(which) {
   $('#peopleSearchView').classList.toggle('hidden', which !== 'search');
   $('#peopleProfileView').classList.toggle('hidden', which !== 'profile');
@@ -652,9 +1000,10 @@ function peopleQuery() {
 }
 function directoryRow(p) {
   return h('li', null, h('button', { class: 'link-row', type: 'button', onclick: () => openProfile(p.employeeNumber) },
-    h('span', { class: 'avatar mini-avatar' }, initials(p.displayName)),
+    avatar(p.displayName, p.department.code),
     h('span', { class: 'who' }, h('b', null, p.displayName),
-      h('small', null, `${p.jobTitle || '—'} · ${p.department.name} · ${p.employeeNumber}`)),
+      h('small', null, p.jobTitle || '—'),
+      h('span', { class: 'tags' }, deptTag(p.department), h('span', { class: 'num' }, p.employeeNumber))),
     p.employmentStatus === 'INACTIVE' ? h('span', { class: 'pill bad' }, 'Inactive') : null,
     h('span', { class: 'arrow', 'aria-hidden': 'true' }, '›')));
 }
@@ -663,10 +1012,10 @@ function renderPeopleList() {
   const r = peopleState.last;
   const kids = [statusLine(r)];
   if (!r.ok) { out.replaceChildren(...kids, problemCard(r)); return; }
-  kids.push(h('div', { class: 'sub' }, `${peopleState.total} ${peopleState.total === 1 ? 'person' : 'people'} · showing ${peopleState.items.length}`));
+  kids.push(countLine(peopleState.total, peopleState.total === 1 ? 'person' : 'people', peopleState.items.length));
   kids.push(peopleState.items.length
-    ? h('div', { class: 'card', style: 'padding:4px 16px' }, h('ul', { class: 'list' }, peopleState.items.map(directoryRow)))
-    : h('div', { class: 'empty' }, 'Nobody matches this search.'));
+    ? h('div', { class: 'card list-card' }, h('ul', { class: 'list' }, peopleState.items.map(directoryRow)))
+    : h('div', { class: 'empty' }, 'Nobody matches. Try part of a name, an email, or clear the filters.'));
   if (peopleState.next) kids.push(h('div', { class: 'actions', style: 'justify-content:center;margin-top:4px' }, h('button', { class: 'btn secondary', type: 'button', onclick: morePeople }, 'Load more')));
   kids.push(rawBlock(r));
   out.replaceChildren(...kids);
@@ -678,10 +1027,12 @@ async function searchPeople(e) {
   // An exact employee number skips the list and opens the profile.
   if (/^EMP-[0-9]{6}$/i.test(q.q)) { openProfile(q.q.toUpperCase()); return; }
   if (q.q && q.q.length < 2) { out.replaceChildren(errorCard(new UiError('Search too short', 'Type at least 2 characters.'))); return; }
+  const seq = ++peopleSeq;
   peopleState = { query: q, items: [], next: null, total: 0, last: null, searched: true };
   loading(out);
   await run(out, async () => {
     const r = await api('GET', '/people', { query: q });
+    if (seq !== peopleSeq) return; // a newer search started while this one was in flight
     peopleState.last = r;
     if (r.ok && r.body) { peopleState.items = r.body.items; peopleState.next = r.body.nextPageToken; peopleState.total = r.body.totalMatches; }
     renderPeopleList();
@@ -690,7 +1041,9 @@ async function searchPeople(e) {
 async function morePeople() {
   const out = $('#peopleList');
   await run(out, async () => {
+    const seq = peopleSeq;
     const r = await api('GET', '/people', { query: { ...peopleState.query, pageToken: peopleState.next } });
+    if (seq !== peopleSeq) return;
     peopleState.last = r;
     if (r.ok && r.body) { peopleState.items = peopleState.items.concat(r.body.items); peopleState.next = r.body.nextPageToken; peopleState.total = r.body.totalMatches; }
     renderPeopleList();
@@ -743,8 +1096,8 @@ async function submitHire(e) {
     if (r.ok && r.body) {
       const num = r.body.employeeNumber;
       out.replaceChildren(statusLine(r),
-        h('div', { class: 'card', style: 'border-color:var(--ok)' },
-          h('div', { style: 'font-weight:700;color:var(--ok);margin-bottom:4px' }, `Hired ${r.body.displayName} as ${num}`),
+        h('div', { class: 'card success' },
+          h('div', { class: 'title' }, `Hired ${r.body.displayName} as ${num}`),
           r.headers.location ? h('div', { class: 'mono' }, `Location: ${r.headers.location}`) : null,
           h('div', { class: 'actions', style: 'margin-top:10px' },
             h('button', { class: 'btn small', type: 'button', onclick: () => { selectTab('people'); openProfile(num); } }, 'Open profile'),
@@ -764,27 +1117,30 @@ function bars(rows, labelKey, valueKey, wide) {
 }
 function tile(v, l) { return h('div', { class: 'tile' }, h('div', { class: 'v' }, v), h('div', { class: 'l' }, l)); }
 function renderTeam(s) {
-  return h('div', null,
-    h('div', { class: 'card', style: 'padding:12px 16px' }, h('b', null, `${s.department.name} (${s.department.code})`), h('span', { class: 'sub' }, ` · as of ${new Date(s.asOf).toLocaleString()}`)),
+  const code = s.department.code;
+  return h('div', { style: tint(code) },
+    h('div', { class: 'team-hero', 'data-code': code },
+      h('h3', null, s.department.name),
+      h('p', null, `${s.headcount.total} people, ${s.headcount.inactive} inactive. Snapshot taken ${new Date(s.asOf).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })}.`)),
     h('div', { class: 'tiles' },
-      tile(s.headcount.active, `Active of ${s.headcount.total}`),
-      tile(s.tenure.averageYears, 'Avg tenure (yrs)'),
-      tile(s.performance.averageRating ?? '—', `Avg rating (${s.performance.ratedEmployees} rated)`),
-      tile(s.tenure.newHiresLast12Months, 'Hires, last 12 mo')),
-    h('div', { class: 'card' }, h('h3', null, 'Level mix (active)'), bars(s.levelMix, 'level', 'count')),
+      tile(s.headcount.active, 'Active people'),
+      tile(s.tenure.averageYears, 'Average years here'),
+      tile(s.performance.averageRating ?? '—', `Average rating, ${s.performance.ratedEmployees} rated`),
+      tile(s.tenure.newHiresLast12Months, 'Hired in the last year')),
+    h('div', { class: 'card' }, h('h3', null, 'Level mix', h('span', { class: 'count' }, 'active people')), bars(s.levelMix, 'level', 'count')),
     h('div', { class: 'card' }, h('h3', null, 'Top skills'),
-      s.topSkills.length ? bars(s.topSkills, 'skill', 'employees', true) : h('div', { class: 'sub', style: 'margin:0' }, 'No skills recorded')),
+      s.topSkills.length ? bars(s.topSkills, 'skill', 'employees', true) : h('p', { class: 'sub', style: 'margin:0' }, 'No skills recorded.')),
     h('div', { class: 'card' }, h('h3', null, 'Certifications'),
-      h('dl', { class: 'kv' },
-        h('dt', null, 'Certified employees'), h('dd', null, s.certifications.certifiedEmployees),
-        h('dt', null, 'Expiring within 90 days'), h('dd', null, s.certifications.expiringWithin90Days))),
+      h('div', { class: 'figures' },
+        h('div', null, h('b', null, s.certifications.certifiedEmployees), h('span', null, 'people certified')),
+        h('div', null, h('b', null, s.certifications.expiringWithin90Days), h('span', null, 'expiring within 90 days')))),
     s.payroll
       ? h('div', { class: 'card' }, h('h3', null, 'Payroll'),
-        h('dl', { class: 'kv' },
-          h('dt', null, 'Annual total'), h('dd', null, fmtMoney(s.payroll.annualTotal)),
-          h('dt', null, 'Average salary'), h('dd', null, fmtMoney(s.payroll.averageSalary)),
-          h('dt', null, 'Median salary'), h('dd', null, fmtMoney(s.payroll.medianSalary))))
-      : h('div', { class: 'card sub', style: 'margin-bottom:14px' }, 'Payroll hidden — the caller lacks the compensation.read scope.'));
+        h('div', { class: 'figures' },
+          h('div', { style: 'grid-column:1 / -1' }, h('b', null, fmtMoney(s.payroll.annualTotal)), h('span', null, 'annual total')),
+          h('div', null, h('b', null, fmtMoney(s.payroll.averageSalary)), h('span', null, 'average salary')),
+          h('div', null, h('b', null, fmtMoney(s.payroll.medianSalary)), h('span', null, 'median salary'))))
+      : h('div', { class: 'card' }, h('h3', null, 'Payroll'), h('p', { class: 'sub', style: 'margin:0' }, 'Hidden. Payroll needs the compensation.read scope.')));
 }
 let teamsLoaded = false;
 function showTeamView(which) {
@@ -803,13 +1159,13 @@ async function loadTeams() {
     const max = Math.max(1, ...items.map((t) => t.activeHeadcount));
     const total = items.reduce((a, t) => a + t.activeHeadcount, 0);
     out.replaceChildren(statusLine(r),
-      h('div', { class: 'sub' }, `${items.length} teams · ${total} active employees`),
-      h('div', { class: 'card', style: 'padding:4px 16px' }, h('ul', { class: 'list' }, items.map((t) => h('li', null,
-        h('button', { class: 'link-row', type: 'button', onclick: () => openTeam(t.code) },
-          h('span', { class: 'who' }, h('b', null, t.name), h('small', null, t.code)),
-          h('span', { class: 'track', style: 'width:28%;max-width:160px;height:8px;background:var(--surface-2);border-radius:999px;overflow:hidden;display:block' },
-            h('span', { style: `display:block;height:100%;width:${(t.activeHeadcount / max) * 100}%;background:var(--accent);border-radius:999px` })),
-          h('span', { class: 'n', style: 'width:28px;text-align:right;font-variant-numeric:tabular-nums' }, t.activeHeadcount),
+      h('div', { class: 'count-line' }, h('span', null, h('strong', null, items.length), ' teams'), h('span', null, `${total} active people`)),
+      h('div', { class: 'card list-card' }, h('ul', { class: 'list' }, items.map((t) => h('li', null,
+        h('button', { class: 'link-row team-row', type: 'button', style: tint(t.code), onclick: () => openTeam(t.code) },
+          h('span', { class: 'swatch' }),
+          h('span', { class: 'who' }, h('b', null, t.name), h('span', { class: 'num' }, t.code)),
+          h('span', { class: 'gauge', 'aria-hidden': 'true' }, h('span', { style: `width:${(t.activeHeadcount / max) * 100}%` })),
+          h('span', { class: 'n', title: 'Active people' }, t.activeHeadcount),
           h('span', { class: 'arrow', 'aria-hidden': 'true' }, '›')))))),
       h('div', { class: 'actions', style: 'justify-content:center' }, h('button', { class: 'btn secondary small', type: 'button', onclick: loadTeams }, 'Refresh')),
       rawBlock(r));
@@ -827,6 +1183,7 @@ async function loadTeam(code) {
 
 // ---------- Catalog ----------
 let catState = { query: null, items: [], next: null, total: 0, last: null };
+let catSeq = 0;
 function catalogQuery() {
   const v = (id) => $('#' + id).value.trim();
   return {
@@ -837,24 +1194,24 @@ function catalogQuery() {
 }
 function itemCard(it) {
   const st = it.availability.status;
+  const stockCls = st === 'IN_STOCK' ? 'ok' : st === 'LOW_STOCK' ? 'warn' : 'bad';
+  const stockText = st === 'OUT_OF_STOCK' ? 'Out of stock' : st === 'LOW_STOCK' ? `Only ${it.availability.quantityOnHand} left` : `${it.availability.quantityOnHand} in stock`;
+  const variants = [it.variantOptions.sizes.join(' / '), it.variantOptions.colors.join(', ')].filter(Boolean);
   return h('article', { class: 'item' },
     h('div', { class: 'top' }, h('div', { class: 'nm' }, it.name), h('div', { class: 'price' }, fmtMoney(it.price))),
-    h('div', { class: 'meta' }, `${it.sku} · ${it.category.name}${it.rating != null ? ' · ★ ' + it.rating : ''}`),
+    h('div', { class: 'meta' }, h('span', { class: 'sku' }, it.sku), h('span', null, it.category.name), it.rating != null ? h('span', { title: 'Rating' }, `★ ${it.rating}`) : null),
     h('div', { class: 'desc' }, it.summary),
-    h('div', { class: 'chips' },
-      h('span', { class: 'pill ' + (st === 'IN_STOCK' ? 'ok' : st === 'LOW_STOCK' ? 'warn' : 'bad') }, `${human(st)} · ${it.availability.quantityOnHand}`),
-      it.discontinued ? h('span', { class: 'pill bad' }, 'Discontinued') : null,
-      it.tags.map((t) => h('span', { class: 'chip' }, t))),
-    (it.variantOptions.sizes.length || it.variantOptions.colors.length)
-      ? h('div', { class: 'meta' }, [it.variantOptions.sizes.join(' / '), it.variantOptions.colors.join(', ')].filter(Boolean).join(' · ')) : null);
+    h('div', { class: 'meta' }, h('span', { class: 'stock ' + stockCls }, stockText), it.discontinued ? h('span', { class: 'pill bad' }, 'Discontinued') : null),
+    it.tags.length ? h('div', { class: 'chips' }, it.tags.map((t) => h('span', { class: 'chip' }, t))) : null,
+    variants.length ? h('div', { class: 'meta' }, variants.map((v) => h('span', null, v))) : null);
 }
 function renderCatalog() {
   const out = $('#catOut');
   const r = catState.last;
   const kids = [statusLine(r)];
   if (!r.ok) { out.replaceChildren(...kids, problemCard(r)); return; }
-  kids.push(h('div', { class: 'sub' }, `${catState.total} match${catState.total === 1 ? '' : 'es'} · showing ${catState.items.length}`));
-  kids.push(catState.items.length ? h('div', { class: 'items' }, catState.items.map(itemCard)) : h('div', { class: 'empty' }, 'No items match these filters.'));
+  kids.push(countLine(catState.total, catState.total === 1 ? 'match' : 'matches', catState.items.length));
+  kids.push(catState.items.length ? h('div', { class: 'items' }, catState.items.map(itemCard)) : h('div', { class: 'empty' }, 'No items match. Loosen a filter or clear the search.'));
   if (catState.next) kids.push(h('div', { class: 'actions', style: 'justify-content:center;margin-top:14px' }, h('button', { class: 'btn secondary', type: 'button', onclick: moreCatalog }, 'Load more')));
   kids.push(rawBlock(r));
   out.replaceChildren(...kids);
@@ -863,10 +1220,12 @@ async function searchCatalog(e) {
   if (e) e.preventDefault();
   const out = $('#catOut');
   const q = catalogQuery();
+  const seq = ++catSeq;
   catState = { query: q, items: [], next: null, total: 0, last: null };
   loading(out);
   await run(out, async () => {
     const r = await api('GET', '/catalog/items', { query: q });
+    if (seq !== catSeq) return;
     catState.last = r;
     if (r.ok && r.body) { catState.items = r.body.items; catState.next = r.body.nextPageToken; catState.total = r.body.totalMatches; }
     renderCatalog();
@@ -875,7 +1234,9 @@ async function searchCatalog(e) {
 async function moreCatalog() {
   const out = $('#catOut');
   await run(out, async () => {
+    const seq = catSeq;
     const r = await api('GET', '/catalog/items', { query: { ...catState.query, pageToken: catState.next } });
+    if (seq !== catSeq) return;
     catState.last = r;
     if (r.ok && r.body) { catState.items = catState.items.concat(r.body.items); catState.next = r.body.nextPageToken; catState.total = r.body.totalMatches; }
     renderCatalog();
@@ -1099,6 +1460,7 @@ async function testConnection() {
 
 // ---------- tabs ----------
 function selectTab(name) {
+  if (name === 'trace') setTimeout(renderTrace);
   for (const b of $$('nav.tabs button')) b.setAttribute('aria-selected', String(b.dataset.tab === name));
   for (const p of $$('section.panel')) p.classList.toggle('active', p.id === 'panel-' + name);
   try { sessionStorage.setItem('facadeConsole.tab', name); } catch { /* ignore */ }
@@ -1144,6 +1506,31 @@ $('#settingsForm').addEventListener('submit', (e) => {
   toast(settings.remember ? 'Settings saved on this device' : 'Settings applied (not stored)');
 });
 $('#testConn').addEventListener('click', testConnection);
+// Home: the brand returns to the people directory, the app's starting screen.
+function goHome() {
+  selectTab('people');
+  showPeopleView('search');
+  showTeamView('list');
+  if (!peopleState.searched) searchPeople();
+}
+$('#homeLink').addEventListener('click', (e) => { e.preventDefault(); goHome(); });
+$('#conn').addEventListener('click', () => selectTab('settings'));
+const helpDialog = $('#helpDialog');
+$('#helpBtn').addEventListener('click', () => { if (helpDialog.showModal) helpDialog.showModal(); else helpDialog.setAttribute('open', ''); });
+$('#helpClose').addEventListener('click', () => helpDialog.close());
+helpDialog.addEventListener('click', (e) => { if (e.target === helpDialog) helpDialog.close(); }); // tap outside the sheet
+$('#traceSecrets').addEventListener('change', renderTrace);
+$('#traceClear').addEventListener('click', () => { trace = []; updateTraceBadge(); renderTrace(); toast('Trace cleared'); });
+$('#traceCopy').addEventListener('click', () => {
+  const reveal = $('#traceSecrets').checked;
+  const data = trace.map((e) => ({
+    at: e.at.toISOString(), source: e.kind === 'token' ? 'token' : e.demo ? 'demo' : 'facade', method: e.method, url: e.fullUrl, status: e.status, ms: e.ms,
+    correlationId: e.correlationId, error: e.error,
+    request: { headers: showHeaders(e.reqHeaders, reveal), body: e.reqBody ? showBody(e.reqBody, reveal) : undefined },
+    response: e.status ? { headers: e.resHeaders, body: showBody(e.resBody, reveal) } : undefined,
+  }));
+  copyText(JSON.stringify(data, null, 2), 'Trace');
+});
 $('#resetSettings').addEventListener('click', () => {
   if (!confirm('Reset all settings and forget stored credentials?')) return;
   settings = { ...DEFAULTS }; token = null;

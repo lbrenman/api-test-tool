@@ -9,7 +9,7 @@ data minimisation, idempotent writes and backend error mapping against a realist
 |---|---|
 | [`Workforce_Catalog_Experience_API_OpenAPI_3_0_1.yaml`](Workforce_Catalog_Experience_API_OpenAPI_3_0_1.yaml) | The facade contract (OpenAPI 3.0.1), with examples for every response |
 | [`DATA_MAPPING.md`](DATA_MAPPING.md) | For each operation: the backend calls, their order, field-by-field mappings, aggregation rules, error mapping and configuration |
-| [`facade-app.html`](facade-app.html) | **Facade Console**: a single-file, mobile-friendly web app that exercises all six operations (no build, no dependencies) |
+| [`facade-app.html`](facade-app.html) | **Acme Front Office** (Experience console): a single-file, mobile-friendly web app that exercises all six operations (no build, no dependencies) |
 
 ## The six operations
 
@@ -53,11 +53,17 @@ the facade. Every error is RFC 9457 problem+json with a stable `errorCode`.
 - The tester chains the new `employeeNumber` from the 201 into `GET /people/{employeeNumber}`.
 - `ENG` and `EMP-000005` exist with the default seed (`SEED_RANDOM_SEED=42`, 250 employees).
 
-## Facade Console (`facade-app.html`)
+## Acme Front Office (`facade-app.html`)
 
-One HTML file with its CSS and JavaScript inline. Open it straight from disk, or host it anywhere static
-(a web server, a bucket, your API gateway's portal). It works on a phone: bottom tab bar, large touch
-targets, no horizontal scrolling, light and dark themes.
+The front-office counterpart to the tool's **Acme Back Office** app (`/app`): where the back office works
+on the systems of record directly, Acme Front Office only ever calls the facade. One HTML file with its CSS
+and JavaScript inline. Open it straight from disk, or host it anywhere static (a web server, a bucket, your
+API gateway's portal). It works on a phone: bottom tab bar, large touch targets, no horizontal scrolling,
+light and dark themes.
+
+Profiles render as employee ID badges, and each department keeps one colour across People, Teams and
+the team snapshot. Tap the Acme Front Office name to return to the people directory, the connection
+chip to open Settings, and **?** for in-app help with links back to this repo.
 
 | Tab | What it does |
 |---|---|
@@ -65,10 +71,12 @@ targets, no horizontal scrolling, light and dark themes.
 | **Hire** | Submit a hire. The `Idempotency-Key` is kept when you resubmit the same form (a safe retry) and replaced when you change it; on success, open the new profile |
 | **Teams** | The list of teams with active headcounts; tap one for its snapshot with tiles and bar charts (payroll shows only when the facade returns it) |
 | **Catalog** | Search with every filter and sort, and **Load more** through `nextPageToken` |
+| **Trace** | Every request and response this page made, newest first: status, timing, correlation id, request and response headers, and pretty-printed bodies, including OAuth token requests and network failures. Credentials are masked unless you tick **Show secrets**. **Copy as curl** per call, **Copy all as JSON**, and **Clear trace**. Kept in memory only (the last 200 calls) |
 | **Settings** | Facade base URL, authentication, extra headers, theme, and **Test connection** |
 
 Every call shows the HTTP status, method and path, duration and `X-Correlation-Id`, plus the raw
-response. Errors render the problem+json `title`, `detail`, `errorCode` and `violations`.
+response; the Trace tab keeps the full exchange. A live call only shows the response headers the facade
+lists in `Access-Control-Expose-Headers`. Errors render the problem+json `title`, `detail`, `errorCode` and `violations`.
 
 **Authentication** (Settings tab): none, API key (header name configurable), Bearer token (paste),
 Basic, or OAuth 2.0 client credentials (token URL, client id/secret, scopes, client auth via Basic header
