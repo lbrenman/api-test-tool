@@ -100,15 +100,10 @@ validate employeeNumber against ^EMP-[0-9]{6}$            → else 400 INVALID_E
    a. if emp.managerId != null:
         GET B/v1/employees/{emp.managerId}?fields=employeeNumber,firstName,lastName,title,email
         404 → manager = null (dangling reference: log a warning, do not fail)
-   b. GET B/v1/employees?managerId[gte]={emp.id}&managerId[lte]={emp.id}&isActive=true
-          &sort=lastName,firstName&limit=50&fields=employeeNumber,firstName,lastName,title,email
+   b. GET B/v1/employees?managerId={emp.id}&isActive=true&sort=lastName,firstName&limit=50
+          &fields=employeeNumber,firstName,lastName,title,email
         reports = data, reportCount = meta.total
 ```
-
-> **Why `managerId[gte]` + `[lte]` instead of `managerId={id}`:** the tool infers a filter's type from the
-> first record, and employee 1 has `managerId: null`, so `?managerId=5` compares the number 5 with the
-> string "5" and matches nothing. The range pair compares numerically and returns exactly the reports.
-> Switch to `managerId={id}` once the tool infers types from the first non-null value.
 
 ### Response mapping (`PersonProfile`)
 
