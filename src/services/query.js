@@ -66,18 +66,29 @@ function deepText(v, out = []) {
   return out;
 }
 
+// The value that decides how a filter's raw string is typed: the first non-null value of the field
+// across all items (first element for arrays). Looking only at the first item mistyped fields that
+// are null there, e.g. ?managerId=5 when employee 1 has no manager.
+function sampleValue(items, key) {
+  for (const d of items) {
+    const v = getPath(d, key);
+    if (Array.isArray(v)) { if (v.length && v[0] !== null && v[0] !== undefined) return v[0]; continue; }
+    if (v !== null && v !== undefined) return v;
+  }
+  return undefined;
+}
+
 // Build a predicate list from req.query.
-function buildFilters(query, sampleDoc, parseDate, ignore = []) {
+function buildFilters(query, items, parseDate, ignore = []) {
   const filters = [];
   for (const [key, val] of Object.entries(query || {})) {
     if (RESERVED.has(key) || key.startsWith('_') || ignore.includes(key)) continue;
-    if (sampleDoc && !hasPath(sampleDoc, key)) {
+    if (items.length && !items.some((d) => hasPath(d, key))) {
       throw new HttpError(400, `Unknown filter field "${key}"`, {
         errors: [{ field: key, message: 'Not a field of this resource' }],
       });
     }
-    const sample = sampleDoc ? getPath(sampleDoc, key) : undefined;
-    const sampleScalar = Array.isArray(sample) ? sample[0] : sample;
+    const sampleScalar = sampleValue(items, key);
     if (val && typeof val === 'object' && !Array.isArray(val)) {
       for (const [op, raw] of Object.entries(val)) {
         if (!OPS.has(op)) throw new HttpError(400, `Unknown filter operator "${op}" on ${key}`);
@@ -126,7 +137,7 @@ function parseSort(sort, sampleDoc) {
 
 function applyQuery(items, query, { parseDate, ignore } = {}) {
   const sample = items[0];
-  const filters = buildFilters(query, sample, parseDate, ignore);
+  const filters = buildFilters(query, items, parseDate, ignore);
   let out = filters.length ? items.filter((d) => filters.every((f) => f(d))) : items.slice();
   const sorts = parseSort(query && query.sort, sample);
   if (sorts.length) {

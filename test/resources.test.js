@@ -117,6 +117,36 @@ test('fields, filters, operators, text search and sort', async () => {
   await request(t.app).get('/v1/employees?sort=nope').expect(400);
 });
 
+test('filters are typed from the first non-null value, not the first record', async () => {
+  // The first employees are top-level managers (managerId null), which used to turn ?managerId=N into
+  // a string comparison that matched nothing.
+  const all = (await request(t.app).get('/v1/employees?limit=200').expect(200)).body.data;
+  const mgr = all.find((e) => e.managerId !== null).managerId;
+  const want = all.filter((e) => e.managerId === mgr).map((e) => e.id);
+  assert.ok(want.length > 0);
+  const eq = await request(t.app).get(`/v1/employees?managerId=${mgr}&limit=200`).expect(200);
+  assert.deepEqual(eq.body.data.map((e) => e.id), want);
+  const inList = await request(t.app).get(`/v1/employees?managerId=${mgr},999999&limit=200`).expect(200);
+  assert.deepEqual(inList.body.data.map((e) => e.id), want);
+  const none = await request(t.app).get('/v1/employees?managerId=null&limit=200').expect(200);
+  assert.ok(none.body.data.length > 0 && none.body.data.every((e) => e.managerId === null));
+});
+
+test('applyQuery types by the first non-null value and knows fields missing from the first item', () => {
+  const { applyQuery } = require('../src/services/query');
+  const items = [
+    { id: 1, managerId: null, tags: [], meta: {} },
+    { id: 2, managerId: 5, tags: ['a', 'b'], meta: { nickname: 'Al' } },
+    { id: 3, managerId: 50, tags: ['b'], meta: {} },
+  ];
+  assert.deepEqual(applyQuery(items, { managerId: '5' }).map((x) => x.id), [2]);
+  assert.deepEqual(applyQuery(items, { managerId: { ne: '5' } }).map((x) => x.id), [1, 3]);
+  assert.deepEqual(applyQuery(items, { managerId: { gt: '6' } }).map((x) => x.id), [3]);
+  assert.deepEqual(applyQuery(items, { tags: 'b' }).map((x) => x.id), [2, 3]);
+  assert.deepEqual(applyQuery(items, { 'meta.nickname': 'al' }).map((x) => x.id), [2]);
+  assert.throws(() => applyQuery(items, { colour: 'blue' }), /Unknown filter field/);
+});
+
 test('nested collections and referential delete protection', async () => {
   const n = await request(t.app).get('/v1/departments/1/employees?limit=200').expect(200);
   assert.ok(n.body.data.every((e) => e.departmentId === 1));
