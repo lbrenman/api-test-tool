@@ -239,7 +239,7 @@
     data: { purpose: 'The seeded mock data (employees, products, departments, categories): counts, a preview, re-seed with different sizes, or clear it.' },
     inspector: { purpose: 'Every call made to this server shows up here live, with headers, auth, body and the response that was returned: webhooks and other calls to unreserved paths, plus calls to every API the tool serves (/v1, SOAP, WebSocket upgrades, SSE, GraphQL, OData, the S3 API and OAuth). Filter by source, or switch API recording off with the checkbox at the top of the page.' },
     webhooks: { purpose: 'Outgoing webhooks: when an employee, product, department or category is created, updated or deleted, or a file is uploaded, downloaded or deleted (through any protocol), POST its type and id to URLs you choose. Stored in the database, so they survive restarts; every delivery is logged with the response.' },
-    files: { purpose: 'The shared file pool used by every file protocol (multipart, raw, base64, tus, presigned, range, chunked) and by the S3-compatible API, where it is a bucket. Upload, download, delete or regenerate samples.' },
+    files: { purpose: 'The shared file pool used by every file protocol (multipart, raw/octet-stream, base64, tus, presigned, range, chunked) and by the S3-compatible API, where it is a bucket. The Upload card\'s ? guides have curl examples for testing each upload protocol, including error cases (413, 400, 415); upload, download, delete or regenerate samples.' },
     auth: { purpose: 'Choose how API calls must authenticate (none, API key, Basic, Bearer, JWT, OAuth2, HMAC) on /v1, SOAP, WebSocket, SSE, GraphQL and OData; see the credentials, manage OAuth clients (added here, from OAUTH_CLIENTS, or registered dynamically), control dynamic client registration and get test tokens. The S3 API signs with its own keys (Protocols page).' },
     chaos: { purpose: 'Make the mock API misbehave on purpose: random errors, latency, timeouts, broken JSON and rate limits, globally or per route, so you can test client error handling.' },
     headers: { purpose: 'Headers added to every response, and headers every API request must carry on every protocol (missing ones are rejected with 400 in that protocol\'s error format).' },
@@ -605,16 +605,18 @@
           h('button', { class: 'small', onclick: () => copy(f.links.download) }, 'Copy URL'),
           h('button', { class: 'small danger', onclick: guard(async () => { if (!confirm(`Delete ${f.name}?`)) return; await api('DELETE', `/files/${encodeURIComponent(f.id)}`); route(); }) }, 'Delete')))));
     }
-    el.append(header('Files', 'One shared pool for multipart, raw, base64, tus, presigned, range and chunked transfers.',
+    el.append(header('Files', 'One shared pool for multipart, raw (octet-stream), base64, tus, presigned and S3 uploads, and range and chunked downloads.',
       h('button', { onclick: guard(async () => { const r = await api('POST', '/files/regenerate'); toast(`Regenerated ${r.generated} sample files`, 'ok'); route(); }) }, 'Regenerate samples')));
-    const fileExtra = list[0] ? { fileId: list[0].id, fileName: list[0].name } : {};
-    el.append(h('div', { class: 'card row' }, tip('files.upload', fileExtra), input, h('button', { class: 'primary', onclick: guard(async () => {
+    const fileExtra = { maxFileSizeMb: sval('maxFileSizeMb'), ...(list[0] ? { fileId: list[0].id, fileName: list[0].name } : {}) };
+    el.append(h('div', { class: 'card' }, titled('Upload', 'files.upload', fileExtra),
+      h('div', { class: 'small muted', style: { marginBottom: '8px' } }, 'Test your integration\'s uploads with the ? guides: multipart and raw (octet-stream) here, and base64, tus, presigned URLs and the S3 API under ', tip('files.upload-more', fileExtra), '. This button adds files from your computer.'),
+      h('div', { class: 'row' }, input, h('button', { class: 'primary', onclick: guard(async () => {
       for (const file of input.files) {
         await api('POST', '/files/upload', file, { headers: { 'Content-Type': 'application/octet-stream', 'X-Content-Type': file.type || 'application/octet-stream', 'X-Filename': encodeURIComponent(file.name) } });
       }
       toast(`Uploaded ${input.files.length} file(s)`, 'ok');
       route();
-    }) }, 'Upload')));
+    }) }, 'Upload'))));
     el.append(h('div', { class: 'card table-wrap' }, titled('File pool', 'files.download', fileExtra), list.length ? h('table', null, h('thead', null, h('tr', null, ['Name', 'Type', 'Size', 'Source', 'SHA-256', ''].map((x) => h('th', null, x)))), tbody) : h('div', { class: 'empty' }, 'No files yet.')));
   };
 

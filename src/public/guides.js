@@ -38,7 +38,9 @@
     /**
      * Call this server. Auth and required headers are added automatically for /v1 paths and SOAP requests.
      * o: { json, body, contentType, headers, form: [...-F values], file (path for --data-binary @),
-     *      include, head, output, unsigned (HMAC: streamed upload), noAuth, extra: [flags] }
+     *      signFile (HMAC: hash the file's bytes, for a JSON body sent from a file; a plain file is a
+     *      streamed upload and signs UNSIGNED-PAYLOAD), include, output, unsigned (HMAC: streamed
+     *      upload with an inline body), noAuth, extra: [flags] }
      */
     function curl(method, path, o = {}) {
       const pre = [];
@@ -73,7 +75,8 @@
             break;
           case 'hmac': {
             if (hasInlineBody) pre.push(`BODY=${q(bodyStr)}`);
-            const hash = o.unsigned || o.form || o.file ? 'UNSIGNED-PAYLOAD'
+            const hash = o.file && o.signFile ? `$(openssl dgst -sha256 -r ${q(o.file)} | cut -d' ' -f1)`
+              : o.unsigned || o.form || o.file ? 'UNSIGNED-PAYLOAD'
               : hasInlineBody ? '$(printf \'%s\' "$BODY" | openssl dgst -sha256 -r | cut -d\' \' -f1)' : EMPTY_SHA256;
             pre.push('TS=$(date +%s)');
             pre.push(`SIG=$(printf '%s\\n%s\\n%s\\n%s' ${method} ${q(p)} "$TS" "${hash}" | openssl dgst -sha256 -hmac ${q(ctx.hmac.secret)} -binary | openssl base64 -A)`);
@@ -436,20 +439,53 @@
       },
 
       'files.upload': {
-        title: 'Uploading files',
-        purpose: 'Every upload protocol writes into one shared file pool, so you can upload one way and download another. The pool is also an S3 bucket: an S3 client can list, upload and download the same files (Protocols page → S3-compatible API).',
+        title: 'Uploading files: multipart and raw (octet-stream)',
+        purpose: 'The two upload styles most integrations use. Every upload lands in the shared file pool, so you can upload one way and download (or list over S3) another. Run the first command once to create the test files the others send.',
         steps: [
-          'Pick the protocol your integration uses: multipart form, raw body, base64 in JSON, tus resumable, or a presigned URL.',
-          'Upload. The response (201) returns the file id and its download links.',
-          `Uploads larger than MAX_FILE_SIZE_MB return 413. The file then appears in the table below.`,
+          'Multipart (`POST /v1/files/multipart`, `multipart/form-data`): every file part becomes one pool file, keeping the part\'s filename and Content-Type; text parts come back under `fields` (a repeated name becomes an array). Up to 20 files and 200 fields per request.',
+          'Raw / octet-stream: the request body is the file, streamed to the pool. `PUT /v1/files/raw/{name}` takes the name from the path; `POST /v1/files/raw` takes it from `Content-Disposition` (`filename=` or `filename*=`), then `X-Filename`, then `?name=`, else `upload.bin`. The request Content-Type is stored as the file type.',
+          'Check the 201: `Location` points to `/v1/files/{id}`, and the body has `id`, `name`, `contentType`, `size`, `sha256` and `links` (multipart returns `{files: [...], fields}` and Location for the first file). Compare `sha256` with the local hash, or download the file back and `cmp` it.',
+          `Error cases (problem+json): a file over MAX_FILE_SIZE_MB (now ${extra.maxFileSizeMb ?? 100} MB) → 413 \`file-too-large\` (nothing is kept, also for the other parts of a multipart request); multipart with no file part → 400 \`no-files\`; a non-multipart body sent to /multipart → 415; an empty raw body → 400 \`empty-body\`.`,
+          'Every successful upload fires a `files.uploaded` webhook with `via` = `multipart` or `raw`, and shows on the Inspector page (with the multipart parts listed) when Record API calls is on. Auth, required headers, rate limit and chaos apply as on the rest of /v1; in HMAC mode uploads sign `UNSIGNED-PAYLOAD`.',
         ],
         curls: [
-          ['Multipart form (file + extra field)', curl('POST', '/v1/files/multipart', { form: ['file=@./report.pdf', 'description=Monthly report'] })],
-          ['Raw body (name from the path)', curl('PUT', '/v1/files/raw/report.pdf', { contentType: 'application/pdf', file: './report.pdf' })],
-          ['Base64 in JSON', curl('POST', '/v1/files/base64', { json: { name: 'hello.txt', contentType: 'text/plain', data: 'SGVsbG8sIHdvcmxkIQ==' } })],
-          ['Presigned upload — step 1: get a URL', curl('POST', '/v1/files/presign', { json: { method: 'PUT', name: 'photo.png', contentType: 'image/png' } })],
-          ['Presigned upload — step 2: PUT to the returned url (no auth)', "curl -s -X PUT 'PRESIGNED_URL' -H 'Content-Type: image/png' --data-binary @./photo.png"],
-          ['tus — create the upload (Location is returned)', curl('POST', '/v1/files/tus', { include: true, headers: { 'Tus-Resumable': '1.0.0', 'Upload-Length': '13', 'Upload-Metadata': 'filename aGVsbG8udHh0' }, unsigned: true })],
+          ['Create the test files (13-byte text, 2 MB binary)', "printf 'Hello, world!' > hello.txt && head -c 2097152 /dev/urandom > blob.bin"],
+          ['Multipart: one file', curl('POST', '/v1/files/multipart', { include: true, form: ['file=@./blob.bin;type=application/octet-stream'] })],
+          ['Multipart: two files + text fields', curl('POST', '/v1/files/multipart', { form: ['file=@./hello.txt;type=text/plain', 'file=@./blob.bin;type=application/octet-stream', 'description=Monthly batch', 'batchId=B-1001'] })],
+          ['Raw PUT, name from the path', curl('PUT', '/v1/files/raw/blob.bin', { include: true, contentType: 'application/octet-stream', file: './blob.bin' })],
+          ['Raw POST octet-stream, name from Content-Disposition', curl('POST', '/v1/files/raw', { contentType: 'application/octet-stream', headers: { 'Content-Disposition': 'attachment; filename="blob.bin"' }, file: './blob.bin' })],
+          ['Raw POST, name from X-Filename', curl('POST', '/v1/files/raw', { contentType: 'text/plain', headers: { 'X-Filename': 'hello.txt' }, file: './hello.txt' })],
+          ['Raw POST, name from ?name=', curl('POST', '/v1/files/raw?name=hello.txt', { contentType: 'text/plain', file: './hello.txt' })],
+          ['Local SHA-256 (compare with sha256 in the response)', 'openssl dgst -sha256 blob.bin'],
+          ['Round trip: download FILE_ID (from the upload response) and compare', `${curl('GET', '/v1/files/FILE_ID/download', { output: 'roundtrip.bin' })} && cmp blob.bin roundtrip.bin && echo identical`],
+          [`413: a file one MB over the limit`, `head -c ${((extra.maxFileSizeMb ?? 100) + 1) * 1048576} /dev/zero > too-big.bin\n${curl('PUT', '/v1/files/raw/too-big.bin', { include: true, contentType: 'application/octet-stream', file: './too-big.bin' })}`],
+          ['400: multipart with no file part', curl('POST', '/v1/files/multipart', { include: true, form: ['description=no file here'] })],
+          ['415: a body that is not multipart', curl('POST', '/v1/files/multipart', { include: true, contentType: 'text/plain', body: 'not a form', unsigned: true })],
+        ],
+      },
+      'files.upload-more': {
+        title: 'Uploading files: base64, tus, presigned URLs and S3',
+        purpose: 'The other upload protocols, into the same pool. The commands reuse hello.txt and blob.bin from the multipart and raw guide.',
+        steps: [
+          'Base64 in JSON (`POST /v1/files/base64`): `{name, contentType?, data}`, where `data` is base64 (standard or URL-safe) or a `data:` URL whose type is used when `contentType` is missing. Missing `name`/`data` or invalid base64 → 422 with field errors. The JSON body may be about 1.4 × MAX_FILE_SIZE_MB.',
+          'tus 1.0.0 (`/v1/files/tus`): POST with `Upload-Length` and `Upload-Metadata` (`filename`, `filetype`, values base64) → 201 + `Location`. Send the bytes with PATCH (`Upload-Offset`, `Content-Type: application/offset+octet-stream`) → 204 with the new `Upload-Offset`, in as many chunks as you like. `GET` the upload URL to see the offset when resuming (HEAD works too). The response that completes the upload carries `X-File-Id`. Wrong offset → 409 with the expected offset; DELETE cancels. Every request needs `Tus-Resumable: 1.0.0` (else 412).',
+          'Presigned URL: `POST /v1/files/presign` with `{method: "PUT", name, contentType, expiresIn?}` returns `url`, the `headers` to send and the future `fileId`. PUT the bytes to `url` with those headers and no credentials. The URL expires (default 900 s); it is a real S3 URL when FILE_STORE=s3.',
+          'S3 API: PutObject to the bucket with the S3 API keys (Protocols page), AWS Signature V4; folder-style keys such as `in/2026/blob.bin` are fine. AUTH_MODE does not apply here.',
+          'Webhooks report each as `via` = `base64`, `tus` (after the last chunk only), `presigned` or `s3`.',
+        ],
+        curls: [
+          ['Base64: encode a file and upload it', `printf '{"name":"blob.bin","contentType":"application/octet-stream","data":"%s"}' "$(openssl base64 -A -in blob.bin)" > blob.json\n${curl('POST', '/v1/files/base64', { contentType: 'application/json', file: './blob.json', signFile: true })}`],
+          ['Base64: inline value', curl('POST', '/v1/files/base64', { json: { name: 'hello.txt', contentType: 'text/plain', data: 'SGVsbG8sIHdvcmxkIQ==' } })],
+          ['Base64: data: URL (type taken from it)', curl('POST', '/v1/files/base64', { json: { name: 'hello.txt', data: 'data:text/plain;base64,SGVsbG8sIHdvcmxkIQ==' } })],
+          ['422: invalid base64', curl('POST', '/v1/files/base64', { include: true, json: { name: 'bad.txt', data: '*' } })],
+          ['tus: create the upload (copy UPLOAD_ID from Location)', curl('POST', '/v1/files/tus', { include: true, headers: { 'Tus-Resumable': '1.0.0', 'Upload-Length': '13', 'Upload-Metadata': 'filename aGVsbG8udHh0,filetype dGV4dC9wbGFpbg==' } })],
+          ['tus: send the bytes (X-File-Id appears when complete)', curl('PATCH', '/v1/files/tus/UPLOAD_ID', { include: true, headers: { 'Tus-Resumable': '1.0.0', 'Upload-Offset': '0' }, contentType: 'application/offset+octet-stream', file: './hello.txt' })],
+          ['tus: current offset (to resume)', curl('GET', '/v1/files/tus/UPLOAD_ID')],
+          ['tus: create and upload in one request', curl('POST', '/v1/files/tus', { include: true, headers: { 'Tus-Resumable': '1.0.0', 'Upload-Length': '13', 'Upload-Metadata': 'filename aGVsbG8udHh0' }, contentType: 'application/offset+octet-stream', file: './hello.txt' })],
+          ['Presigned — step 1: get a URL', curl('POST', '/v1/files/presign', { json: { method: 'PUT', name: 'blob.bin', contentType: 'application/octet-stream', expiresIn: 600 } })],
+          ['Presigned — step 2: PUT to the returned url (no credentials)', "curl -s -i -X PUT 'PRESIGNED_URL' -H 'Content-Type: application/octet-stream' --data-binary @./blob.bin"],
+          ['S3 API: PutObject with a folder-style key', s3('PUT', 'in/2026/blob.bin', { upload: './blob.bin' })],
+          ['S3 API: the same with the AWS CLI', aws(`s3 cp blob.bin s3://${S3.bucket}/in/2026/blob.bin`)],
         ],
       },
       'files.download': {

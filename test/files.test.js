@@ -44,6 +44,42 @@ test('raw PUT and POST with Content-Disposition', async () => {
   assert.equal(q.body.size, 3);
 });
 
+test('raw POST names: Content-Disposition, then X-Filename, then ?name=, else upload.bin', async () => {
+  const xf = await request(t.app).post('/v1/files/raw').set('Content-Type', 'text/plain').set('X-Filename', 'hello.txt').send('Hello, world!').expect(201);
+  assert.equal(xf.body.name, 'hello.txt');
+  assert.equal(xf.body.contentType, 'text/plain');
+  assert.equal(xf.body.sha256, sha(Buffer.from('Hello, world!')));
+  assert.match(xf.get('Location'), new RegExp(`/v1/files/${xf.body.id}$`));
+  const both = await request(t.app).post('/v1/files/raw?name=q.txt').set('Content-Type', 'application/octet-stream')
+    .set('Content-Disposition', 'attachment; filename="cd.bin"').set('X-Filename', 'xf.bin').send(Buffer.from('c')).expect(201);
+  assert.equal(both.body.name, 'cd.bin');
+  const qn = await request(t.app).post('/v1/files/raw?name=q.txt').set('Content-Type', 'text/plain').send('q').expect(201);
+  assert.equal(qn.body.name, 'q.txt');
+  const def = await request(t.app).post('/v1/files/raw').set('Content-Type', 'application/octet-stream').send(Buffer.from('d')).expect(201);
+  assert.equal(def.body.name, 'upload.bin');
+});
+
+test('upload error cases from the guide: 400 no-files, 415 not multipart, 400 empty raw body', async () => {
+  const noFile = await request(t.app).post('/v1/files/multipart').field('description', 'no file here').expect(400);
+  assert.equal(noFile.body.code, 'no-files');
+  assert.match(noFile.get('Content-Type'), /application\/problem\+json/);
+  await request(t.app).post('/v1/files/multipart').set('Content-Type', 'text/plain').send('not a form').expect(415);
+  const empty = await request(t.app).post('/v1/files/raw').set('Content-Type', 'application/octet-stream').send(Buffer.alloc(0)).expect(400);
+  assert.equal(empty.body.code, 'empty-body');
+});
+
+test('tus creation-with-upload completes in one request and returns X-File-Id', async () => {
+  const r = await request(t.app).post('/v1/files/tus').set('Tus-Resumable', '1.0.0').set('Upload-Length', '13')
+    .set('Upload-Metadata', `filename ${Buffer.from('hello.txt').toString('base64')}`)
+    .set('Content-Type', 'application/offset+octet-stream').send(Buffer.from('Hello, world!')).expect(201);
+  assert.equal(r.get('Upload-Offset'), '13');
+  const id = r.get('X-File-Id');
+  assert.ok(id, 'X-File-Id');
+  const f = await request(t.app).get(`/v1/files/${id}`).expect(200);
+  assert.equal(f.body.name, 'hello.txt');
+  assert.equal(f.body.size, 13);
+});
+
 test('base64 in and out', async () => {
   const data = Buffer.from('base64 payload ✓');
   const r = await request(t.app).post('/v1/files/base64').send({ name: 'b.txt', contentType: 'text/plain', data: data.toString('base64') }).expect(201);

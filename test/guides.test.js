@@ -4,6 +4,7 @@ const test = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
 const path = require('node:path');
+const os = require('node:os');
 const vm = require('node:vm');
 const crypto = require('node:crypto');
 const { execFileSync, spawnSync } = require('node:child_process');
@@ -132,6 +133,10 @@ test('every guide has steps and every curl is valid shell, in every auth mode', 
 
 test('the HMAC snippet signs exactly like the server', { skip: !hasOpenssl && 'openssl not available' }, () => {
   const C = makeCurl({ ...BASE_CTX, mode: 'hmac' });
+  // A JSON body sent from a file (signFile) is hashed like an inline body.
+  const jsonBody = JSON.stringify({ name: "it's.bin", data: 'AAEC' });
+  const jsonFile = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'att-guide-')), 'body.json');
+  fs.writeFileSync(jsonFile, jsonBody);
   const ts = '1700000000';
   const serverSig = (method, url, bodyHash) => crypto.createHmac('sha256', BASE_CTX.hmac.secret).update([method, url, ts, bodyHash].join('\n')).digest('base64');
   const body = { name: "O'Brien", code: 'RND' };
@@ -139,11 +144,45 @@ test('the HMAC snippet signs exactly like the server', { skip: !hasOpenssl && 'o
     ['GET', '/v1/employees?limit=2', {}, crypto.createHash('sha256').update('').digest('hex')],
     ['POST', '/v1/departments', { json: body }, crypto.createHash('sha256').update(JSON.stringify(body)).digest('hex')],
     ['POST', '/v1/files/multipart', { form: ['file=@x'] }, 'UNSIGNED-PAYLOAD'],
+    ['POST', '/v1/files/tus', { headers: { 'Tus-Resumable': '1.0.0', 'Upload-Length': '13' } }, crypto.createHash('sha256').update('').digest('hex')],
+    ['POST', '/v1/files/base64', { contentType: 'application/json', file: jsonFile, signFile: true }, crypto.createHash('sha256').update(jsonBody).digest('hex')],
   ];
   for (const [method, url, opts, hash] of cases) {
     const script = C.curl(method, url, opts).split('\n').filter((l) => /^(BODY|TS|SIG)=/.test(l)).join('\n').replace('TS=$(date +%s)', `TS=${ts}`);
     const sig = execFileSync('bash', ['-c', `${script}\nprintf %s "$SIG"`]).toString();
     assert.equal(sig, serverSig(method, url, hash), `${method} ${url}`);
+  }
+});
+
+test('the upload guides cover multipart, raw/octet-stream, base64, tus, presigned and S3, with error cases', () => {
+  for (const mode of MODES) {
+    const g = build(makeCurl({ ...BASE_CTX, mode }), { maxFileSizeMb: 12 });
+    const up = g['files.upload'];
+    const more = g['files.upload-more'];
+    assert.ok(up && more, 'files.upload and files.upload-more');
+    const cmd = (guide, re) => {
+      const hit = guide.curls.find(([l]) => re.test(l));
+      assert.ok(hit, `${mode}: no curl labelled ${re}`);
+      return hit[1];
+    };
+    assert.match(cmd(up, /two files \+ text fields/), /-F 'file=@\.\/hello\.txt;type=text\/plain'[\s\S]*-F 'file=@\.\/blob\.bin[\s\S]*-F 'batchId=B-1001'/);
+    const disp = cmd(up, /octet-stream, name from Content-Disposition/);
+    assert.match(disp, /-X POST[\s\\]*'[^']*\/v1\/files\/raw'/);
+    assert.match(disp, /Content-Disposition: attachment; filename="blob\.bin"/);
+    assert.match(disp, /Content-Type: application\/octet-stream/);
+    assert.match(disp, /--data-binary @\.\/blob\.bin/);
+    assert.match(cmd(up, /X-Filename/), /-H 'X-Filename: hello\.txt'/);
+    assert.match(cmd(up, /413/), /head -c 13631488 \/dev\/zero/);
+    assert.match(up.steps.join(' '), /now 12 MB/);
+    assert.match(cmd(up, /415/), /Content-Type: text\/plain/);
+    assert.match(cmd(more, /encode a file/), /openssl base64 -A -in blob\.bin/);
+    assert.match(cmd(more, /tus: send the bytes/), /-X PATCH[\s\S]*Upload-Offset: 0[\s\S]*application\/offset\+octet-stream/);
+    assert.match(cmd(more, /PutObject/), /--aws-sigv4/);
+    if (mode === 'hmac') {
+      // An empty-bodied tus create signs the empty-body hash, not UNSIGNED-PAYLOAD.
+      assert.match(cmd(more, /tus: create the upload/), /e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855/);
+      assert.match(cmd(more, /encode a file/), /openssl dgst -sha256 -r '\.\/blob\.json'/);
+    }
   }
 });
 

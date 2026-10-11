@@ -496,11 +496,17 @@ All protocols read from and write to **one pool**, local disk or S3. A file uplo
 | `GET /v1/files/{id}/download` | Streaming, `Range` → 206 / 416, `ETag`, `Last-Modified`, `Accept-Ranges`, `Content-Disposition` (`?inline=true`) |
 | `GET /v1/files/{id}/chunked` | `Transfer-Encoding: chunked` (no `Content-Length`) |
 
+Uploads return 201 with a `Location` header and the file's `id`, `size` and `sha256` (multipart returns `{files, fields}`). Errors are problem+json: 413 `file-too-large` over `MAX_FILE_SIZE_MB`, 400 `no-files` for a multipart body without a file part, 415 for a non-multipart body sent to `/multipart`, 400 `empty-body` for an empty raw upload. On the dashboard's Files page, the Upload card's **?** guides have ready-to-run curls for every upload protocol (including these error cases) in the active auth mode.
+
 Generated samples have stable ids: `sample-employees-csv`, `sample-products-csv`, `sample-data-xlsx`, `sample-data-json`, `sample-image-png`, `sample-image-jpg`, `sample-report-pdf`, `sample-readme-txt`, `sample-bundle-zip` (the others zipped), and `sample-large-bin` (10 MB, deterministic, for range tests).
 
 ```bash
+# multipart: one file, or several files plus text fields (returned under "fields")
 curl -s -F file=@report.pdf -F description=Q3 "$B/v1/files/multipart"
+curl -s -F 'file=@hello.txt;type=text/plain' -F 'file=@blob.bin;type=application/octet-stream' -F batchId=B-1001 "$B/v1/files/multipart"
+# raw body: name from the path, or (POST) from Content-Disposition, X-Filename or ?name=
 curl -s -X PUT --data-binary @photo.jpg -H 'Content-Type: image/jpeg' "$B/v1/files/raw/photo.jpg"
+curl -s -X POST --data-binary @blob.bin -H 'Content-Type: application/octet-stream' -H 'Content-Disposition: attachment; filename="blob.bin"' "$B/v1/files/raw"
 curl -s "$B/v1/files/base64" -H 'Content-Type: application/json' -d '{"name":"hi.txt","data":"aGVsbG8="}'
 curl -s -r 0-1023 -o part.bin -w '%{http_code}\n' "$B/v1/files/sample-large-bin/download"
 
