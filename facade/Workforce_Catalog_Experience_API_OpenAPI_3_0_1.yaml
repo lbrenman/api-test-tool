@@ -9,6 +9,8 @@ info:
 
     Design choices a real facade would make, and this one does:
 
+    - **Discover, then drill in.** `GET /people` and `GET /teams` list the business keys that the
+      profile and snapshot operations take.
     - **Business keys, not database ids.** People are addressed by `employeeNumber`, teams by
       department `code`, catalog items by `sku`. Backend integer ids never leave the facade.
     - **Data minimisation.** Profiles leave out salary, home address, geo coordinates and free-form
@@ -44,6 +46,87 @@ tags:
     description: Product search for storefronts and sales tools.
 
 paths:
+  /people:
+    get:
+      tags: [People]
+      operationId: searchPeople
+      summary: Search the people directory
+      description: |
+        Directory search that returns light summaries, so callers can find an employee number before
+        asking for a full profile. `q` matches given name, family name, email or employee number
+        (case-insensitive, substring). Results are sorted by family name, then given name.
+
+        Without `q` the facade pages straight through the backend. With `q` it searches name and
+        email fields in parallel and de-duplicates the results; a `q` matching more than 200 people
+        on any one field returns 400 `QUERY_TOO_BROAD`.
+      security:
+        - OAuth2ClientCredentials: [people.read]
+        - ApiKeyAuth: []
+      parameters:
+        - name: q
+          in: query
+          description: Name, email or employee number fragment.
+          schema:
+            type: string
+            minLength: 2
+            maxLength: 100
+          example: whit
+        - name: department
+          in: query
+          description: Department code.
+          schema:
+            $ref: '#/components/schemas/DepartmentCode'
+          example: ENG
+        - name: status
+          in: query
+          description: Employment status. Omit for both.
+          schema:
+            type: string
+            enum: [ACTIVE, INACTIVE]
+          example: ACTIVE
+        - name: pageSize
+          in: query
+          description: Entries per page.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 25
+        - name: pageToken
+          in: query
+          description: Opaque token from a previous page's `nextPageToken`. Valid only with the same filters.
+          schema:
+            type: string
+            maxLength: 512
+        - $ref: '#/components/parameters/CorrelationIdHeader'
+      responses:
+        '200':
+          description: A page of directory entries.
+          headers:
+            X-Correlation-Id:
+              $ref: '#/components/headers/CorrelationId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DirectoryPage'
+              examples:
+                nameSearch:
+                  $ref: '#/components/examples/DirectoryPageExample'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '502':
+          $ref: '#/components/responses/BadGateway'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '504':
+          $ref: '#/components/responses/GatewayTimeout'
+
   /people/{employeeNumber}:
     get:
       tags: [People]
@@ -163,6 +246,45 @@ paths:
           $ref: '#/components/responses/Conflict'
         '422':
           $ref: '#/components/responses/UnprocessableEntity'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '502':
+          $ref: '#/components/responses/BadGateway'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '504':
+          $ref: '#/components/responses/GatewayTimeout'
+
+  /teams:
+    get:
+      tags: [Teams]
+      operationId: listTeams
+      summary: List teams
+      description: |
+        Every department with its active headcount, sorted by name. Use a team's `code` with
+        `GET /teams/{departmentCode}/snapshot`. Unpaged: departments are a short reference list.
+      security:
+        - OAuth2ClientCredentials: [teams.read]
+        - ApiKeyAuth: []
+      parameters:
+        - $ref: '#/components/parameters/CorrelationIdHeader'
+      responses:
+        '200':
+          description: All teams.
+          headers:
+            X-Correlation-Id:
+              $ref: '#/components/headers/CorrelationId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TeamList'
+              examples:
+                allTeams:
+                  $ref: '#/components/examples/TeamListExample'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
         '429':
           $ref: '#/components/responses/TooManyRequests'
         '502':
@@ -681,6 +803,62 @@ components:
             type: string
             minLength: 1
             maxLength: 60
+    DirectoryEntry:
+      type: object
+      additionalProperties: false
+      required: [employeeNumber, displayName, jobTitle, email, department, employmentStatus]
+      properties:
+        employeeNumber:
+          $ref: '#/components/schemas/EmployeeNumber'
+        displayName:
+          type: string
+        jobTitle:
+          type: string
+        email:
+          type: string
+          format: email
+        department:
+          $ref: '#/components/schemas/DepartmentRef'
+        employmentStatus:
+          type: string
+          enum: [ACTIVE, INACTIVE]
+    DirectoryPage:
+      type: object
+      additionalProperties: false
+      required: [items, totalMatches, nextPageToken]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/DirectoryEntry'
+        totalMatches:
+          type: integer
+          minimum: 0
+        nextPageToken:
+          type: string
+          nullable: true
+          description: Token for the next page, or null on the last page.
+    TeamSummary:
+      type: object
+      additionalProperties: false
+      required: [code, name, activeHeadcount]
+      properties:
+        code:
+          $ref: '#/components/schemas/DepartmentCode'
+        name:
+          type: string
+        activeHeadcount:
+          type: integer
+          minimum: 0
+    TeamList:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/TeamSummary'
     TeamSnapshot:
       type: object
       additionalProperties: false
@@ -1074,6 +1252,42 @@ components:
             correlationId: 7d1f3c2e-9a4b-4c7e-8f21-5b0e6a9d3c11
 
   examples:
+    DirectoryPageExample:
+      summary: People whose name contains "whit"
+      value:
+        items:
+          - employeeNumber: EMP-000005
+            displayName: Dana Whitfield
+            jobTitle: Director of Platform Engineering
+            email: dana.whitfield@example.com
+            department:
+              code: ENG
+              name: Engineering
+            employmentStatus: ACTIVE
+          - employeeNumber: EMP-000142
+            displayName: Marcus Whitley
+            jobTitle: Regional Sales Manager
+            email: marcus.whitley@example.com
+            department:
+              code: SALES
+              name: Sales
+            employmentStatus: ACTIVE
+        totalMatches: 2
+        nextPageToken: null
+    TeamListExample:
+      summary: All departments
+      value:
+        items:
+          - {code: CS, name: Customer Success, activeHeadcount: 22}
+          - {code: ENG, name: Engineering, activeHeadcount: 24}
+          - {code: FIN, name: Finance, activeHeadcount: 21}
+          - {code: HR, name: Human Resources, activeHeadcount: 23}
+          - {code: LEGAL, name: Legal, activeHeadcount: 19}
+          - {code: MKT, name: Marketing, activeHeadcount: 25}
+          - {code: OPS, name: Operations, activeHeadcount: 22}
+          - {code: PROD, name: Product, activeHeadcount: 20}
+          - {code: SALES, name: Sales, activeHeadcount: 26}
+          - {code: SCM, name: Supply Chain, activeHeadcount: 23}
     PersonProfileExample:
       summary: A manager with direct reports
       value:

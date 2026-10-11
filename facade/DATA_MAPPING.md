@@ -8,10 +8,12 @@ HTTPS request; nothing here depends on a particular integration product.
 
 - [Backend setup](#backend-setup)
 - [Conventions used in every operation](#conventions-used-in-every-operation)
-- [1. GET /people/{employeeNumber}](#1-get-peopleemployeenumber--getpersonprofile)
-- [2. POST /people/hires](#2-post-peoplehires--createhire)
-- [3. GET /teams/{departmentCode}/snapshot](#3-get-teamsdepartmentcodesnapshot--getteamsnapshot)
-- [4. GET /catalog/items](#4-get-catalogitems--searchcatalogitems)
+- [1. GET /people](#1-get-people--searchpeople)
+- [2. GET /people/{employeeNumber}](#2-get-peopleemployeenumber--getpersonprofile)
+- [3. POST /people/hires](#3-post-peoplehires--createhire)
+- [4. GET /teams](#4-get-teams--listteams)
+- [5. GET /teams/{departmentCode}/snapshot](#5-get-teamsdepartmentcodesnapshot--getteamsnapshot)
+- [6. GET /catalog/items](#6-get-catalogitems--searchcatalogitems)
 - [Error mapping](#error-mapping)
 - [Error code catalog](#error-code-catalog)
 - [Facade configuration](#facade-configuration)
@@ -44,7 +46,7 @@ Reference data in the default seed:
 | `Accept` | `application/json` |
 | `X-Correlation-Id` | The caller's `X-Correlation-Id`, or a new UUID. The tool echoes it, and it shows in the tool's Inspector, so one id traces a facade call through every backend call. |
 | Backend credentials | Per the tool's `AUTH_MODE` (below). **Never** forward the caller's own `Authorization` or `X-API-Key`. |
-| `Idempotency-Key` | Only on `POST /v1/employees` (operation 2). |
+| `Idempotency-Key` | Only on `POST /v1/employees` (operation 3). |
 
 Return the same `X-Correlation-Id` to the caller on every response, including errors (`correlationId` in the problem body).
 
@@ -85,7 +87,72 @@ optimisation; the mappings are the same without it.
 
 ---
 
-## 1. GET /people/{employeeNumber} — getPersonProfile
+## 1. GET /people — searchPeople
+
+**Scope:** `people.read`. **Backend calls:** 1, or 3 in parallel for a name/email search.
+
+### Facade-side validation
+
+| Check | Error |
+|---|---|
+| `q` 2–100 characters, `department` matches `^[A-Z]{2,10}$`, `status` and `pageSize` valid | 400 `REQUEST_VALIDATION_FAILED` |
+| `pageToken` not decodable, or its filter hash differs from this request's | 400 `INVALID_PAGE_TOKEN` |
+
+An unknown `department` code is not an error: it matches nobody, so the page is empty.
+
+### Orchestration
+
+Every backend call below carries the common filters `F`:
+
+```
+F = [department.code={department}] [&isActive=true|false   (status ACTIVE | INACTIVE)]
+    &fields=employeeNumber,firstName,lastName,title,email,department,isActive
+```
+
+The embedded `department` object is filterable, so no department lookup is needed. Pick one of
+three strategies from `q`:
+
+```
+A. no q
+   GET B/v1/employees?{F}&sort=lastName,firstName&offset={o}&limit={pageSize}
+     totalMatches = meta.total
+
+B. q looks like an employee number (^EMP-?[0-9]*$, case-insensitive), or contains a space
+   EMP number:  GET B/v1/employees?{F}&employeeNumber[like]={q}&sort=lastName,firstName&offset={o}&limit={pageSize}
+   "dana whit": GET B/v1/employees?{F}&firstName[like]=dana&lastName[like]=whit&sort=…&offset={o}&limit={pageSize}
+                (first word → given name, the rest → family name)
+     totalMatches = meta.total
+
+C. any other q: three calls in parallel, each {F}&limit=200
+   GET B/v1/employees?{F}&firstName[like]={q}&limit=200
+   GET B/v1/employees?{F}&lastName[like]={q}&limit=200
+   GET B/v1/employees?{F}&email[like]={q}&limit=200
+     any meta.total > FACADE_SEARCH_FIELD_LIMIT (200)        → 400 QUERY_TOO_BROAD
+     merge the three data[] arrays, de-duplicate by employeeNumber,
+     sort by lastName, then firstName (case-insensitive), then employeeNumber
+     totalMatches = merged count; this page = merged[o, o + pageSize)
+```
+
+`[like]` is a case-insensitive substring match. URL-encode `q` in every call. Strategy C is the
+de-duplication pattern: one person can match on given name and on email, and must appear once.
+
+`nextPageToken` = `o + pageSize < totalMatches ? encode({o: o + pageSize, h: filterHash}) : null`, with
+the same token format as operation 6 (the hash covers `q`, `department` and `status`).
+
+### Response mapping (`DirectoryEntry`)
+
+| Facade field | Source | Rule |
+|---|---|---|
+| `employeeNumber` | `employeeNumber` | |
+| `displayName` | `firstName`, `lastName` | `firstName + " " + lastName` |
+| `jobTitle` | `title` | |
+| `email` | `email` | |
+| `department` | `department.code` / `.name` | embedded by `/v1` |
+| `employmentStatus` | `isActive` | `ACTIVE` / `INACTIVE` |
+
+---
+
+## 2. GET /people/{employeeNumber} — getPersonProfile
 
 **Scope:** `people.read`. **Backend calls:** 1, then 2 in parallel.
 
@@ -143,7 +210,7 @@ validate employeeNumber against ^EMP-[0-9]{6}$            → else 400 INVALID_E
 
 ---
 
-## 2. POST /people/hires — createHire
+## 3. POST /people/hires — createHire
 
 **Scope:** `people.write`. **Backend calls:** up to 3 lookups in parallel, then 1 create.
 
@@ -185,7 +252,7 @@ key = "facade-hire:" + Idempotency-Key       (namespaced: the tool's idempotency
 
 ③ 201 to the caller
      Location: {facadeBase}/people/{created.employeeNumber}
-     body: PersonProfile built from `created` as in operation 1, with
+     body: PersonProfile built from `created` as in operation 2, with
            manager = the employee from ①b (or null), directReports = {count: 0, items: []}
 ```
 
@@ -227,7 +294,35 @@ per email (a short lock) if that matters.
 
 ---
 
-## 3. GET /teams/{departmentCode}/snapshot — getTeamSnapshot
+## 4. GET /teams — listTeams
+
+**Scope:** `teams.read`. **Backend calls:** 1 + ⌈active employees / 200⌉, in parallel.
+
+```
+① in parallel:
+   a. GET B/v1/departments?sort=name&limit=200&fields=id,code,name
+   b. offset = 0; repeat
+        GET B/v1/employees?isActive=true&offset={offset}&limit=200&fields=departmentId
+        offset += 200
+      until offset >= meta.total
+② counts = number of b rows per departmentId
+   items  = a.data.map(d → {code: d.code, name: d.name, activeHeadcount: counts[d.id] ?? 0})
+```
+
+With the default seed (250 employees, about 225 active) ① b is two calls. A department with no active
+employees is still listed, with `activeHeadcount: 0`.
+
+**Caching (optional):** the list changes only when employees or departments change. Cache it for
+`FACADE_TEAMS_TTL_SECONDS`, and evict it from the same `employees` / `departments` webhooks as the
+snapshot cache (operation 5).
+
+**One-call OData alternative:**
+`GET B/odata/v4/Departments?$select=code,name&$orderby=name&$expand=employees($filter=isActive eq true;$count=true;$top=0)`
+returns each department with `employees@odata.count` and no employee rows.
+
+---
+
+## 5. GET /teams/{departmentCode}/snapshot — getTeamSnapshot
 
 **Scope:** `teams.read` (+ `compensation.read` for `payroll`). **Backend calls:** 1 + ⌈members / 200⌉.
 
@@ -284,7 +379,7 @@ variants separately.
 
 ---
 
-## 4. GET /catalog/items — searchCatalogItems
+## 6. GET /catalog/items — searchCatalogItems
 
 **Scope:** `catalog.read`. **Backend calls:** 1 (+1 for an uncached category lookup).
 
@@ -409,25 +504,26 @@ shared `X-Correlation-Id`.
 | `errorCode` | Status | Operation(s) |
 |---|---|---|
 | `REQUEST_VALIDATION_FAILED` | 400 | all |
-| `INVALID_EMPLOYEE_NUMBER` | 400 | 1 |
-| `INVALID_DEPARTMENT_CODE` | 400 | 3 |
-| `IDEMPOTENCY_KEY_REQUIRED` | 400 | 2 |
-| `CURRENCY_REQUIRED` | 400 | 4 |
-| `INVALID_PRICE_RANGE` | 400 | 4 |
-| `INVALID_PAGE_TOKEN` | 400 | 4 |
-| `UNKNOWN_CATEGORY` | 400 | 4 |
+| `INVALID_EMPLOYEE_NUMBER` | 400 | 2 |
+| `INVALID_DEPARTMENT_CODE` | 400 | 5 |
+| `IDEMPOTENCY_KEY_REQUIRED` | 400 | 3 |
+| `CURRENCY_REQUIRED` | 400 | 6 |
+| `INVALID_PRICE_RANGE` | 400 | 6 |
+| `INVALID_PAGE_TOKEN` | 400 | 1, 6 |
+| `UNKNOWN_CATEGORY` | 400 | 6 |
+| `QUERY_TOO_BROAD` | 400 | 1 |
 | `AUTHENTICATION_REQUIRED` | 401 | all |
 | `INSUFFICIENT_SCOPE` | 403 | all |
-| `PERSON_NOT_FOUND` | 404 | 1 |
-| `TEAM_NOT_FOUND` | 404 | 3 |
-| `PERSON_ALREADY_EXISTS` | 409 | 2 |
-| `IDEMPOTENCY_KEY_REUSED` | 409 | 2 |
-| `UNKNOWN_DEPARTMENT` | 422 | 2 |
-| `UNKNOWN_MANAGER` | 422 | 2 |
-| `MANAGER_INACTIVE` | 422 | 2 |
-| `START_DATE_TOO_EARLY` | 422 | 2 |
-| `UNSUPPORTED_SALARY_CURRENCY` | 422 | 2 |
-| `BACKEND_VALIDATION_FAILED` | 422 | 2 |
+| `PERSON_NOT_FOUND` | 404 | 2 |
+| `TEAM_NOT_FOUND` | 404 | 5 |
+| `PERSON_ALREADY_EXISTS` | 409 | 3 |
+| `IDEMPOTENCY_KEY_REUSED` | 409 | 3 |
+| `UNKNOWN_DEPARTMENT` | 422 | 3 |
+| `UNKNOWN_MANAGER` | 422 | 3 |
+| `MANAGER_INACTIVE` | 422 | 3 |
+| `START_DATE_TOO_EARLY` | 422 | 3 |
+| `UNSUPPORTED_SALARY_CURRENCY` | 422 | 3 |
+| `BACKEND_VALIDATION_FAILED` | 422 | 3 |
 | `RATE_LIMIT_EXCEEDED` | 429 | all (the facade's own limit) |
 | `BACKEND_REJECTED_REQUEST` | 502 | all |
 | `BACKEND_AUTH_FAILED` | 502 | all |
@@ -444,10 +540,12 @@ shared `X-Correlation-Id`.
 | Backend credentials | — | all, per the tool's `AUTH_MODE` |
 | `FACADE_BACKEND_TIMEOUT_MS` | `5000` | all (per backend call) |
 | `FACADE_REQUEST_TIMEOUT_MS` | `10000` | all (whole facade request) |
-| `FACADE_PAYROLL_CURRENCY` | `USD` | 2, 3 |
-| `FACADE_LOW_STOCK_THRESHOLD` | `25` | 4 |
-| `FACADE_DIRECT_REPORTS_MAX` | `50` | 1 (must not exceed the spec's `maxItems`) |
-| `FACADE_SNAPSHOT_TTL_SECONDS` | `0` (off) | 3 |
+| `FACADE_PAYROLL_CURRENCY` | `USD` | 3, 5 |
+| `FACADE_LOW_STOCK_THRESHOLD` | `25` | 6 |
+| `FACADE_DIRECT_REPORTS_MAX` | `50` | 2 (must not exceed the spec's `maxItems`) |
+| `FACADE_SNAPSHOT_TTL_SECONDS` | `0` (off) | 5 |
+| `FACADE_SEARCH_FIELD_LIMIT` | `200` | 1 (per-field match cap before `QUERY_TOO_BROAD`) |
+| `FACADE_TEAMS_TTL_SECONDS` | `0` (off) | 4 |
 | `FACADE_FORWARD_CHAOS_HEADERS` | `false` | all (non-production only) |
 
 ## Alternative backends: GraphQL and OData

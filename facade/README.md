@@ -9,14 +9,18 @@ data minimisation, idempotent writes and backend error mapping against a realist
 |---|---|
 | [`Workforce_Catalog_Experience_API_OpenAPI_3_0_1.yaml`](Workforce_Catalog_Experience_API_OpenAPI_3_0_1.yaml) | The facade contract (OpenAPI 3.0.1), with examples for every response |
 | [`DATA_MAPPING.md`](DATA_MAPPING.md) | For each operation: the backend calls, their order, field-by-field mappings, aggregation rules, error mapping and configuration |
-| [`facade-app.html`](facade-app.html) | **Facade Console**: a single-file, mobile-friendly web app that exercises all four operations (no build, no dependencies) |
+| [`facade-app.html`](facade-app.html) | **Facade Console**: a single-file, mobile-friendly web app that exercises all six operations (no build, no dependencies) |
 
-## The four operations
+## The six operations
+
+Two list operations let callers discover business keys; the other four drill in or act.
 
 | Operation | What the facade does | Backend calls |
 |---|---|---|
+| `GET /people` | Directory search by name, email or employee number, filtered by department and status; light summaries only. A name search runs given name, family name and email in parallel and de-duplicates | 1, or 3 in parallel |
 | `GET /people/{employeeNumber}` | 360° profile: employee, department, manager and active direct reports; salary, home address and metadata removed; tenure and certification status derived | 1, then 2 in parallel |
 | `POST /people/hires` | Onboarding: resolves department by code and manager by employee number, rejects duplicate emails, creates the record idempotently, returns the new profile | 3 in parallel, then 1 create |
+| `GET /teams` | Every department with its active headcount, counted from the employee records | 1 + 1 per 200 active employees, in parallel |
 | `GET /teams/{departmentCode}/snapshot` | Aggregates a whole department: headcount, level mix, tenure, top skills, certification coverage, ratings, and payroll for callers with `compensation.read` | 1 + one per 200 members |
 | `GET /catalog/items` | Storefront search: category, availability, price-in-currency and tag filters, business sort orders, opaque page tokens, derived stock status | 1 (+1 uncached category lookup) |
 
@@ -57,9 +61,9 @@ targets, no horizontal scrolling, light and dark themes.
 
 | Tab | What it does |
 |---|---|
-| **People** | Look up a profile; tap the manager or a direct report to open theirs |
+| **People** | Search the directory (name, email or employee number, plus department and status filters), tap a person for their profile, then tap the manager or a direct report to open theirs. Typing a full employee number opens that profile directly |
 | **Hire** | Submit a hire. The `Idempotency-Key` is kept when you resubmit the same form (a safe retry) and replaced when you change it; on success, open the new profile |
-| **Teams** | Department snapshot with tiles and bar charts; payroll shows only when the facade returns it |
+| **Teams** | The list of teams with active headcounts; tap one for its snapshot with tiles and bar charts (payroll shows only when the facade returns it) |
 | **Catalog** | Search with every filter and sort, and **Load more** through `nextPageToken` |
 | **Settings** | Facade base URL, authentication, extra headers, theme, and **Test connection** |
 

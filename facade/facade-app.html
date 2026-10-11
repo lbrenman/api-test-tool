@@ -184,18 +184,32 @@
 <main>
   <!-- PEOPLE -->
   <section class="panel active" id="panel-people" role="tabpanel">
-    <h2>Person profile</h2>
-    <p class="sub"><span class="mono">GET /people/{employeeNumber}</span> — employee, manager and direct reports in one call.</p>
-    <form class="card" id="peopleForm" autocomplete="off">
-      <div class="row">
-        <div class="grow">
-          <label for="empNo">Employee number</label>
-          <input id="empNo" placeholder="EMP-000005" value="EMP-000005" pattern="EMP-[0-9]{6}" autocapitalize="characters" required>
+    <div id="peopleSearchView">
+      <h2>People</h2>
+      <p class="sub"><span class="mono">GET /people</span> — search the directory, then tap a person for their profile.</p>
+      <form class="card" id="peopleForm" autocomplete="off">
+        <div class="row">
+          <div class="grow">
+            <label for="p_q">Name, email or employee number</label>
+            <input id="p_q" type="search" placeholder="e.g. whit or EMP-000005" maxlength="100" enterkeyhint="search">
+          </div>
+          <button class="btn" type="submit">Search</button>
         </div>
-        <button class="btn" type="submit">Look up</button>
-      </div>
-    </form>
-    <div id="peopleOut"></div>
+        <div class="grid tight" style="margin-top:12px">
+          <div class="field"><label for="p_dept">Department</label>
+            <select id="p_dept"><option value="">Any</option><option value="CS">Customer Success</option><option value="ENG">Engineering</option><option value="FIN">Finance</option><option value="HR">Human Resources</option><option value="LEGAL">Legal</option><option value="MKT">Marketing</option><option value="OPS">Operations</option><option value="PROD">Product</option><option value="SALES">Sales</option><option value="SCM">Supply Chain</option></select></div>
+          <div class="field"><label for="p_status">Status</label>
+            <select id="p_status"><option value="">Any</option><option value="ACTIVE" selected>Active</option><option value="INACTIVE">Inactive</option></select></div>
+        </div>
+      </form>
+      <div id="peopleList"></div>
+    </div>
+    <div id="peopleProfileView" class="hidden">
+      <div class="actions" style="margin:0 0 12px"><button class="btn secondary small" type="button" id="backToPeople">‹ People</button></div>
+      <h2>Person profile</h2>
+      <p class="sub"><span class="mono">GET /people/{employeeNumber}</span> — employee, manager and direct reports in one call.</p>
+      <div id="peopleOut"></div>
+    </div>
   </section>
 
   <!-- HIRE -->
@@ -244,16 +258,17 @@
 
   <!-- TEAM -->
   <section class="panel" id="panel-team" role="tabpanel">
-    <h2>Team snapshot</h2>
-    <p class="sub"><span class="mono">GET /teams/{departmentCode}/snapshot</span> — headcount, levels, tenure, skills and (with the scope) payroll.</p>
-    <form class="card" id="teamForm" autocomplete="off">
-      <div class="row">
-        <div class="grow"><label for="deptCode">Department code</label>
-          <input id="deptCode" list="deptCodes" value="ENG" pattern="[A-Z]{2,10}" autocapitalize="characters" required></div>
-        <button class="btn" type="submit">Load</button>
-      </div>
-    </form>
-    <div id="teamOut"></div>
+    <div id="teamListView">
+      <h2>Teams</h2>
+      <p class="sub"><span class="mono">GET /teams</span> — every department with its active headcount. Tap one for its snapshot.</p>
+      <div id="teamList"></div>
+    </div>
+    <div id="teamSnapView" class="hidden">
+      <div class="actions" style="margin:0 0 12px"><button class="btn secondary small" type="button" id="backToTeams">‹ Teams</button></div>
+      <h2>Team snapshot</h2>
+      <p class="sub"><span class="mono">GET /teams/{departmentCode}/snapshot</span> — headcount, levels, tenure, skills and (with the scope) payroll.</p>
+      <div id="teamOut"></div>
+    </div>
   </section>
 
   <!-- CATALOG -->
@@ -592,7 +607,7 @@ function personRow(p, onClick) {
     h('span', { class: 'arrow', 'aria-hidden': 'true' }, '›')));
 }
 function renderProfile(p) {
-  const goto = (num) => () => { $('#empNo').value = num; lookupPerson(); window.scrollTo({ top: 0, behavior: 'smooth' }); };
+  const goto = (num) => () => { lookupPerson(num); window.scrollTo({ top: 0, behavior: 'smooth' }); };
   const certPill = (s) => h('span', { class: 'pill ' + ({ VALID: 'ok', NO_EXPIRY: 'ok', EXPIRING_SOON: 'warn', EXPIRED: 'bad' }[s] || '') }, human(s));
   const loc = p.contact && p.contact.workLocation;
   return h('div', null,
@@ -624,10 +639,69 @@ function renderProfile(p) {
         h('div', null, h('b', null, c.name), h('div', { class: 'sub', style: 'margin:0;font-size:12px' }, `Issued ${fmtDate(c.issuedOn)}${c.expiresOn ? ' · expires ' + fmtDate(c.expiresOn) : ''}`)),
         certPill(c.status)))) : h('div', { class: 'sub', style: 'margin:0' }, 'None')));
 }
-async function lookupPerson() {
+// People: search → list → profile. Profiles opened from the list (or from manager/report links)
+// keep a small history so "‹ People" returns to the results where you left them.
+let peopleState = { query: null, items: [], next: null, total: 0, last: null, searched: false };
+function showPeopleView(which) {
+  $('#peopleSearchView').classList.toggle('hidden', which !== 'search');
+  $('#peopleProfileView').classList.toggle('hidden', which !== 'profile');
+  window.scrollTo({ top: 0 });
+}
+function peopleQuery() {
+  return { q: $('#p_q').value.trim(), department: $('#p_dept').value, status: $('#p_status').value, pageSize: 25 };
+}
+function directoryRow(p) {
+  return h('li', null, h('button', { class: 'link-row', type: 'button', onclick: () => openProfile(p.employeeNumber) },
+    h('span', { class: 'avatar mini-avatar' }, initials(p.displayName)),
+    h('span', { class: 'who' }, h('b', null, p.displayName),
+      h('small', null, `${p.jobTitle || '—'} · ${p.department.name} · ${p.employeeNumber}`)),
+    p.employmentStatus === 'INACTIVE' ? h('span', { class: 'pill bad' }, 'Inactive') : null,
+    h('span', { class: 'arrow', 'aria-hidden': 'true' }, '›')));
+}
+function renderPeopleList() {
+  const out = $('#peopleList');
+  const r = peopleState.last;
+  const kids = [statusLine(r)];
+  if (!r.ok) { out.replaceChildren(...kids, problemCard(r)); return; }
+  kids.push(h('div', { class: 'sub' }, `${peopleState.total} ${peopleState.total === 1 ? 'person' : 'people'} · showing ${peopleState.items.length}`));
+  kids.push(peopleState.items.length
+    ? h('div', { class: 'card', style: 'padding:4px 16px' }, h('ul', { class: 'list' }, peopleState.items.map(directoryRow)))
+    : h('div', { class: 'empty' }, 'Nobody matches this search.'));
+  if (peopleState.next) kids.push(h('div', { class: 'actions', style: 'justify-content:center;margin-top:4px' }, h('button', { class: 'btn secondary', type: 'button', onclick: morePeople }, 'Load more')));
+  kids.push(rawBlock(r));
+  out.replaceChildren(...kids);
+}
+async function searchPeople(e) {
+  if (e) e.preventDefault();
+  const out = $('#peopleList');
+  const q = peopleQuery();
+  // An exact employee number skips the list and opens the profile.
+  if (/^EMP-[0-9]{6}$/i.test(q.q)) { openProfile(q.q.toUpperCase()); return; }
+  if (q.q && q.q.length < 2) { out.replaceChildren(errorCard(new UiError('Search too short', 'Type at least 2 characters.'))); return; }
+  peopleState = { query: q, items: [], next: null, total: 0, last: null, searched: true };
+  loading(out);
+  await run(out, async () => {
+    const r = await api('GET', '/people', { query: q });
+    peopleState.last = r;
+    if (r.ok && r.body) { peopleState.items = r.body.items; peopleState.next = r.body.nextPageToken; peopleState.total = r.body.totalMatches; }
+    renderPeopleList();
+  });
+}
+async function morePeople() {
+  const out = $('#peopleList');
+  await run(out, async () => {
+    const r = await api('GET', '/people', { query: { ...peopleState.query, pageToken: peopleState.next } });
+    peopleState.last = r;
+    if (r.ok && r.body) { peopleState.items = peopleState.items.concat(r.body.items); peopleState.next = r.body.nextPageToken; peopleState.total = r.body.totalMatches; }
+    renderPeopleList();
+  });
+}
+function openProfile(num) {
+  showPeopleView('profile');
+  lookupPerson(num);
+}
+async function lookupPerson(num) {
   const out = $('#peopleOut');
-  const num = $('#empNo').value.trim().toUpperCase();
-  $('#empNo').value = num;
   if (!/^EMP-[0-9]{6}$/.test(num)) { out.replaceChildren(errorCard(new UiError('Invalid employee number', 'Use the format EMP-000123.'))); return; }
   loading(out);
   await run(out, async () => {
@@ -673,7 +747,7 @@ async function submitHire(e) {
           h('div', { style: 'font-weight:700;color:var(--ok);margin-bottom:4px' }, `Hired ${r.body.displayName} as ${num}`),
           r.headers.location ? h('div', { class: 'mono' }, `Location: ${r.headers.location}`) : null,
           h('div', { class: 'actions', style: 'margin-top:10px' },
-            h('button', { class: 'btn small', type: 'button', onclick: () => { $('#empNo').value = num; selectTab('people'); lookupPerson(); } }, 'Open profile'),
+            h('button', { class: 'btn small', type: 'button', onclick: () => { selectTab('people'); openProfile(num); } }, 'Open profile'),
             h('button', { class: 'btn secondary small', type: 'button', onclick: () => { newKey(); toast('New idempotency key'); } }, 'Start another hire'))),
         rawBlock(r));
     } else out.replaceChildren(statusLine(r), problemCard(r));
@@ -712,11 +786,38 @@ function renderTeam(s) {
           h('dt', null, 'Median salary'), h('dd', null, fmtMoney(s.payroll.medianSalary))))
       : h('div', { class: 'card sub', style: 'margin-bottom:14px' }, 'Payroll hidden — the caller lacks the compensation.read scope.'));
 }
-async function loadTeam(e) {
-  if (e) e.preventDefault();
+let teamsLoaded = false;
+function showTeamView(which) {
+  $('#teamListView').classList.toggle('hidden', which !== 'list');
+  $('#teamSnapView').classList.toggle('hidden', which !== 'snap');
+  window.scrollTo({ top: 0 });
+}
+async function loadTeams() {
+  const out = $('#teamList');
+  loading(out);
+  await run(out, async () => {
+    const r = await api('GET', '/teams');
+    if (!r.ok || !r.body) { out.replaceChildren(statusLine(r), problemCard(r)); return; }
+    teamsLoaded = true;
+    const items = r.body.items;
+    const max = Math.max(1, ...items.map((t) => t.activeHeadcount));
+    const total = items.reduce((a, t) => a + t.activeHeadcount, 0);
+    out.replaceChildren(statusLine(r),
+      h('div', { class: 'sub' }, `${items.length} teams · ${total} active employees`),
+      h('div', { class: 'card', style: 'padding:4px 16px' }, h('ul', { class: 'list' }, items.map((t) => h('li', null,
+        h('button', { class: 'link-row', type: 'button', onclick: () => openTeam(t.code) },
+          h('span', { class: 'who' }, h('b', null, t.name), h('small', null, t.code)),
+          h('span', { class: 'track', style: 'width:28%;max-width:160px;height:8px;background:var(--surface-2);border-radius:999px;overflow:hidden;display:block' },
+            h('span', { style: `display:block;height:100%;width:${(t.activeHeadcount / max) * 100}%;background:var(--accent);border-radius:999px` })),
+          h('span', { class: 'n', style: 'width:28px;text-align:right;font-variant-numeric:tabular-nums' }, t.activeHeadcount),
+          h('span', { class: 'arrow', 'aria-hidden': 'true' }, '›')))))),
+      h('div', { class: 'actions', style: 'justify-content:center' }, h('button', { class: 'btn secondary small', type: 'button', onclick: loadTeams }, 'Refresh')),
+      rawBlock(r));
+  });
+}
+function openTeam(code) { showTeamView('snap'); loadTeam(code); }
+async function loadTeam(code) {
   const out = $('#teamOut');
-  const code = $('#deptCode').value.trim().toUpperCase();
-  $('#deptCode').value = code;
   loading(out);
   await run(out, async () => {
     const r = await api('GET', `/teams/${encodeURIComponent(code)}/snapshot`);
@@ -839,7 +940,29 @@ const DEMO = (() => {
       releaseDate: `202${3 + (i % 3)}-0${1 + (i % 9)}-1${i % 9}`, discontinued: i % 11 === 10, lastUpdatedAt: '2025-08-19T09:41:07Z',
     };
   });
-  return { people, teams, items };
+  // Directory: the profiles above plus generated people, so search has something to find.
+  const depts = [['ENG', 'Engineering'], ['SALES', 'Sales'], ['MKT', 'Marketing'], ['FIN', 'Finance'], ['HR', 'Human Resources'],
+    ['OPS', 'Operations'], ['CS', 'Customer Success'], ['LEGAL', 'Legal'], ['PROD', 'Product'], ['SCM', 'Supply Chain']];
+  const given = ['Ava', 'Ben', 'Chloé', 'Diego', 'Elena', 'Farah', 'Gus', 'Hana', 'Ivan', 'Jade', 'Kofi', 'Lena', 'Mateo', 'Nora', 'Omar', 'Priyanka', 'Quinn', 'Rosa', 'Sven', 'Tara'];
+  const family = ['Okafor', 'Lindqvist', 'Moreau', 'Tanaka', 'Haddad', 'Novak', 'Brennan', 'Silva', 'Kowalski', 'Ahmed', 'Whitaker', 'Duarte', 'Fischer', 'Nakamura', "O'Neill"];
+  const titles = ['Analyst', 'Engineer', 'Specialist', 'Manager', 'Coordinator', 'Lead', 'Associate', 'Consultant'];
+  const directory = [
+    { employeeNumber: 'EMP-000005', displayName: 'Dana Whitfield', jobTitle: dana.jobTitle, email: dana.email, department: { code: 'ENG', name: 'Engineering' }, employmentStatus: 'ACTIVE' },
+    { ...reports[0], department: { code: 'ENG', name: 'Engineering' }, employmentStatus: 'ACTIVE' },
+    { ...reports[1], department: { code: 'ENG', name: 'Engineering' }, employmentStatus: 'ACTIVE' },
+    { employeeNumber: 'EMP-000142', displayName: 'Marcus Whitley', jobTitle: 'Regional Sales Manager', email: 'marcus.whitley@example.com', department: { code: 'SALES', name: 'Sales' }, employmentStatus: 'ACTIVE' },
+  ];
+  for (let i = 0; i < 64; i++) {
+    const g = given[(i * 7) % given.length]; const f = family[(i * 11) % family.length]; const [code, name] = depts[i % depts.length];
+    const num = 'EMP-' + String(10 + i * 3).padStart(6, '0');
+    if (directory.some((d) => d.employeeNumber === num)) continue;
+    directory.push({
+      employeeNumber: num, displayName: `${g} ${f}`, jobTitle: `${name} ${titles[i % titles.length]}`,
+      email: `${g}.${f}`.toLowerCase().normalize('NFD').replace(/[^a-z.]/g, '') + '@example.com',
+      department: { code, name }, employmentStatus: i % 9 === 8 ? 'INACTIVE' : 'ACTIVE',
+    });
+  }
+  return { people, teams, items, directory, profile };
 })();
 function problem(status, title, errorCode, detail, violations) {
   return { status, body: { type: 'https://api.example.com/problems/' + errorCode.toLowerCase().replace(/_/g, '-'), title, status, detail, errorCode, violations } };
@@ -848,8 +971,14 @@ async function demoCall(method, url, path, query, body, correlationId) {
   await new Promise((r) => setTimeout(r, 180 + Math.random() * 220));
   let out;
   let m;
-  if (method === 'GET' && (m = path.match(/^\/people\/(EMP-[0-9]{6})$/))) {
-    const p = DEMO.people[m[1]];
+  if (method === 'GET' && path === '/people') {
+    out = demoDirectory(query);
+  } else if (method === 'GET' && path === '/teams') {
+    out = { status: 200, body: { items: Object.keys(DEPT_NAMES).concat('ENG').map((code) => ({ code, name: code === 'ENG' ? 'Engineering' : DEPT_NAMES[code], activeHeadcount: (DEMO.teams[code] || scaledTeam(code)).headcount.active }))
+      .sort((a, b) => a.name.localeCompare(b.name)) } };
+  } else if (method === 'GET' && (m = path.match(/^\/people\/(EMP-[0-9]{6})$/))) {
+    const d = DEMO.directory.find((x) => x.employeeNumber === m[1]);
+    const p = DEMO.people[m[1]] || (d ? DEMO.profile(d, { department: d.department, employmentStatus: d.employmentStatus }) : null);
     out = p ? { status: 200, body: JSON.parse(JSON.stringify(strip(p))) } : problem(404, 'Not found', 'PERSON_NOT_FOUND', `No person with employee number ${m[1]}.`);
   } else if (method === 'POST' && path === '/people/hires') {
     out = demoHire(body);
@@ -883,7 +1012,8 @@ function demoHire(b) {
   if (!/^(ENG|SALES|MKT|FIN|HR|OPS|CS|LEGAL|PROD|SCM)$/.test(b.departmentCode)) return problem(422, 'Business rule violation', 'UNKNOWN_DEPARTMENT', `Department code ${b.departmentCode} does not exist.`, [{ field: 'departmentCode', message: `No department with code ${b.departmentCode}.` }]);
   if (b.managerEmployeeNumber && !DEMO.people[b.managerEmployeeNumber]) return problem(422, 'Business rule violation', 'UNKNOWN_MANAGER', `No employee ${b.managerEmployeeNumber}.`, [{ field: 'managerEmployeeNumber', message: 'Unknown employee number.' }]);
   if (b.annualSalary.currency !== 'USD') return problem(422, 'Business rule violation', 'UNSUPPORTED_SALARY_CURRENCY', 'Salaries are recorded in USD.', [{ field: 'annualSalary.currency', message: 'Must be USD.' }]);
-  const existing = Object.values(DEMO.people).find((p) => p.email.toLowerCase() === b.email.toLowerCase());
+  const existing = Object.values(DEMO.people).find((p) => p.email.toLowerCase() === b.email.toLowerCase())
+    || DEMO.directory.find((p) => p.email.toLowerCase() === b.email.toLowerCase());
   if (existing) {
     if (existing._key && existing._key === $('#h_key').value.trim()) return { status: 201, body: strip(existing), headers: { location: '/workforce-catalog/v1/people/' + existing.employeeNumber } };
     return problem(409, 'Person already exists', 'PERSON_ALREADY_EXISTS', `An employee with this email already exists (${existing.employeeNumber}).`);
@@ -900,7 +1030,29 @@ function demoHire(b) {
     hasPhoto: false, lastUpdatedAt: new Date().toISOString(),
   };
   DEMO.people[num] = { ...p, _key: $('#h_key').value.trim() };
+  DEMO.directory.push({ employeeNumber: num, displayName: p.displayName, jobTitle: p.jobTitle, email: p.email, department: p.department, employmentStatus: 'ACTIVE' });
   return { status: 201, body: p, headers: { location: '/workforce-catalog/v1/people/' + num } };
+}
+function surname(name) { return name.split(' ').slice(1).join(' '); }
+function demoDirectory(q) {
+  const needle = (q.q || '').toLowerCase();
+  if (needle && needle.length < 2) return problem(400, 'Invalid request', 'REQUEST_VALIDATION_FAILED', 'q must be at least 2 characters.', [{ field: 'q', message: 'Minimum length is 2.' }]);
+  let list = DEMO.directory.filter((p) => {
+    if (q.department && p.department.code !== q.department) return false;
+    if (q.status && p.employmentStatus !== q.status) return false;
+    if (!needle) return true;
+    if (/\s/.test(needle)) {
+      const [first, ...rest] = needle.split(/\s+/);
+      return p.displayName.split(' ')[0].toLowerCase().includes(first) && surname(p.displayName).toLowerCase().includes(rest.join(' '));
+    }
+    return [p.displayName, p.email, p.employeeNumber].some((v) => v.toLowerCase().includes(needle));
+  });
+  list.sort((a, b) => surname(a.displayName).localeCompare(surname(b.displayName), undefined, { sensitivity: 'base' })
+    || a.displayName.localeCompare(b.displayName) || a.employeeNumber.localeCompare(b.employeeNumber));
+  const size = Math.min(100, Math.max(1, Number(q.pageSize) || 25));
+  let offset = 0;
+  if (q.pageToken) { try { offset = JSON.parse(atob(q.pageToken)).o; } catch { return problem(400, 'Invalid request', 'INVALID_PAGE_TOKEN', 'The page token is not valid.'); } }
+  return { status: 200, body: { items: list.slice(offset, offset + size), totalMatches: list.length, nextPageToken: offset + size < list.length ? btoa(JSON.stringify({ o: offset + size })) : null } };
 }
 function strip(p) { const c = { ...p }; delete c._key; return c; }
 function demoSearch(q) {
@@ -962,11 +1114,18 @@ showTokenInfo();
 newKey();
 (() => { const d = new Date(Date.now() + 21 * 864e5); $('#h_start').value = d.toISOString().slice(0, 10); })();
 
-$$('nav.tabs button').forEach((b) => b.addEventListener('click', () => selectTab(b.dataset.tab)));
-$('#peopleForm').addEventListener('submit', (e) => { e.preventDefault(); lookupPerson(); });
+$$('nav.tabs button').forEach((b) => b.addEventListener('click', () => {
+  selectTab(b.dataset.tab);
+  if (b.dataset.tab === 'people' && !peopleState.searched && !$('#peopleSearchView').classList.contains('hidden')) searchPeople();
+  if (b.dataset.tab === 'team' && !teamsLoaded && !$('#teamListView').classList.contains('hidden')) loadTeams();
+}));
+$('#peopleForm').addEventListener('submit', searchPeople);
+$('#p_dept').addEventListener('change', () => searchPeople());
+$('#p_status').addEventListener('change', () => searchPeople());
+$('#backToPeople').addEventListener('click', () => { showPeopleView('search'); if (!peopleState.searched) searchPeople(); });
+$('#backToTeams').addEventListener('click', () => { showTeamView('list'); if (!teamsLoaded) loadTeams(); });
 $('#hireForm').addEventListener('submit', submitHire);
 $('#newKey').addEventListener('click', () => { newKey(); toast('New idempotency key'); });
-$('#teamForm').addEventListener('submit', loadTeam);
 $('#catForm').addEventListener('submit', searchCatalog);
 $('#toggleFilters').addEventListener('click', (e) => {
   const box = $('#moreFilters'); const open = box.classList.toggle('hidden') === false;
@@ -980,6 +1139,8 @@ $('#settingsForm').addEventListener('submit', (e) => {
   formToSettings();
   if (prevKey !== `${settings.tokenUrl}|${settings.cid}|${settings.csecret}|${settings.scope}|${settings.clientAuth}`) { token = null; showTokenInfo(); }
   persistSettings(); applyTheme(); updateConn();
+  peopleState.searched = false; teamsLoaded = false; showPeopleView('search'); showTeamView('list');
+  $('#peopleList').replaceChildren(); $('#teamList').replaceChildren();
   toast(settings.remember ? 'Settings saved on this device' : 'Settings applied (not stored)');
 });
 $('#testConn').addEventListener('click', testConnection);
@@ -987,7 +1148,8 @@ $('#resetSettings').addEventListener('click', () => {
   if (!confirm('Reset all settings and forget stored credentials?')) return;
   settings = { ...DEFAULTS }; token = null;
   try { localStorage.removeItem(STORE); } catch { /* ignore */ }
-  settingsToForm(); applyTheme(); updateConn(); showTokenInfo(); $('#testOut').replaceChildren(); toast('Settings reset');
+  settingsToForm(); applyTheme(); updateConn(); showTokenInfo(); $('#testOut').replaceChildren();
+  peopleState.searched = false; teamsLoaded = false; $('#peopleList').replaceChildren(); $('#teamList').replaceChildren(); toast('Settings reset');
 });
 $('#getToken').addEventListener('click', async () => {
   formToSettings();
@@ -1000,7 +1162,8 @@ $('#clearToken').addEventListener('click', () => { token = null; showTokenInfo()
 let startTab = settings.demo || settings.base ? 'people' : 'settings';
 try { startTab = sessionStorage.getItem('facadeConsole.tab') || startTab; } catch { /* ignore */ }
 selectTab(startTab);
-if (startTab === 'people') lookupPerson();
+if (startTab === 'people') searchPeople();
+if (startTab === 'team') loadTeams();
 </script>
 </body>
 </html>
