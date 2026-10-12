@@ -1081,9 +1081,15 @@ fly status                                 # one machine; if there are two: fly 
 - **Update** a running app: `git pull`, then `fly deploy`. The volume stays attached, so data, files, settings and webhooks carry over.
 - **Start over:** deleting the app (`fly apps destroy`) also deletes its volume and everything on it. Run the steps above again for a fresh, re-seeded app.
 
-`fly.toml` mounts `/data` for SQLite and the file pool, and health-checks `/health`. `PUBLIC_BASE_URL` is detected from `FLY_APP_NAME`.
+`fly.toml` mounts `/data` for SQLite and the file pool, and health-checks `/health`. `PUBLIC_BASE_URL` is detected from `FLY_APP_NAME`. It also sets:
 
-The `/data` volume is enough for a single machine. Use a bucket for the file pool (`FILE_STORE=s3`) when you run more than one machine (volumes are per machine; move the database to `DB_DRIVER=postgres` too), or when you want presigned URLs to go to a real bucket. Fly's Tigris storage is S3-compatible:
+- **Concurrency** (`[http_service.concurrency]`, 200 soft / 250 hard connections). The tool holds long-lived connections (the Inspector's live stream, `/sse`, `/ws`, MCP and A2A streams, GraphQL subscriptions), and Fly's defaults (20 / 25) are easy to reach; the proxy then queues requests, which looks like a slow app.
+- **Swap** (`swap_size_mb = 512`) and `NODE_OPTIONS=--max-old-space-size=384`, so memory spikes (sample-file generation, large uploads) don't end in an out-of-memory kill. Keep the Node limit at about 75% of the VM memory if you resize it.
+- **Auto stop** (`auto_stop_machines = "stop"`, `min_machines_running = 0`): the machine stops when idle and the next request boots it, so the first call after a quiet period is slow. A stop also ends MCP sessions, A2A tasks and open streams. For no cold starts, set `auto_stop_machines = "off"` and `min_machines_running = 1` (the machine then runs, and is billed, all the time).
+
+**Keep one machine.** Fly recommends two machines for availability, but that advice is for stateless apps. Volumes are not replicated, so a second machine gets its own empty database and file pool, and Fly's proxy splits requests between the two: a record created on one is a 404 on the other, and OAuth tokens signed by one fail on the other. MCP sessions, A2A tasks, the SSE/WebSocket change feeds, the Inspector live stream and the rate-limit budget are also held in one process. Moving to Postgres and a bucket (below) shares the data but not that in-process state, so it still isn't enough for two machines.
+
+The `/data` volume is enough for one machine. Use a bucket for the file pool (`FILE_STORE=s3`) when you want presigned URLs to go to a real bucket, or files kept apart from the volume. Fly's Tigris storage is S3-compatible:
 
 ```bash
 fly storage create        # run in the app directory; note the bucket name it prints
@@ -1164,6 +1170,9 @@ npm run postman        # Newman across all auth modes
 | Dashboard asks for a password you never set | `ADMIN_PASSWORD` is set in the environment (on Render, `generateValue` creates one; read it in the Render dashboard). |
 | `better-sqlite3` fails to install | Use Node 22 (prebuilt binaries); in containers the Dockerfile installs the build tools. Or use `DB_DRIVER=postgres`. |
 | Data disappears after a redeploy | There's no volume. Mount `/data`, or use Postgres + S3. |
+| Fly warns that the app has only one machine | Expected; keep one. A second machine gets its own data and in-process state (see [Fly.io](#flyio)). If `fly status` shows two, run `fly scale count 1`. |
+| Requests on Fly hang or queue while streams are open | The proxy's connection limit is reached. Raise `hard_limit` under `[http_service.concurrency]` in `fly.toml`. |
+| First request after an idle period is slow, or an MCP session / A2A task is gone | The machine stopped while idle (`auto_stop_machines`) and booted again. Keep it running with `auto_stop_machines = "off"` and `min_machines_running = 1`. |
 | 401 under `jwt`/`oauth2` with a token from another environment | The issuer is the base URL. Tokens from `localhost` aren't valid on the Fly URL. Set `JWT_ISSUER` to pin it. |
 | HMAC 401 "signature mismatch" | Compare your canonical string with the one in the 401 body's `errors[0]`. Usual causes: missing query string, wrong body bytes, or the hash for a streamed upload (use `UNSIGNED-PAYLOAD`). |
 | S3 client: `SignatureDoesNotMatch` | Check the secret, and that the client uses **path-style** addressing with the tool's base URL as the endpoint. The error body includes the `CanonicalRequest` and `StringToSign` the server computed, to compare with the client's. A proxy in front of the tool must not rewrite the `Host` header. |

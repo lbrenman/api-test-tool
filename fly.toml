@@ -5,6 +5,14 @@
 app = "api-test-tool"
 primary_region = "ewr"
 
+# Run exactly ONE machine. Volumes are not replicated, and MCP sessions, A2A
+# tasks, SSE/WebSocket change feeds and the Inspector live stream are held in
+# one process. Ignore Fly's "add a second machine" advice for this app.
+
+# Swap on the root filesystem: absorbs memory spikes (sample-file generation,
+# large uploads, Newman runs) instead of an out-of-memory kill.
+swap_size_mb = 512
+
 [build]
   dockerfile = "Dockerfile"
 
@@ -15,6 +23,9 @@ primary_region = "ewr"
   FILE_STORE = "local"
   FILE_DIR = "/data/files"
   SEED_ON_START = "if-empty"
+  # Keep at about 75% of the VM memory below (512 MB -> 384), so Node collects
+  # garbage before the kernel starts swapping. Change both together.
+  NODE_OPTIONS = "--max-old-space-size=384"
   # PUBLIC_BASE_URL is auto-detected from FLY_APP_NAME (https://<app>.fly.dev)
 
 [[mounts]]
@@ -27,6 +38,14 @@ primary_region = "ewr"
   auto_stop_machines = "stop"
   auto_start_machines = true
   min_machines_running = 0
+
+  # Long-lived connections (Inspector live stream, /sse, /ws, MCP and A2A
+  # streams, GraphQL subscriptions) count against this limit. Fly's defaults
+  # (20 soft / 25 hard) are easy to hit, and the proxy then queues requests.
+  [http_service.concurrency]
+    type = "connections"
+    soft_limit = 200
+    hard_limit = 250
 
   [[http_service.checks]]
     grace_period = "20s"
