@@ -41,6 +41,7 @@ const odataRouter = require('./protocols/odata/router');
 const s3Router = require('./protocols/s3/router');
 const llmRouter = require('./protocols/llm/router');
 const mcpRouter = require('./protocols/mcp/router');
+const a2aRouter = require('./protocols/a2a/router');
 
 const LEVELS = { debug: 10, info: 20, warn: 30, error: 40 };
 
@@ -134,6 +135,7 @@ async function createApp(opts = {}) {
   app.use(platformRouter(ctx, { adminAuth }));
   app.use(oauthRouter(ctx));
   app.use(mcpRouter.wellKnown(ctx)); // RFC 9728 protected resource metadata for /mcp
+  app.use(a2aRouter.wellKnown(ctx)); // A2A Agent Card at /.well-known/agent-card.json
 
   // Dashboard + admin API
   app.get('/', (req, res) => res.redirect(302, '/dashboard'));
@@ -173,6 +175,8 @@ async function createApp(opts = {}) {
   app.use('/llm', llmRouter(ctx));
   // Mock MCP server (Streamable HTTP; 2026-07-28 stateless and 2025-xx session clients) over the same data.
   app.use('/mcp', mcpRouter(ctx));
+  // Mock A2A agent (1.0 JSON-RPC and HTTP+JSON, and 0.3) answering questions about the same data.
+  app.use('/a2a', a2aRouter(ctx));
 
   // Everything else: the inspector
   app.use(catchAll(ctx));

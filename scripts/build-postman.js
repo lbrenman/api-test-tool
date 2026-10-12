@@ -48,7 +48,7 @@ const collectionPreBody = [
   "if (skip) pm.request.headers.remove('X-Skip-Auth');",
   "const resolved = new sdk.Url(pm.variables.replaceIn(pm.request.url.toString()));",
   "const p = resolved.getPath();",
-  "const isApi = (p.indexOf('/v1/') === 0 && p.indexOf('/v1/files/presigned/') !== 0) || (p.indexOf('/soap/') === 0 && pm.request.method === 'POST') || p.indexOf('/sse/') === 0 || p.indexOf('/llm/v1/') === 0 || p === '/mcp' || p === '/graphql' || (p.indexOf('/odata/v4/') === 0 && p !== '/odata/v4/' && p !== '/odata/v4/$metadata');",
+  "const isApi = (p.indexOf('/v1/') === 0 && p.indexOf('/v1/files/presigned/') !== 0) || (p.indexOf('/soap/') === 0 && pm.request.method === 'POST') || p.indexOf('/sse/') === 0 || p.indexOf('/llm/v1/') === 0 || p === '/mcp' || ((p === '/a2a' || p.indexOf('/a2a/') === 0) && p.indexOf('agent-card.json') < 0) || p === '/graphql' || (p.indexOf('/odata/v4/') === 0 && p !== '/odata/v4/' && p !== '/odata/v4/$metadata');",
   "if (!isApi || skip || mode === 'none') return;",
   "const set = (k, v) => pm.request.headers.upsert({ key: k, value: v });",
   "if (mode === 'apikey') {",
@@ -91,7 +91,7 @@ const collectionPreBody = [
 ];
 // The sandbox does not allow top-level return, so the body runs inside a function.
 const collectionPre = [
-  '// Applies the auth mode in {{authMode}} to /v1 requests, SOAP POSTs, SSE streams, /graphql, OData, the mock LLM and /mcp. Requests with header X-Skip-Auth: 1 go out unauthenticated.',
+  '// Applies the auth mode in {{authMode}} to /v1 requests, SOAP POSTs, SSE streams, /graphql, OData, the mock LLM, /mcp and /a2a. Requests with header X-Skip-Auth: 1 go out unauthenticated.',
   '(function applyAuth() {',
   ...collectionPreBody.map((l) => `  ${l}`),
   '})();',
@@ -350,6 +350,34 @@ const mcpFolder = folder('MCP server', [
   req('Legacy: the ended session → 404', 'POST', '/mcp', { headers: legacyH(), body: json({ jsonrpc: '2.0', id: 3, method: 'tools/list' }), tests: [status(404), rpcErr(-32001)] }),
 ], 'Mock MCP server at /mcp: protocol 2026-07-28 requests (with the required headers) and a 2025-11-25 session. Uses the active auth mode.');
 
+// ---------------------------------------------------------------- A2A agent
+const a2aMsg = (text, extra = {}) => ({ messageId: `pm-${text.length}-${Math.floor(text.charCodeAt(0))}`, role: 'ROLE_USER', parts: [{ text }], ...extra });
+const a2aH = { 'Content-Type': 'application/json', 'A2A-Version': '1.0' };
+const a2aRpc = (title, method, params, tests, headers = {}) => req(title, 'POST', '/a2a', { headers: { ...a2aH, ...headers }, body: json({ jsonrpc: '2.0', id: 1, method, params }), tests });
+const a2aState = (state) => `pm.test('task ${state}', () => pm.expect(pm.response.json().result.task.status.state).to.eql('${state}'));`;
+const a2aCode = (code) => `pm.test('A2A error ${code}', () => pm.expect(pm.response.json().error.code).to.eql(${code}));`;
+const a2aFolder = folder('A2A agent', [
+  req('Agent Card (1.0)', 'GET', '/.well-known/agent-card.json', { tests: [status(200), "pm.test('three interfaces and four skills', () => { const c = pm.response.json(); pm.expect(c.supportedInterfaces.map((i) => i.protocolBinding + ' ' + i.protocolVersion)).to.eql(['JSONRPC 1.0', 'HTTP+JSON 1.0', 'JSONRPC 0.3']); pm.expect(c.skills.length).to.eql(4); pm.expect(c.capabilities.streaming).to.eql(true); });"] }),
+  req('Agent Card (0.3)', 'GET', '/a2a/v0.3/.well-known/agent-card.json', { tests: [status(200), "pm.test('0.3 card', () => { pm.expect(pm.response.json().protocolVersion).to.eql('0.3.0'); pm.expect(pm.response.json().url).to.match(/\\/a2a\\/v0\\.3$/); });"] }),
+  a2aRpc('SendMessage: greeting → direct Message', 'SendMessage', { message: a2aMsg('hello') }, [status(200), "pm.test('a Message, not a task', () => pm.expect(pm.response.json().result.message.role).to.eql('ROLE_AGENT'));"]),
+  a2aRpc('SendMessage: question → COMPLETED task', 'SendMessage', { message: a2aMsg('Who works in Engineering?') }, [status(200), a2aState('TASK_STATE_COMPLETED'),
+    "pm.test('answer and data artifacts', () => { const a = pm.response.json().result.task.artifacts; pm.expect(a.map((x) => x.name)).to.eql(['answer', 'data']); pm.expect(a[0].parts[0].text).to.match(/Found \\d+ employee/); });",
+    "pm.collectionVariables.set('a2aTaskId', pm.response.json().result.task.id);"]),
+  a2aRpc('GetTask', 'GetTask', { id: '{{a2aTaskId}}', historyLength: 1 }, [status(200), "pm.test('the same task', () => pm.expect(pm.response.json().result.id).to.eql(pm.collectionVariables.get('a2aTaskId')));"]),
+  a2aRpc('ListTasks', 'ListTasks', { pageSize: 2 }, [status(200), "pm.test('a page of tasks', () => { const r = pm.response.json().result; pm.expect(r.tasks.length).to.be.at.most(2); pm.expect(r.totalSize).to.be.at.least(1); pm.expect(r).to.have.property('nextPageToken'); });"]),
+  a2aRpc('Missing record → FAILED', 'SendMessage', { message: a2aMsg('show employee 999999') }, [status(200), a2aState('TASK_STATE_FAILED')]),
+  a2aRpc('Out of scope → REJECTED', 'SendMessage', { message: a2aMsg('What is the weather in Boston?') }, [status(200), a2aState('TASK_STATE_REJECTED')]),
+  a2aRpc('Delete product → INPUT_REQUIRED', 'SendMessage', { message: a2aMsg('delete product 3') }, [status(200), a2aState('TASK_STATE_INPUT_REQUIRED'), "pm.collectionVariables.set('a2aAskId', pm.response.json().result.task.id);"]),
+  a2aRpc('Answer "no" on the same task → REJECTED', 'SendMessage', { message: { messageId: 'pm-no', role: 'ROLE_USER', parts: [{ text: 'no' }], taskId: '{{a2aAskId}}' } }, [status(200), a2aState('TASK_STATE_REJECTED')]),
+  a2aRpc('Streamed answer', 'SendStreamingMessage', { message: a2aMsg('list departments') }, [status(200), ctype('text/event-stream'), has('task first', '"task":'), has('artifact updates', '"artifactUpdate"'), has('completed', 'TASK_STATE_COMPLETED')]),
+  a2aRpc('Unknown task → -32001', 'GetTask', { id: 'no-such-task' }, [status(200), a2aCode(-32001)]),
+  req('No A2A-Version header means 0.3 → -32601', 'POST', '/a2a', { headers: { 'Content-Type': 'application/json' }, body: json({ jsonrpc: '2.0', id: 1, method: 'SendMessage', params: { message: a2aMsg('hi') } }), tests: [status(200), a2aCode(-32601), has('explains the header', 'A2A-Version: 1.0')] }),
+  req('HTTP+JSON: message:send', 'POST', '/a2a/rest/message:send', { headers: { 'Content-Type': 'application/a2a+json', 'A2A-Version': '1.0' }, body: json({ message: a2aMsg('show product 2') }), tests: [status(200), "pm.test('completed', () => pm.expect(pm.response.json().task.status.state).to.eql('TASK_STATE_COMPLETED'));"] }),
+  req('HTTP+JSON: unknown task → 404 google.rpc.Status', 'GET', '/a2a/rest/tasks/no-such-task', { headers: { 'A2A-Version': '1.0' }, tests: [status(404), "pm.test('TASK_NOT_FOUND', () => pm.expect(pm.response.json().error.details[0].reason).to.eql('TASK_NOT_FOUND'));"] }),
+  req('A2A 0.3: message/send', 'POST', '/a2a/v0.3', { headers: { 'Content-Type': 'application/json' }, body: json({ jsonrpc: '2.0', id: 1, method: 'message/send', params: { message: { kind: 'message', messageId: 'pm-03', role: 'user', parts: [{ kind: 'text', text: 'list categories' }] } } }), tests: [status(200), "pm.test('0.3 task', () => { const r = pm.response.json().result; pm.expect(r.kind).to.eql('task'); pm.expect(r.status.state).to.eql('completed'); });"] }),
+  a2aRpc('Forced failure', 'SendMessage', { message: a2aMsg('show employee 1') }, [status(200), a2aState('TASK_STATE_FAILED')], { 'X-Force-A2A-Error': 'fail' }),
+], 'Mock A2A agent: Agent Cards, A2A 1.0 JSON-RPC and HTTP+JSON, and 0.3. Uses the active auth mode.');
+
 const graphqlFolder = folder('GraphQL', [
   req('SDL (always open)', 'GET', '/graphql/schema.graphql', { tests: [status(200), has('Query type', 'type Query {'), has('Subscription type', 'type Subscription {')] }),
   req('Query: offset page with nested department', 'POST', '/graphql', { headers: GQL_JSON, body: gql('query($n: Int) { employees(limit: $n, sort: "id") { total items { id fullName department { name } } } }', '{"n": 3}'), tests: [status(200), ctype('application/json'), gqlNoErrors, "const d = pm.response.json().data.employees; pm.test('three items', () => pm.expect(d.items.length).to.eql(3)); pm.test('nested', () => pm.expect(d.items[0].department.name).to.be.a('string'));"] }),
@@ -441,7 +469,7 @@ const collection = {
     { listen: 'test', script: { type: 'text/javascript', exec: collectionTest } },
   ],
   variable: [{ key: 'cachedToken', value: '' }, { key: 'cachedTokenExp', value: '0' }],
-  item: [platform, oauth, authFolder, crud, query, pagination, chaos, files, soapFolder, sseFolder, llmFolder, mcpFolder, graphqlFolder, odataFolder, s3Folder, misc],
+  item: [platform, oauth, authFolder, crud, query, pagination, chaos, files, soapFolder, sseFolder, llmFolder, mcpFolder, a2aFolder, graphqlFolder, odataFolder, s3Folder, misc],
 };
 
 const environment = {

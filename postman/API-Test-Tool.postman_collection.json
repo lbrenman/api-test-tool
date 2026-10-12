@@ -11,7 +11,7 @@
       "script": {
         "type": "text/javascript",
         "exec": [
-          "// Applies the auth mode in {{authMode}} to /v1 requests, SOAP POSTs, SSE streams, /graphql, OData, the mock LLM and /mcp. Requests with header X-Skip-Auth: 1 go out unauthenticated.",
+          "// Applies the auth mode in {{authMode}} to /v1 requests, SOAP POSTs, SSE streams, /graphql, OData, the mock LLM, /mcp and /a2a. Requests with header X-Skip-Auth: 1 go out unauthenticated.",
           "(function applyAuth() {",
           "  const sdk = require('postman-collection');",
           "  const CryptoJS = require('crypto-js');",
@@ -20,7 +20,7 @@
           "  if (skip) pm.request.headers.remove('X-Skip-Auth');",
           "  const resolved = new sdk.Url(pm.variables.replaceIn(pm.request.url.toString()));",
           "  const p = resolved.getPath();",
-          "  const isApi = (p.indexOf('/v1/') === 0 && p.indexOf('/v1/files/presigned/') !== 0) || (p.indexOf('/soap/') === 0 && pm.request.method === 'POST') || p.indexOf('/sse/') === 0 || p.indexOf('/llm/v1/') === 0 || p === '/mcp' || p === '/graphql' || (p.indexOf('/odata/v4/') === 0 && p !== '/odata/v4/' && p !== '/odata/v4/$metadata');",
+          "  const isApi = (p.indexOf('/v1/') === 0 && p.indexOf('/v1/files/presigned/') !== 0) || (p.indexOf('/soap/') === 0 && pm.request.method === 'POST') || p.indexOf('/sse/') === 0 || p.indexOf('/llm/v1/') === 0 || p === '/mcp' || ((p === '/a2a' || p.indexOf('/a2a/') === 0) && p.indexOf('agent-card.json') < 0) || p === '/graphql' || (p.indexOf('/odata/v4/') === 0 && p !== '/odata/v4/' && p !== '/odata/v4/$metadata');",
           "  if (!isApi || skip || mode === 'none') return;",
           "  const set = (k, v) => pm.request.headers.upsert({ key: k, value: v });",
           "  if (mode === 'apikey') {",
@@ -5564,11 +5564,781 @@
       "description": "Mock MCP server at /mcp: protocol 2026-07-28 requests (with the required headers) and a 2025-11-25 session. Uses the active auth mode."
     },
     {
-      "id": "att-004b",
-      "name": "GraphQL",
+      "id": "att-004d",
+      "name": "A2A agent",
       "item": [
         {
           "id": "att-003w",
+          "name": "Agent Card (1.0)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/.well-known/agent-card.json",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                ".well-known",
+                "agent-card.json"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('three interfaces and four skills', () => { const c = pm.response.json(); pm.expect(c.supportedInterfaces.map((i) => i.protocolBinding + ' ' + i.protocolVersion)).to.eql(['JSONRPC 1.0', 'HTTP+JSON 1.0', 'JSONRPC 0.3']); pm.expect(c.skills.length).to.eql(4); pm.expect(c.capabilities.streaming).to.eql(true); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "att-003x",
+          "name": "Agent Card (0.3)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/a2a/v0.3/.well-known/agent-card.json",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "a2a",
+                "v0.3",
+                ".well-known",
+                "agent-card.json"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('0.3 card', () => { pm.expect(pm.response.json().protocolVersion).to.eql('0.3.0'); pm.expect(pm.response.json().url).to.match(/\\/a2a\\/v0\\.3$/); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "att-003y",
+          "name": "SendMessage: greeting → direct Message",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "A2A-Version",
+                "value": "1.0"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/a2a",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "a2a"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": 1,\n  \"method\": \"SendMessage\",\n  \"params\": {\n    \"message\": {\n      \"messageId\": \"pm-5-104\",\n      \"role\": \"ROLE_USER\",\n      \"parts\": [\n        {\n          \"text\": \"hello\"\n        }\n      ]\n    }\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('a Message, not a task', () => pm.expect(pm.response.json().result.message.role).to.eql('ROLE_AGENT'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "att-003z",
+          "name": "SendMessage: question → COMPLETED task",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "A2A-Version",
+                "value": "1.0"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/a2a",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "a2a"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": 1,\n  \"method\": \"SendMessage\",\n  \"params\": {\n    \"message\": {\n      \"messageId\": \"pm-25-87\",\n      \"role\": \"ROLE_USER\",\n      \"parts\": [\n        {\n          \"text\": \"Who works in Engineering?\"\n        }\n      ]\n    }\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('task TASK_STATE_COMPLETED', () => pm.expect(pm.response.json().result.task.status.state).to.eql('TASK_STATE_COMPLETED'));",
+                  "pm.test('answer and data artifacts', () => { const a = pm.response.json().result.task.artifacts; pm.expect(a.map((x) => x.name)).to.eql(['answer', 'data']); pm.expect(a[0].parts[0].text).to.match(/Found \\d+ employee/); });",
+                  "pm.collectionVariables.set('a2aTaskId', pm.response.json().result.task.id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "att-0040",
+          "name": "GetTask",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "A2A-Version",
+                "value": "1.0"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/a2a",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "a2a"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": 1,\n  \"method\": \"GetTask\",\n  \"params\": {\n    \"id\": \"{{a2aTaskId}}\",\n    \"historyLength\": 1\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('the same task', () => pm.expect(pm.response.json().result.id).to.eql(pm.collectionVariables.get('a2aTaskId')));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "att-0041",
+          "name": "ListTasks",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "A2A-Version",
+                "value": "1.0"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/a2a",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "a2a"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": 1,\n  \"method\": \"ListTasks\",\n  \"params\": {\n    \"pageSize\": 2\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('a page of tasks', () => { const r = pm.response.json().result; pm.expect(r.tasks.length).to.be.at.most(2); pm.expect(r.totalSize).to.be.at.least(1); pm.expect(r).to.have.property('nextPageToken'); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "att-0042",
+          "name": "Missing record → FAILED",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "A2A-Version",
+                "value": "1.0"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/a2a",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "a2a"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": 1,\n  \"method\": \"SendMessage\",\n  \"params\": {\n    \"message\": {\n      \"messageId\": \"pm-20-115\",\n      \"role\": \"ROLE_USER\",\n      \"parts\": [\n        {\n          \"text\": \"show employee 999999\"\n        }\n      ]\n    }\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('task TASK_STATE_FAILED', () => pm.expect(pm.response.json().result.task.status.state).to.eql('TASK_STATE_FAILED'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "att-0043",
+          "name": "Out of scope → REJECTED",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "A2A-Version",
+                "value": "1.0"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/a2a",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "a2a"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": 1,\n  \"method\": \"SendMessage\",\n  \"params\": {\n    \"message\": {\n      \"messageId\": \"pm-30-87\",\n      \"role\": \"ROLE_USER\",\n      \"parts\": [\n        {\n          \"text\": \"What is the weather in Boston?\"\n        }\n      ]\n    }\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('task TASK_STATE_REJECTED', () => pm.expect(pm.response.json().result.task.status.state).to.eql('TASK_STATE_REJECTED'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "att-0044",
+          "name": "Delete product → INPUT_REQUIRED",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "A2A-Version",
+                "value": "1.0"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/a2a",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "a2a"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": 1,\n  \"method\": \"SendMessage\",\n  \"params\": {\n    \"message\": {\n      \"messageId\": \"pm-16-100\",\n      \"role\": \"ROLE_USER\",\n      \"parts\": [\n        {\n          \"text\": \"delete product 3\"\n        }\n      ]\n    }\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('task TASK_STATE_INPUT_REQUIRED', () => pm.expect(pm.response.json().result.task.status.state).to.eql('TASK_STATE_INPUT_REQUIRED'));",
+                  "pm.collectionVariables.set('a2aAskId', pm.response.json().result.task.id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "att-0045",
+          "name": "Answer \"no\" on the same task → REJECTED",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "A2A-Version",
+                "value": "1.0"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/a2a",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "a2a"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": 1,\n  \"method\": \"SendMessage\",\n  \"params\": {\n    \"message\": {\n      \"messageId\": \"pm-no\",\n      \"role\": \"ROLE_USER\",\n      \"parts\": [\n        {\n          \"text\": \"no\"\n        }\n      ],\n      \"taskId\": \"{{a2aAskId}}\"\n    }\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('task TASK_STATE_REJECTED', () => pm.expect(pm.response.json().result.task.status.state).to.eql('TASK_STATE_REJECTED'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "att-0046",
+          "name": "Streamed answer",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "A2A-Version",
+                "value": "1.0"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/a2a",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "a2a"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": 1,\n  \"method\": \"SendStreamingMessage\",\n  \"params\": {\n    \"message\": {\n      \"messageId\": \"pm-16-108\",\n      \"role\": \"ROLE_USER\",\n      \"parts\": [\n        {\n          \"text\": \"list departments\"\n        }\n      ]\n    }\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Content-Type text/event-stream', () => pm.expect(pm.response.headers.get('Content-Type')).to.include('text/event-stream'));",
+                  "pm.test(\"task first\", () => pm.expect(pm.response.text()).to.include(\"\\\"task\\\":\"));",
+                  "pm.test(\"artifact updates\", () => pm.expect(pm.response.text()).to.include(\"\\\"artifactUpdate\\\"\"));",
+                  "pm.test(\"completed\", () => pm.expect(pm.response.text()).to.include(\"TASK_STATE_COMPLETED\"));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "att-0047",
+          "name": "Unknown task → -32001",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "A2A-Version",
+                "value": "1.0"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/a2a",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "a2a"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": 1,\n  \"method\": \"GetTask\",\n  \"params\": {\n    \"id\": \"no-such-task\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('A2A error -32001', () => pm.expect(pm.response.json().error.code).to.eql(-32001));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "att-0048",
+          "name": "No A2A-Version header means 0.3 → -32601",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/a2a",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "a2a"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": 1,\n  \"method\": \"SendMessage\",\n  \"params\": {\n    \"message\": {\n      \"messageId\": \"pm-2-104\",\n      \"role\": \"ROLE_USER\",\n      \"parts\": [\n        {\n          \"text\": \"hi\"\n        }\n      ]\n    }\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('A2A error -32601', () => pm.expect(pm.response.json().error.code).to.eql(-32601));",
+                  "pm.test(\"explains the header\", () => pm.expect(pm.response.text()).to.include(\"A2A-Version: 1.0\"));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "att-0049",
+          "name": "HTTP+JSON: message:send",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/a2a+json"
+              },
+              {
+                "key": "A2A-Version",
+                "value": "1.0"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/a2a/rest/message:send",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "a2a",
+                "rest",
+                "message:send"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"message\": {\n    \"messageId\": \"pm-14-115\",\n    \"role\": \"ROLE_USER\",\n    \"parts\": [\n      {\n        \"text\": \"show product 2\"\n      }\n    ]\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('completed', () => pm.expect(pm.response.json().task.status.state).to.eql('TASK_STATE_COMPLETED'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "att-004a",
+          "name": "HTTP+JSON: unknown task → 404 google.rpc.Status",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "A2A-Version",
+                "value": "1.0"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/a2a/rest/tasks/no-such-task",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "a2a",
+                "rest",
+                "tasks",
+                "no-such-task"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 404', () => pm.response.to.have.status(404));",
+                  "pm.test('TASK_NOT_FOUND', () => pm.expect(pm.response.json().error.details[0].reason).to.eql('TASK_NOT_FOUND'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "att-004b",
+          "name": "A2A 0.3: message/send",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/a2a/v0.3",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "a2a",
+                "v0.3"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": 1,\n  \"method\": \"message/send\",\n  \"params\": {\n    \"message\": {\n      \"kind\": \"message\",\n      \"messageId\": \"pm-03\",\n      \"role\": \"user\",\n      \"parts\": [\n        {\n          \"kind\": \"text\",\n          \"text\": \"list categories\"\n        }\n      ]\n    }\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('0.3 task', () => { const r = pm.response.json().result; pm.expect(r.kind).to.eql('task'); pm.expect(r.status.state).to.eql('completed'); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "att-004c",
+          "name": "Forced failure",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "A2A-Version",
+                "value": "1.0"
+              },
+              {
+                "key": "X-Force-A2A-Error",
+                "value": "fail"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/a2a",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "a2a"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": 1,\n  \"method\": \"SendMessage\",\n  \"params\": {\n    \"message\": {\n      \"messageId\": \"pm-15-115\",\n      \"role\": \"ROLE_USER\",\n      \"parts\": [\n        {\n          \"text\": \"show employee 1\"\n        }\n      ]\n    }\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('task TASK_STATE_FAILED', () => pm.expect(pm.response.json().result.task.status.state).to.eql('TASK_STATE_FAILED'));"
+                ]
+              }
+            }
+          ]
+        }
+      ],
+      "description": "Mock A2A agent: Agent Cards, A2A 1.0 JSON-RPC and HTTP+JSON, and 0.3. Uses the active auth mode."
+    },
+    {
+      "id": "att-004t",
+      "name": "GraphQL",
+      "item": [
+        {
+          "id": "att-004e",
           "name": "SDL (always open)",
           "request": {
             "method": "GET",
@@ -5599,7 +6369,7 @@
           ]
         },
         {
-          "id": "att-003x",
+          "id": "att-004f",
           "name": "Query: offset page with nested department",
           "request": {
             "method": "POST",
@@ -5644,7 +6414,7 @@
           ]
         },
         {
-          "id": "att-003y",
+          "id": "att-004g",
           "name": "Query over GET",
           "request": {
             "method": "GET",
@@ -5680,7 +6450,7 @@
           ]
         },
         {
-          "id": "att-003z",
+          "id": "att-004h",
           "name": "Relay connection: first page",
           "request": {
             "method": "POST",
@@ -5724,7 +6494,7 @@
           ]
         },
         {
-          "id": "att-0040",
+          "id": "att-004i",
           "name": "Relay connection: next page",
           "request": {
             "method": "POST",
@@ -5768,7 +6538,7 @@
           ]
         },
         {
-          "id": "att-0041",
+          "id": "att-004j",
           "name": "Filter and sort",
           "request": {
             "method": "POST",
@@ -5812,7 +6582,7 @@
           ]
         },
         {
-          "id": "att-0042",
+          "id": "att-004k",
           "name": "Mutation: create department",
           "request": {
             "method": "POST",
@@ -5856,7 +6626,7 @@
           ]
         },
         {
-          "id": "att-0043",
+          "id": "att-004l",
           "name": "Mutation: update (merge patch)",
           "request": {
             "method": "POST",
@@ -5900,7 +6670,7 @@
           ]
         },
         {
-          "id": "att-0044",
+          "id": "att-004m",
           "name": "Mutation: delete",
           "request": {
             "method": "POST",
@@ -5944,7 +6714,7 @@
           ]
         },
         {
-          "id": "att-0045",
+          "id": "att-004n",
           "name": "Not found → field error NOT_FOUND (HTTP 200)",
           "request": {
             "method": "POST",
@@ -5988,7 +6758,7 @@
           ]
         },
         {
-          "id": "att-0046",
+          "id": "att-004o",
           "name": "Validation → BAD_USER_INPUT with field errors",
           "request": {
             "method": "POST",
@@ -6032,7 +6802,7 @@
           ]
         },
         {
-          "id": "att-0047",
+          "id": "att-004p",
           "name": "Invalid query → 400 with graphql-response+json",
           "request": {
             "method": "POST",
@@ -6081,7 +6851,7 @@
           ]
         },
         {
-          "id": "att-0048",
+          "id": "att-004q",
           "name": "Injected field error → partial data",
           "request": {
             "method": "POST",
@@ -6128,7 +6898,7 @@
           ]
         },
         {
-          "id": "att-0049",
+          "id": "att-004r",
           "name": "Mutation over GET → 405",
           "request": {
             "method": "GET",
@@ -6164,7 +6934,7 @@
           ]
         },
         {
-          "id": "att-004a",
+          "id": "att-004s",
           "name": "X-Force-Error: 503 → errors with the real status",
           "request": {
             "method": "POST",
@@ -6213,11 +6983,11 @@
       ]
     },
     {
-      "id": "att-004u",
+      "id": "att-005c",
       "name": "OData v4",
       "item": [
         {
-          "id": "att-004c",
+          "id": "att-004u",
           "name": "Service document (open)",
           "request": {
             "method": "GET",
@@ -6247,7 +7017,7 @@
           ]
         },
         {
-          "id": "att-004d",
+          "id": "att-004v",
           "name": "$metadata (open)",
           "request": {
             "method": "GET",
@@ -6280,7 +7050,7 @@
           ]
         },
         {
-          "id": "att-004e",
+          "id": "att-004w",
           "name": "Filter, select, orderby, count",
           "request": {
             "method": "GET",
@@ -6330,7 +7100,7 @@
           ]
         },
         {
-          "id": "att-004f",
+          "id": "att-004x",
           "name": "Functions and lambda",
           "request": {
             "method": "GET",
@@ -6371,7 +7141,7 @@
           ]
         },
         {
-          "id": "att-004g",
+          "id": "att-004y",
           "name": "Expand with nested options",
           "request": {
             "method": "GET",
@@ -6408,7 +7178,7 @@
           ]
         },
         {
-          "id": "att-004h",
+          "id": "att-004z",
           "name": "$count",
           "request": {
             "method": "GET",
@@ -6446,7 +7216,7 @@
           ]
         },
         {
-          "id": "att-004i",
+          "id": "att-0050",
           "name": "Property value",
           "request": {
             "method": "GET",
@@ -6480,7 +7250,7 @@
           ]
         },
         {
-          "id": "att-004j",
+          "id": "att-0051",
           "name": "Reset the paging walker",
           "request": {
             "method": "GET",
@@ -6509,7 +7279,7 @@
           ]
         },
         {
-          "id": "att-004k",
+          "id": "att-0052",
           "name": "Server paging: follow @odata.nextLink to the end",
           "request": {
             "method": "GET",
@@ -6550,7 +7320,7 @@
           ]
         },
         {
-          "id": "att-004l",
+          "id": "att-0053",
           "name": "Create employee with @odata.bind",
           "request": {
             "method": "POST",
@@ -6595,7 +7365,7 @@
           ]
         },
         {
-          "id": "att-004m",
+          "id": "att-0054",
           "name": "PATCH with a stale If-Match → 412",
           "request": {
             "method": "PATCH",
@@ -6645,7 +7415,7 @@
           ]
         },
         {
-          "id": "att-004n",
+          "id": "att-0055",
           "name": "PATCH with If-Match → 204",
           "request": {
             "method": "PATCH",
@@ -6693,7 +7463,7 @@
           ]
         },
         {
-          "id": "att-004o",
+          "id": "att-0056",
           "name": "PATCH return=representation → 200",
           "request": {
             "method": "PATCH",
@@ -6742,7 +7512,7 @@
           ]
         },
         {
-          "id": "att-004p",
+          "id": "att-0057",
           "name": "DELETE → 204",
           "request": {
             "method": "DELETE",
@@ -6772,7 +7542,7 @@
           ]
         },
         {
-          "id": "att-004q",
+          "id": "att-0058",
           "name": "Deleted → 404",
           "request": {
             "method": "GET",
@@ -6804,7 +7574,7 @@
           ]
         },
         {
-          "id": "att-004r",
+          "id": "att-0059",
           "name": "Unknown property in $filter → 400",
           "request": {
             "method": "GET",
@@ -6842,7 +7612,7 @@
           ]
         },
         {
-          "id": "att-004s",
+          "id": "att-005a",
           "name": "Validation → 422 with details",
           "request": {
             "method": "POST",
@@ -6889,7 +7659,7 @@
           ]
         },
         {
-          "id": "att-004t",
+          "id": "att-005b",
           "name": "X-Force-Error: 503 → OData error",
           "request": {
             "method": "GET",
@@ -6934,11 +7704,11 @@
       ]
     },
     {
-      "id": "att-005c",
+      "id": "att-005u",
       "name": "S3-compatible API",
       "item": [
         {
-          "id": "att-004v",
+          "id": "att-005d",
           "name": "ListBuckets",
           "request": {
             "method": "GET",
@@ -6991,7 +7761,7 @@
           ]
         },
         {
-          "id": "att-004w",
+          "id": "att-005e",
           "name": "HeadBucket",
           "request": {
             "method": "HEAD",
@@ -7045,7 +7815,7 @@
           ]
         },
         {
-          "id": "att-004x",
+          "id": "att-005f",
           "name": "ListObjectsV2 (page of 3)",
           "request": {
             "method": "GET",
@@ -7111,7 +7881,7 @@
           ]
         },
         {
-          "id": "att-004y",
+          "id": "att-005g",
           "name": "ListObjectsV2 (next page)",
           "request": {
             "method": "GET",
@@ -7179,7 +7949,7 @@
           ]
         },
         {
-          "id": "att-004z",
+          "id": "att-005h",
           "name": "PutObject with metadata",
           "request": {
             "method": "PUT",
@@ -7248,7 +8018,7 @@
           ]
         },
         {
-          "id": "att-0050",
+          "id": "att-005i",
           "name": "HeadObject",
           "request": {
             "method": "HEAD",
@@ -7305,7 +8075,7 @@
           ]
         },
         {
-          "id": "att-0051",
+          "id": "att-005j",
           "name": "GetObject",
           "request": {
             "method": "GET",
@@ -7362,7 +8132,7 @@
           ]
         },
         {
-          "id": "att-0052",
+          "id": "att-005k",
           "name": "GetObject with Range → 206",
           "request": {
             "method": "GET",
@@ -7424,7 +8194,7 @@
           ]
         },
         {
-          "id": "att-0053",
+          "id": "att-005l",
           "name": "CopyObject",
           "request": {
             "method": "PUT",
@@ -7486,7 +8256,7 @@
           ]
         },
         {
-          "id": "att-0054",
+          "id": "att-005m",
           "name": "List a \"folder\" with a delimiter",
           "request": {
             "method": "GET",
@@ -7555,7 +8325,7 @@
           ]
         },
         {
-          "id": "att-0055",
+          "id": "att-005n",
           "name": "The copy is in the file pool (/v1/files)",
           "request": {
             "method": "GET",
@@ -7591,7 +8361,7 @@
           ]
         },
         {
-          "id": "att-0056",
+          "id": "att-005o",
           "name": "DeleteObjects",
           "request": {
             "method": "POST",
@@ -7660,7 +8430,7 @@
           ]
         },
         {
-          "id": "att-0057",
+          "id": "att-005p",
           "name": "Deleted → 404 NoSuchKey",
           "request": {
             "method": "GET",
@@ -7717,7 +8487,7 @@
           ]
         },
         {
-          "id": "att-0058",
+          "id": "att-005q",
           "name": "Unknown bucket → 404 NoSuchBucket",
           "request": {
             "method": "GET",
@@ -7778,7 +8548,7 @@
           ]
         },
         {
-          "id": "att-0059",
+          "id": "att-005r",
           "name": "Wrong secret → 403 SignatureDoesNotMatch",
           "request": {
             "method": "GET",
@@ -7839,7 +8609,7 @@
           ]
         },
         {
-          "id": "att-005a",
+          "id": "att-005s",
           "name": "Unsigned → 403 AccessDenied",
           "request": {
             "method": "GET",
@@ -7873,7 +8643,7 @@
           ]
         },
         {
-          "id": "att-005b",
+          "id": "att-005t",
           "name": "X-Force-Error: 503 → S3 XML error",
           "request": {
             "method": "GET",
@@ -7942,11 +8712,11 @@
       "description": "The file pool as an S3 bucket (path-style). Requests use Postman's AWS Signature auth with {{s3AccessKeyId}}, {{s3SecretAccessKey}} and {{s3Region}}, independent of {{authMode}}."
     },
     {
-      "id": "att-005f",
+      "id": "att-005x",
       "name": "Headers & inspector",
       "item": [
         {
-          "id": "att-005d",
+          "id": "att-005v",
           "name": "Request id echo",
           "request": {
             "method": "GET",
@@ -7986,7 +8756,7 @@
           ]
         },
         {
-          "id": "att-005e",
+          "id": "att-005w",
           "name": "Inspector catch-all",
           "request": {
             "method": "POST",

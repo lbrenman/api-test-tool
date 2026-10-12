@@ -104,7 +104,7 @@ const DEFS = [
 
   // ---- s3 api (an S3-compatible endpoint over the file pool; not the S3_* storage backend above) ----
   { key: 's3ApiEnabled', env: 'S3_API_ENABLED', def: true, type: 'bool', section: 's3api', desc: 'serve the file pool as an S3-compatible API at the base URL (path-style: <base>/<bucket>/<key>), signed with AWS Signature V4' },
-  { key: 's3ApiBucket', env: 'S3_API_BUCKET', def: 'files', type: 'string', section: 's3api', pattern: /^(?!(v1|admin|dashboard|docs|soap|ws|sse|graphql|odata|llm|mcp|oauth|app|health|ready|samples|mock|problems|openapi\.json|openapi\.yaml)$)[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/, desc: 'Bucket name clients use (3-63 lowercase letters, digits, dots, hyphens; not a path the tool already uses)' },
+  { key: 's3ApiBucket', env: 'S3_API_BUCKET', def: 'files', type: 'string', section: 's3api', pattern: /^(?!(v1|admin|dashboard|docs|soap|ws|sse|graphql|odata|llm|mcp|a2a|oauth|app|health|ready|samples|mock|problems|openapi\.json|openapi\.yaml)$)[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/, desc: 'Bucket name clients use (3-63 lowercase letters, digits, dots, hyphens; not a path the tool already uses)' },
   { key: 's3ApiRegion', env: 'S3_API_REGION', def: 'us-east-1', type: 'string', section: 's3api', pattern: /^[a-z0-9-]{1,40}$/, desc: 'Region clients must sign with (e.g. us-east-1, eu-west-1, auto)' },
   { key: 's3ApiAccessKeyId', env: 'S3_API_ACCESS_KEY_ID', def: 'demo-access-key', type: 'string', section: 's3api', pattern: /^[A-Za-z0-9._-]{3,128}$/, desc: 'Access key ID clients sign with' },
   { key: 's3ApiSecretAccessKey', env: 'S3_API_SECRET_ACCESS_KEY', def: 'demo-secret-key', type: 'string', section: 's3api', secret: true, pattern: /^.{1,256}$/, desc: 'Secret access key clients sign with' },
@@ -134,6 +134,13 @@ const DEFS = [
   { key: 'mcpSessionTtlMinutes', env: 'MCP_SESSION_TTL_MINUTES', def: 30, type: 'int', section: 'mcp', min: 1, max: 1440, desc: 'Idle legacy sessions are forgotten after this long (the client then gets 404 and must initialize again)' },
   { key: 'mcpKeepAliveSeconds', env: 'MCP_KEEPALIVE_SECONDS', def: 15, type: 'int', section: 'mcp', min: 0, max: 3600, desc: 'Comment line sent this often on open notification streams (subscriptions/listen, legacy GET); 0 = off' },
 
+  // ---- a2a (mock A2A agent) ----
+  { key: 'a2aEnabled', env: 'A2A_ENABLED', def: true, type: 'bool', section: 'a2a', desc: 'serve the mock A2A agent at /a2a (Agent Card at /.well-known/agent-card.json) that answers questions about the mock data' },
+  { key: 'a2aAllowWrites', env: 'A2A_ALLOW_WRITES', def: true, type: 'bool', section: 'a2a', desc: 'let the agent change data ("set employee 12 title to …", "delete product 9"); off = such requests are REJECTED' },
+  { key: 'a2aLegacy', env: 'A2A_LEGACY', def: true, type: 'bool', section: 'a2a', desc: 'also speak A2A 0.3 (requests without an A2A-Version header, and /a2a/v0.3 with its own Agent Card); off = 1.0 only' },
+  { key: 'a2aWorkMs', env: 'A2A_WORK_MS', def: 1200, type: 'int', section: 'a2a', min: 0, max: 60000, desc: 'How long a task takes from WORKING to COMPLETED (gives time to poll, subscribe or cancel)' },
+  { key: 'a2aTaskRetention', env: 'A2A_TASK_RETENTION', def: 500, type: 'int', section: 'a2a', min: 10, max: 100000, desc: 'Finished tasks kept in memory for GetTask and ListTasks (lost on restart)' },
+
   // ---- webhooks ----
   { key: 'webhooksEnabled', env: 'WEBHOOKS_ENABLED', def: true, type: 'bool', section: 'webhooks', desc: 'send the outgoing webhooks defined on the Webhooks page (off = pause all deliveries; the definitions are kept)' },
   { key: 'webhookTimeoutMs', env: 'WEBHOOK_TIMEOUT_MS', def: 10000, type: 'int', section: 'webhooks', min: 100, max: 60000, desc: 'How long a delivery waits for the receiver before it is logged as failed' },
@@ -141,7 +148,7 @@ const DEFS = [
 
   // ---- inspector ----
   { key: 'inspectorRetention', env: 'INSPECTOR_RETENTION', def: 500, type: 'int', section: 'inspector', min: 1 },
-  { key: 'inspectorLogAll', env: 'INSPECTOR_LOG_ALL', def: true, type: 'bool', section: 'inspector', desc: 'also record /v1/*, /soap/*, /ws/* (upgrades), /sse/*, /graphql, /odata/*, /llm/*, /mcp, S3 API and /oauth/* calls (the dashboard, docs and health probes are never recorded)' },
+  { key: 'inspectorLogAll', env: 'INSPECTOR_LOG_ALL', def: true, type: 'bool', section: 'inspector', desc: 'also record /v1/*, /soap/*, /ws/* (upgrades), /sse/*, /graphql, /odata/*, /llm/*, /mcp, /a2a/*, S3 API and /oauth/* calls (the dashboard, docs and health probes are never recorded)' },
   { key: 'inspectorResponseStatus', env: 'INSPECTOR_RESPONSE_STATUS', def: 200, type: 'int', section: 'inspector', min: 100, max: 599 },
   { key: 'inspectorResponseContentType', env: 'INSPECTOR_RESPONSE_CONTENT_TYPE', def: 'application/json', type: 'string', section: 'inspector' },
   { key: 'inspectorResponseBody', env: 'INSPECTOR_RESPONSE_BODY', def: '', type: 'string', section: 'inspector', desc: 'blank = JSON receipt with the capture id' },

@@ -14,7 +14,7 @@
   const q = (s) => `'${String(s).replace(/'/g, "'\\''")}'`;
   // Paths that take API credentials: the /v1 mock API and SOAP requests (the WSDL and /soap listing are open).
   const isApiPath = (p) => p === '/v1' || p.startsWith('/v1/') || p.startsWith('/v1?') || (p.startsWith('/soap/') && !/[?.]wsdl$/i.test(p))
-    || p.startsWith('/sse/') || p === '/graphql' || p.startsWith('/graphql?') || p.startsWith('/llm/v1/') || p === '/mcp' || p.startsWith('/mcp?')
+    || p.startsWith('/sse/') || p === '/graphql' || p.startsWith('/graphql?') || p.startsWith('/llm/v1/') || p === '/mcp' || p.startsWith('/mcp?') || ((p === '/a2a' || p.startsWith('/a2a?') || p.startsWith('/a2a/')) && !p.includes('agent-card.json'))
     || (p.startsWith('/odata/v4/') && !/^\/odata\/v4\/(\$metadata)?([?#]|$)/.test(p));
 
   /**
@@ -222,7 +222,7 @@
           `Configure credentials to match the active auth mode: ${C.authLabel}.`,
           `Point webhooks at any path that is not reserved, e.g. \`${B}/hooks/orders\`, and watch them on the Inspector page.`,
           `Import \`${B}/openapi.json\` into your client tool to get every endpoint pre-defined.`,
-          'The other entries are the same data over SOAP, WebSocket, SSE, GraphQL and OData, an OpenAI-compatible mock LLM, an MCP server, and the file pool as an S3 bucket (endpoint = the base URL); the Protocols page has the details for each.',
+          'The other entries are the same data over SOAP, WebSocket, SSE, GraphQL and OData, an OpenAI-compatible mock LLM, an MCP server, an A2A agent, and the file pool as an S3 bucket (endpoint = the base URL); the Protocols page has the details for each.',
         ],
         curls: [
           ['List two employees', curl('GET', '/v1/employees?limit=2')],
@@ -314,7 +314,7 @@
       // ------------------------------------------------------------ inspector
       'inspector.capture': {
         title: 'Inspector',
-        purpose: 'A webhook catcher. Any call to a path the tool does not reserve is recorded with its headers, detected auth, body and the response sent back. Calls to the APIs (/v1, SOAP, WebSocket upgrades, SSE, GraphQL, OData, the LLM mock, the MCP server, the S3 API and OAuth) are recorded too while "Record API calls" is on.',
+        purpose: 'A webhook catcher. Any call to a path the tool does not reserve is recorded with its headers, detected auth, body and the response sent back. Calls to the APIs (/v1, SOAP, WebSocket upgrades, SSE, GraphQL, OData, the LLM mock, the MCP server, the A2A agent, the S3 API and OAuth) are recorded too while "Record API calls" is on.',
         steps: [
           `Configure the system under test to send its webhook or callback to \`${B}/<any-path>\`, for example \`${B}/hooks/orders\`.`,
           'Trigger the event. The request appears here live — click it to see Request, Auth, Response and a ready-made curl.',
@@ -511,7 +511,7 @@
       // ------------------------------------------------------------ auth
       'auth.mode': {
         title: 'Mode & credentials',
-        purpose: 'How every API call must authenticate: /v1, SOAP, WebSocket upgrades, SSE, GraphQL, OData, the LLM mock and the MCP server all use this mode (the S3 API signs with its own keys instead). The mode comes from AUTH_MODE in the environment unless it is overridden here. The examples in these guides always follow the active mode.',
+        purpose: 'How every API call must authenticate: /v1, SOAP, WebSocket upgrades, SSE, GraphQL, OData, the LLM mock, the MCP server and the A2A agent all use this mode (the S3 API signs with its own keys instead). The mode comes from AUTH_MODE in the environment unless it is overridden here. The examples in these guides always follow the active mode.',
         steps: [
           `The active mode is \`${C.mode}\`: ${C.authLabel}.`,
           'Configure your integration with the credentials shown in the form (API key name and location, Basic user and password, Bearer token, JWT settings or the HMAC key).',
@@ -625,7 +625,7 @@
       // ------------------------------------------------------------ chaos
       'chaos.rates': {
         title: 'Rates & latency',
-        purpose: 'Random failures and slowness on every API protocol (/v1, SOAP, WebSocket, SSE, GraphQL, OData, LLM, MCP, S3), so you can test retries, timeouts and error handling under realistic conditions.',
+        purpose: 'Random failures and slowness on every API protocol (/v1, SOAP, WebSocket, SSE, GraphQL, OData, LLM, MCP, A2A, S3), so you can test retries, timeouts and error handling under realistic conditions.',
         steps: [
           'Set an error rate (0–100 %) and the error types to draw from: any status, `timeout`, `reset`, `malformed-json`, `truncated-body`, `empty-body`, `wrong-content-type`, `slow-drip`.',
           'Add a latency range to slow every call, and a requests-per-minute limit to trigger 429 with `Retry-After`.',
@@ -686,7 +686,7 @@
       },
       'headers.required': {
         title: 'Required request headers',
-        purpose: 'Headers every API request must carry on every protocol (/v1, SOAP, WebSocket, SSE, GraphQL, OData, LLM, MCP, S3), optionally with an exact value. Missing or wrong ones return 400 in that protocol\'s error format (problem+json on /v1).',
+        purpose: 'Headers every API request must carry on every protocol (/v1, SOAP, WebSocket, SSE, GraphQL, OData, LLM, MCP, A2A, S3), optionally with an exact value. Missing or wrong ones return 400 in that protocol\'s error format (problem+json on /v1).',
         steps: [
           'Enter a JSON list such as `[{"name":"X-Tenant"},{"name":"X-Env","value":"demo"}]` and Save.',
           'Configure the same headers in your integration.',
@@ -867,6 +867,63 @@
         ],
         curls: [
           ['The same stream from a terminal', curl('GET', '/sse/ticks?interval=500&count=5', { extra: ['-N'] })],
+        ],
+      },
+
+      // ------------------------------------------------------------ protocols: A2A
+      'protocols.a2a': (() => {
+        const msg = (text, extra = {}) => ({ messageId: 'msg-1', role: 'ROLE_USER', parts: [{ text }], ...extra });
+        const rpc = (method, params, o = {}) => curl('POST', '/a2a', { json: { jsonrpc: '2.0', id: 1, method, params }, headers: { 'A2A-Version': '1.0', ...(o.headers || {}) }, extra: o.extra });
+        return {
+          title: 'A2A agent',
+          purpose: 'A mock Agent2Agent (A2A) agent that answers questions about the mock company (employees, products, departments, categories, statistics) and can change that data. Answers come back as tasks with artifacts, so you can test an agent platform, an orchestrator or an A2A gateway against a real protocol peer. It uses the active auth mode, rate limit, required headers and chaos like /v1.',
+          steps: [
+            `Give your A2A client the Agent Card URL \`${B}/.well-known/agent-card.json\`. It lists three interfaces: JSON-RPC 1.0 at \`${B}/a2a\`, HTTP+JSON 1.0 at \`${B}/a2a/rest\` and JSON-RPC 0.3 at \`${B}/a2a/v0.3\` (whose own card is at \`${B}/a2a/v0.3/.well-known/agent-card.json\`). Credentials: ${C.authLabel}.`,
+            'A2A 1.0 requests carry the header `A2A-Version: 1.0`; without it a request is 0.3, as the spec requires, so `SendMessage` without the header is "method not found" (the error says why).',
+            'Ask in plain words: "Who works in Engineering at level L5?", "Products under $50 that are in stock", "How many employees do we have?". A greeting or "help" gets a direct Message; questions become tasks that go SUBMITTED → WORKING → COMPLETED with an `answer` artifact (text, streamed in chunks) and a `data` artifact (JSON). A missing record ends FAILED; an unrelated question ("the weather") is REJECTED.',
+            'Multi-turn: "Delete product 9" stops at INPUT_REQUIRED and asks for confirmation; send "yes" with the same `taskId` to finish it. Changes show up on every other API of the tool and fire webhooks.',
+            'SendMessage waits for the result unless `configuration.returnImmediately` is true; then poll GetTask, open SubscribeToTask, or set `configuration.taskPushNotificationConfig` to have every event POSTed to your URL. A2A_WORK_MS sets how long a task takes.',
+            'Chaos: `X-Force-A2A-Error: fail | reject | input-required | auth-required` ends the task in that state, `rpc` returns a JSON-RPC error and `drop` cuts a stream.',
+          ],
+          curls: [
+            ['Fetch the Agent Card', plain('GET', '/.well-known/agent-card.json')],
+            ['Ask a question (JSON-RPC 1.0)', rpc('SendMessage', { message: msg('Who works in Engineering at level L5?') })],
+            ['Stream the answer', rpc('SendStreamingMessage', { message: msg('Products under $50 that are in stock') }, { extra: ['-N'] })],
+            ['Start a task and return at once', rpc('SendMessage', { message: msg('How many employees do we have?'), configuration: { returnImmediately: true } })],
+            ['Get a task (replace <task id>)', rpc('GetTask', { id: '<task id>', historyLength: 2 })],
+            ['List tasks', rpc('ListTasks', { pageSize: 5 })],
+            ['A change that asks for confirmation', rpc('SendMessage', { message: msg('Delete product 9') })],
+            ['The same question over HTTP+JSON', curl('POST', '/a2a/rest/message:send', { json: { message: msg('Show employee 12') }, contentType: 'application/a2a+json', headers: { 'A2A-Version': '1.0' } })],
+            ['An A2A 0.3 request', curl('POST', '/a2a/v0.3', { json: { jsonrpc: '2.0', id: 1, method: 'message/send', params: { message: { kind: 'message', messageId: 'msg-1', role: 'user', parts: [{ kind: 'text', text: 'List departments' }] } } } })],
+            ['A forced failure', rpc('SendMessage', { message: msg('Show employee 1') }, { headers: { 'X-Force-A2A-Error': 'fail' } })],
+          ],
+        };
+      })(),
+      'protocols.a2a-settings': {
+        title: 'A2A settings',
+        purpose: 'Turn the A2A agent on or off, stop it from changing data, choose whether it also speaks A2A 0.3, and set how long a task takes and how many are kept.',
+        steps: [
+          '`a2aAllowWrites` off makes change requests ("set employee 12 title to …", "delete product 9") end REJECTED.',
+          '`a2aLegacy` off drops 0.3: requests without `A2A-Version: 1.0` get VersionNotSupportedError (-32009), and the 0.3 interface leaves the Agent Card.',
+          '`a2aWorkMs`: time from WORKING to COMPLETED; raise it to test polling, SubscribeToTask and CancelTask. `a2aTaskRetention`: tasks kept in memory (they are lost on restart).',
+          ...pw,
+        ],
+        curls: [
+          ['Slow tasks (5 seconds)', admin('PUT', '/settings', { json: { a2aWorkMs: 5000 } })],
+          ['A2A 1.0 only', admin('PUT', '/settings', { json: { a2aLegacy: false } })],
+          ['Back to the defaults', admin('POST', '/settings/reset', { json: { section: 'a2a' } })],
+        ],
+      },
+      'protocols.a2a-try': {
+        title: 'Talk to the agent',
+        purpose: 'Send a message from this page through any of the agent\'s interfaces, with the active auth mode, and watch the task and its events.',
+        steps: [
+          'Pick an interface and a sample question (or type your own), then Send. With Stream ticked the events appear as they arrive.',
+          'When the agent asks for input ("Delete product 9"), the task id fills in "Continue task": answer "yes" to finish it.',
+          'Tick "Return immediately" and raise a2aWorkMs to try Get task and Cancel task while the task is still working.',
+        ],
+        curls: [
+          ['The same question from a terminal', curl('POST', '/a2a', { json: { jsonrpc: '2.0', id: 1, method: 'SendMessage', params: { message: { messageId: 'msg-1', role: 'ROLE_USER', parts: [{ text: 'Who works in Engineering at level L5?' }] } } }, headers: { 'A2A-Version': '1.0' } })],
         ],
       },
 
