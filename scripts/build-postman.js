@@ -48,7 +48,7 @@ const collectionPreBody = [
   "if (skip) pm.request.headers.remove('X-Skip-Auth');",
   "const resolved = new sdk.Url(pm.variables.replaceIn(pm.request.url.toString()));",
   "const p = resolved.getPath();",
-  "const isApi = (p.indexOf('/v1/') === 0 && p.indexOf('/v1/files/presigned/') !== 0) || (p.indexOf('/soap/') === 0 && pm.request.method === 'POST') || p.indexOf('/sse/') === 0 || p.indexOf('/llm/v1/') === 0 || p === '/graphql' || (p.indexOf('/odata/v4/') === 0 && p !== '/odata/v4/' && p !== '/odata/v4/$metadata');",
+  "const isApi = (p.indexOf('/v1/') === 0 && p.indexOf('/v1/files/presigned/') !== 0) || (p.indexOf('/soap/') === 0 && pm.request.method === 'POST') || p.indexOf('/sse/') === 0 || p.indexOf('/llm/v1/') === 0 || p === '/mcp' || p === '/graphql' || (p.indexOf('/odata/v4/') === 0 && p !== '/odata/v4/' && p !== '/odata/v4/$metadata');",
   "if (!isApi || skip || mode === 'none') return;",
   "const set = (k, v) => pm.request.headers.upsert({ key: k, value: v });",
   "if (mode === 'apikey') {",
@@ -91,7 +91,7 @@ const collectionPreBody = [
 ];
 // The sandbox does not allow top-level return, so the body runs inside a function.
 const collectionPre = [
-  '// Applies the auth mode in {{authMode}} to /v1 requests, SOAP POSTs, SSE streams, /graphql, OData and the mock LLM. Requests with header X-Skip-Auth: 1 go out unauthenticated.',
+  '// Applies the auth mode in {{authMode}} to /v1 requests, SOAP POSTs, SSE streams, /graphql, OData, the mock LLM and /mcp. Requests with header X-Skip-Auth: 1 go out unauthenticated.',
   '(function applyAuth() {',
   ...collectionPreBody.map((l) => `  ${l}`),
   '})();',
@@ -319,6 +319,37 @@ const llmFolder = folder('Mock LLM (OpenAI-compatible)', [
   req('Injected 429 → OpenAI rate-limit error', 'GET', '/llm/v1/models', { headers: { 'X-Force-Error': '429' }, tests: [...oaError(429, 'rate_limit_exceeded'), "pm.test('Retry-After', () => pm.expect(pm.response.headers.get('Retry-After')).to.be.ok);"] }),
 ], 'OpenAI-compatible mock LLM at /llm/v1. Uses the active auth mode; errors are OpenAI-shaped.');
 
+// ---------------------------------------------------------------- MCP server
+const MCP_META = { 'io.modelcontextprotocol/protocolVersion': '2026-07-28', 'io.modelcontextprotocol/clientCapabilities': {}, 'io.modelcontextprotocol/clientInfo': { name: 'postman', version: '1' } };
+const mcpH = (method, name, extra = {}) => ({ 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream', 'MCP-Protocol-Version': '2026-07-28', 'Mcp-Method': method, ...(name ? { 'Mcp-Name': name } : {}), ...extra });
+const mcpReq = (title, method, params = {}, { headers = {}, tests = [], id = 1 } = {}) => req(title, 'POST', '/mcp', {
+  headers: mcpH(method, params.name || params.uri, headers),
+  body: json({ jsonrpc: '2.0', id, method, params: { ...params, _meta: { ...MCP_META, ...(params._meta || {}) } } }),
+  tests,
+});
+const rpcErr = (code) => `pm.test('JSON-RPC error ${code}', () => pm.expect(pm.response.json().error.code).to.eql(${code}));`;
+const legacyH = (extra = {}) => ({ 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream', 'Mcp-Session-Id': '{{mcpSessionId}}', 'MCP-Protocol-Version': '2025-11-25', ...extra });
+const mcpFolder = folder('MCP server', [
+  mcpReq('server/discover', 'server/discover', {}, { tests: [status(200), "pm.test('modern discover result', () => { const r = pm.response.json().result; pm.expect(r.resultType).to.eql('complete'); pm.expect(r.supportedVersions).to.include('2026-07-28'); pm.expect(r.ttlMs).to.be.at.least(0); });"] }),
+  mcpReq('tools/list', 'tools/list', {}, { tests: [status(200), "pm.test('22 tools in a stable order', () => { const t = pm.response.json().result.tools; pm.expect(t.length).to.eql(22); pm.expect(t[0].name).to.eql('search_employees'); });"] }),
+  mcpReq('tools/call get_employee', 'tools/call', { name: 'get_employee', arguments: { id: 1 } }, { tests: [status(200), "pm.test('structured result', () => { const r = pm.response.json().result; pm.expect(r.structuredContent.id).to.eql(1); pm.expect(r.content[0].type).to.eql('text'); pm.expect(r.isError).to.not.eql(true); });"] }),
+  mcpReq('tools/call with x-mcp-header argument', 'tools/call', { name: 'search_employees', arguments: { department: 'Engineering', limit: 3 } }, { headers: { 'Mcp-Param-Department': 'Engineering' }, tests: [status(200), "pm.test('filtered by department', () => pm.expect(pm.response.json().result.structuredContent.items.every((e) => /Engineering/.test(e.department))).to.be.true);"] }),
+  mcpReq('Missing Mcp-Param header → 400 HeaderMismatch', 'tools/call', { name: 'search_employees', arguments: { department: 'Engineering' } }, { tests: [status(400), rpcErr(-32020)] }),
+  mcpReq('Missing record → tool error', 'tools/call', { name: 'get_employee', arguments: { id: 999999 } }, { tests: [status(200), "pm.test('isError', () => pm.expect(pm.response.json().result.isError).to.eql(true));"] }),
+  mcpReq('Unknown tool → -32602', 'tools/call', { name: 'no_such_tool', arguments: {} }, { tests: [status(200), rpcErr(-32602)] }),
+  req('Unsupported protocol version → 400 -32022', 'POST', '/mcp', { headers: mcpH('tools/list', null, { 'MCP-Protocol-Version': '1900-01-01' }), body: json({ jsonrpc: '2.0', id: 1, method: 'tools/list', params: { _meta: { ...MCP_META, 'io.modelcontextprotocol/protocolVersion': '1900-01-01' } } }), tests: [status(400), rpcErr(-32022), "pm.test('lists supported versions', () => pm.expect(pm.response.json().error.data.supported).to.include('2026-07-28'));"] }),
+  mcpReq('resources/read', 'resources/read', { uri: 'att://departments/1' }, { tests: [status(200), "pm.test('JSON contents', () => pm.expect(JSON.parse(pm.response.json().result.contents[0].text).id).to.eql(1));"] }),
+  mcpReq('prompts/get', 'prompts/get', { name: 'summarize_department', arguments: { departmentId: '1' } }, { tests: [status(200), "pm.test('messages with an embedded resource', () => pm.expect(pm.response.json().result.messages[1].content.type).to.eql('resource'));"] }),
+  mcpReq('Streamed progress (SSE)', 'tools/call', { name: 'long_running_task', arguments: { seconds: 1, steps: 2 }, _meta: { progressToken: 'pm' } }, { tests: [status(200), ctype('text/event-stream'), has('progress notifications', 'notifications/progress'), has('final result', '"done":true')] }),
+  req('Protected resource metadata', 'GET', '/.well-known/oauth-protected-resource/mcp', { tests: [status(200), "pm.test('names /mcp and the authorization server', () => { const b = pm.response.json(); pm.expect(b.resource).to.match(/\\/mcp$/); pm.expect(b.authorization_servers.length).to.eql(1); });"] }),
+  req('Legacy: initialize (session)', 'POST', '/mcp', { headers: { 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream' }, body: json({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-11-25', capabilities: {}, clientInfo: { name: 'postman', version: '1' } } }),
+    tests: [status(200), "pm.test('negotiated 2025-11-25 with a session id', () => { pm.expect(pm.response.json().result.protocolVersion).to.eql('2025-11-25'); pm.expect(pm.response.headers.get('Mcp-Session-Id')).to.be.ok; });", "pm.collectionVariables.set('mcpSessionId', pm.response.headers.get('Mcp-Session-Id'));"] }),
+  req('Legacy: notifications/initialized → 202', 'POST', '/mcp', { headers: legacyH(), body: json({ jsonrpc: '2.0', method: 'notifications/initialized' }), tests: [status(202)] }),
+  req('Legacy: tools/list in the session', 'POST', '/mcp', { headers: legacyH(), body: json({ jsonrpc: '2.0', id: 2, method: 'tools/list' }), tests: [status(200), "pm.test('22 tools, no 2026-07-28 fields', () => { const r = pm.response.json().result; pm.expect(r.tools.length).to.eql(22); pm.expect(r.resultType).to.be.undefined; });"] }),
+  req('Legacy: DELETE ends the session', 'DELETE', '/mcp', { headers: { 'Mcp-Session-Id': '{{mcpSessionId}}' }, tests: [status(204)] }),
+  req('Legacy: the ended session → 404', 'POST', '/mcp', { headers: legacyH(), body: json({ jsonrpc: '2.0', id: 3, method: 'tools/list' }), tests: [status(404), rpcErr(-32001)] }),
+], 'Mock MCP server at /mcp: protocol 2026-07-28 requests (with the required headers) and a 2025-11-25 session. Uses the active auth mode.');
+
 const graphqlFolder = folder('GraphQL', [
   req('SDL (always open)', 'GET', '/graphql/schema.graphql', { tests: [status(200), has('Query type', 'type Query {'), has('Subscription type', 'type Subscription {')] }),
   req('Query: offset page with nested department', 'POST', '/graphql', { headers: GQL_JSON, body: gql('query($n: Int) { employees(limit: $n, sort: "id") { total items { id fullName department { name } } } }', '{"n": 3}'), tests: [status(200), ctype('application/json'), gqlNoErrors, "const d = pm.response.json().data.employees; pm.test('three items', () => pm.expect(d.items.length).to.eql(3)); pm.test('nested', () => pm.expect(d.items[0].department.name).to.be.a('string'));"] }),
@@ -410,7 +441,7 @@ const collection = {
     { listen: 'test', script: { type: 'text/javascript', exec: collectionTest } },
   ],
   variable: [{ key: 'cachedToken', value: '' }, { key: 'cachedTokenExp', value: '0' }],
-  item: [platform, oauth, authFolder, crud, query, pagination, chaos, files, soapFolder, sseFolder, llmFolder, graphqlFolder, odataFolder, s3Folder, misc],
+  item: [platform, oauth, authFolder, crud, query, pagination, chaos, files, soapFolder, sseFolder, llmFolder, mcpFolder, graphqlFolder, odataFolder, s3Folder, misc],
 };
 
 const environment = {

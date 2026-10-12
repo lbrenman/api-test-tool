@@ -11,7 +11,7 @@
       "script": {
         "type": "text/javascript",
         "exec": [
-          "// Applies the auth mode in {{authMode}} to /v1 requests, SOAP POSTs, SSE streams, /graphql, OData and the mock LLM. Requests with header X-Skip-Auth: 1 go out unauthenticated.",
+          "// Applies the auth mode in {{authMode}} to /v1 requests, SOAP POSTs, SSE streams, /graphql, OData, the mock LLM and /mcp. Requests with header X-Skip-Auth: 1 go out unauthenticated.",
           "(function applyAuth() {",
           "  const sdk = require('postman-collection');",
           "  const CryptoJS = require('crypto-js');",
@@ -20,7 +20,7 @@
           "  if (skip) pm.request.headers.remove('X-Skip-Auth');",
           "  const resolved = new sdk.Url(pm.variables.replaceIn(pm.request.url.toString()));",
           "  const p = resolved.getPath();",
-          "  const isApi = (p.indexOf('/v1/') === 0 && p.indexOf('/v1/files/presigned/') !== 0) || (p.indexOf('/soap/') === 0 && pm.request.method === 'POST') || p.indexOf('/sse/') === 0 || p.indexOf('/llm/v1/') === 0 || p === '/graphql' || (p.indexOf('/odata/v4/') === 0 && p !== '/odata/v4/' && p !== '/odata/v4/$metadata');",
+          "  const isApi = (p.indexOf('/v1/') === 0 && p.indexOf('/v1/files/presigned/') !== 0) || (p.indexOf('/soap/') === 0 && pm.request.method === 'POST') || p.indexOf('/sse/') === 0 || p.indexOf('/llm/v1/') === 0 || p === '/mcp' || p === '/graphql' || (p.indexOf('/odata/v4/') === 0 && p !== '/odata/v4/' && p !== '/odata/v4/$metadata');",
           "  if (!isApi || skip || mode === 'none') return;",
           "  const set = (k, v) => pm.request.headers.upsert({ key: k, value: v });",
           "  if (mode === 'apikey') {",
@@ -4637,11 +4637,938 @@
       "description": "OpenAI-compatible mock LLM at /llm/v1. Uses the active auth mode; errors are OpenAI-shaped."
     },
     {
-      "id": "att-003t",
-      "name": "GraphQL",
+      "id": "att-003v",
+      "name": "MCP server",
       "item": [
         {
           "id": "att-003e",
+          "name": "server/discover",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json, text/event-stream"
+              },
+              {
+                "key": "MCP-Protocol-Version",
+                "value": "2026-07-28"
+              },
+              {
+                "key": "Mcp-Method",
+                "value": "server/discover"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/mcp",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "mcp"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": 1,\n  \"method\": \"server/discover\",\n  \"params\": {\n    \"_meta\": {\n      \"io.modelcontextprotocol/protocolVersion\": \"2026-07-28\",\n      \"io.modelcontextprotocol/clientCapabilities\": {},\n      \"io.modelcontextprotocol/clientInfo\": {\n        \"name\": \"postman\",\n        \"version\": \"1\"\n      }\n    }\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('modern discover result', () => { const r = pm.response.json().result; pm.expect(r.resultType).to.eql('complete'); pm.expect(r.supportedVersions).to.include('2026-07-28'); pm.expect(r.ttlMs).to.be.at.least(0); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "att-003f",
+          "name": "tools/list",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json, text/event-stream"
+              },
+              {
+                "key": "MCP-Protocol-Version",
+                "value": "2026-07-28"
+              },
+              {
+                "key": "Mcp-Method",
+                "value": "tools/list"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/mcp",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "mcp"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": 1,\n  \"method\": \"tools/list\",\n  \"params\": {\n    \"_meta\": {\n      \"io.modelcontextprotocol/protocolVersion\": \"2026-07-28\",\n      \"io.modelcontextprotocol/clientCapabilities\": {},\n      \"io.modelcontextprotocol/clientInfo\": {\n        \"name\": \"postman\",\n        \"version\": \"1\"\n      }\n    }\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('22 tools in a stable order', () => { const t = pm.response.json().result.tools; pm.expect(t.length).to.eql(22); pm.expect(t[0].name).to.eql('search_employees'); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "att-003g",
+          "name": "tools/call get_employee",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json, text/event-stream"
+              },
+              {
+                "key": "MCP-Protocol-Version",
+                "value": "2026-07-28"
+              },
+              {
+                "key": "Mcp-Method",
+                "value": "tools/call"
+              },
+              {
+                "key": "Mcp-Name",
+                "value": "get_employee"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/mcp",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "mcp"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": 1,\n  \"method\": \"tools/call\",\n  \"params\": {\n    \"name\": \"get_employee\",\n    \"arguments\": {\n      \"id\": 1\n    },\n    \"_meta\": {\n      \"io.modelcontextprotocol/protocolVersion\": \"2026-07-28\",\n      \"io.modelcontextprotocol/clientCapabilities\": {},\n      \"io.modelcontextprotocol/clientInfo\": {\n        \"name\": \"postman\",\n        \"version\": \"1\"\n      }\n    }\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('structured result', () => { const r = pm.response.json().result; pm.expect(r.structuredContent.id).to.eql(1); pm.expect(r.content[0].type).to.eql('text'); pm.expect(r.isError).to.not.eql(true); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "att-003h",
+          "name": "tools/call with x-mcp-header argument",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json, text/event-stream"
+              },
+              {
+                "key": "MCP-Protocol-Version",
+                "value": "2026-07-28"
+              },
+              {
+                "key": "Mcp-Method",
+                "value": "tools/call"
+              },
+              {
+                "key": "Mcp-Name",
+                "value": "search_employees"
+              },
+              {
+                "key": "Mcp-Param-Department",
+                "value": "Engineering"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/mcp",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "mcp"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": 1,\n  \"method\": \"tools/call\",\n  \"params\": {\n    \"name\": \"search_employees\",\n    \"arguments\": {\n      \"department\": \"Engineering\",\n      \"limit\": 3\n    },\n    \"_meta\": {\n      \"io.modelcontextprotocol/protocolVersion\": \"2026-07-28\",\n      \"io.modelcontextprotocol/clientCapabilities\": {},\n      \"io.modelcontextprotocol/clientInfo\": {\n        \"name\": \"postman\",\n        \"version\": \"1\"\n      }\n    }\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('filtered by department', () => pm.expect(pm.response.json().result.structuredContent.items.every((e) => /Engineering/.test(e.department))).to.be.true);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "att-003i",
+          "name": "Missing Mcp-Param header → 400 HeaderMismatch",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json, text/event-stream"
+              },
+              {
+                "key": "MCP-Protocol-Version",
+                "value": "2026-07-28"
+              },
+              {
+                "key": "Mcp-Method",
+                "value": "tools/call"
+              },
+              {
+                "key": "Mcp-Name",
+                "value": "search_employees"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/mcp",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "mcp"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": 1,\n  \"method\": \"tools/call\",\n  \"params\": {\n    \"name\": \"search_employees\",\n    \"arguments\": {\n      \"department\": \"Engineering\"\n    },\n    \"_meta\": {\n      \"io.modelcontextprotocol/protocolVersion\": \"2026-07-28\",\n      \"io.modelcontextprotocol/clientCapabilities\": {},\n      \"io.modelcontextprotocol/clientInfo\": {\n        \"name\": \"postman\",\n        \"version\": \"1\"\n      }\n    }\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 400', () => pm.response.to.have.status(400));",
+                  "pm.test('JSON-RPC error -32020', () => pm.expect(pm.response.json().error.code).to.eql(-32020));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "att-003j",
+          "name": "Missing record → tool error",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json, text/event-stream"
+              },
+              {
+                "key": "MCP-Protocol-Version",
+                "value": "2026-07-28"
+              },
+              {
+                "key": "Mcp-Method",
+                "value": "tools/call"
+              },
+              {
+                "key": "Mcp-Name",
+                "value": "get_employee"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/mcp",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "mcp"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": 1,\n  \"method\": \"tools/call\",\n  \"params\": {\n    \"name\": \"get_employee\",\n    \"arguments\": {\n      \"id\": 999999\n    },\n    \"_meta\": {\n      \"io.modelcontextprotocol/protocolVersion\": \"2026-07-28\",\n      \"io.modelcontextprotocol/clientCapabilities\": {},\n      \"io.modelcontextprotocol/clientInfo\": {\n        \"name\": \"postman\",\n        \"version\": \"1\"\n      }\n    }\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('isError', () => pm.expect(pm.response.json().result.isError).to.eql(true));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "att-003k",
+          "name": "Unknown tool → -32602",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json, text/event-stream"
+              },
+              {
+                "key": "MCP-Protocol-Version",
+                "value": "2026-07-28"
+              },
+              {
+                "key": "Mcp-Method",
+                "value": "tools/call"
+              },
+              {
+                "key": "Mcp-Name",
+                "value": "no_such_tool"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/mcp",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "mcp"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": 1,\n  \"method\": \"tools/call\",\n  \"params\": {\n    \"name\": \"no_such_tool\",\n    \"arguments\": {},\n    \"_meta\": {\n      \"io.modelcontextprotocol/protocolVersion\": \"2026-07-28\",\n      \"io.modelcontextprotocol/clientCapabilities\": {},\n      \"io.modelcontextprotocol/clientInfo\": {\n        \"name\": \"postman\",\n        \"version\": \"1\"\n      }\n    }\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('JSON-RPC error -32602', () => pm.expect(pm.response.json().error.code).to.eql(-32602));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "att-003l",
+          "name": "Unsupported protocol version → 400 -32022",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json, text/event-stream"
+              },
+              {
+                "key": "MCP-Protocol-Version",
+                "value": "1900-01-01"
+              },
+              {
+                "key": "Mcp-Method",
+                "value": "tools/list"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/mcp",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "mcp"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": 1,\n  \"method\": \"tools/list\",\n  \"params\": {\n    \"_meta\": {\n      \"io.modelcontextprotocol/protocolVersion\": \"1900-01-01\",\n      \"io.modelcontextprotocol/clientCapabilities\": {},\n      \"io.modelcontextprotocol/clientInfo\": {\n        \"name\": \"postman\",\n        \"version\": \"1\"\n      }\n    }\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 400', () => pm.response.to.have.status(400));",
+                  "pm.test('JSON-RPC error -32022', () => pm.expect(pm.response.json().error.code).to.eql(-32022));",
+                  "pm.test('lists supported versions', () => pm.expect(pm.response.json().error.data.supported).to.include('2026-07-28'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "att-003m",
+          "name": "resources/read",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json, text/event-stream"
+              },
+              {
+                "key": "MCP-Protocol-Version",
+                "value": "2026-07-28"
+              },
+              {
+                "key": "Mcp-Method",
+                "value": "resources/read"
+              },
+              {
+                "key": "Mcp-Name",
+                "value": "att://departments/1"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/mcp",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "mcp"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": 1,\n  \"method\": \"resources/read\",\n  \"params\": {\n    \"uri\": \"att://departments/1\",\n    \"_meta\": {\n      \"io.modelcontextprotocol/protocolVersion\": \"2026-07-28\",\n      \"io.modelcontextprotocol/clientCapabilities\": {},\n      \"io.modelcontextprotocol/clientInfo\": {\n        \"name\": \"postman\",\n        \"version\": \"1\"\n      }\n    }\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('JSON contents', () => pm.expect(JSON.parse(pm.response.json().result.contents[0].text).id).to.eql(1));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "att-003n",
+          "name": "prompts/get",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json, text/event-stream"
+              },
+              {
+                "key": "MCP-Protocol-Version",
+                "value": "2026-07-28"
+              },
+              {
+                "key": "Mcp-Method",
+                "value": "prompts/get"
+              },
+              {
+                "key": "Mcp-Name",
+                "value": "summarize_department"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/mcp",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "mcp"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": 1,\n  \"method\": \"prompts/get\",\n  \"params\": {\n    \"name\": \"summarize_department\",\n    \"arguments\": {\n      \"departmentId\": \"1\"\n    },\n    \"_meta\": {\n      \"io.modelcontextprotocol/protocolVersion\": \"2026-07-28\",\n      \"io.modelcontextprotocol/clientCapabilities\": {},\n      \"io.modelcontextprotocol/clientInfo\": {\n        \"name\": \"postman\",\n        \"version\": \"1\"\n      }\n    }\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('messages with an embedded resource', () => pm.expect(pm.response.json().result.messages[1].content.type).to.eql('resource'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "att-003o",
+          "name": "Streamed progress (SSE)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json, text/event-stream"
+              },
+              {
+                "key": "MCP-Protocol-Version",
+                "value": "2026-07-28"
+              },
+              {
+                "key": "Mcp-Method",
+                "value": "tools/call"
+              },
+              {
+                "key": "Mcp-Name",
+                "value": "long_running_task"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/mcp",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "mcp"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": 1,\n  \"method\": \"tools/call\",\n  \"params\": {\n    \"name\": \"long_running_task\",\n    \"arguments\": {\n      \"seconds\": 1,\n      \"steps\": 2\n    },\n    \"_meta\": {\n      \"io.modelcontextprotocol/protocolVersion\": \"2026-07-28\",\n      \"io.modelcontextprotocol/clientCapabilities\": {},\n      \"io.modelcontextprotocol/clientInfo\": {\n        \"name\": \"postman\",\n        \"version\": \"1\"\n      },\n      \"progressToken\": \"pm\"\n    }\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Content-Type text/event-stream', () => pm.expect(pm.response.headers.get('Content-Type')).to.include('text/event-stream'));",
+                  "pm.test(\"progress notifications\", () => pm.expect(pm.response.text()).to.include(\"notifications/progress\"));",
+                  "pm.test(\"final result\", () => pm.expect(pm.response.text()).to.include(\"\\\"done\\\":true\"));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "att-003p",
+          "name": "Protected resource metadata",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/.well-known/oauth-protected-resource/mcp",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                ".well-known",
+                "oauth-protected-resource",
+                "mcp"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('names /mcp and the authorization server', () => { const b = pm.response.json(); pm.expect(b.resource).to.match(/\\/mcp$/); pm.expect(b.authorization_servers.length).to.eql(1); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "att-003q",
+          "name": "Legacy: initialize (session)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json, text/event-stream"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/mcp",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "mcp"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": 1,\n  \"method\": \"initialize\",\n  \"params\": {\n    \"protocolVersion\": \"2025-11-25\",\n    \"capabilities\": {},\n    \"clientInfo\": {\n      \"name\": \"postman\",\n      \"version\": \"1\"\n    }\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('negotiated 2025-11-25 with a session id', () => { pm.expect(pm.response.json().result.protocolVersion).to.eql('2025-11-25'); pm.expect(pm.response.headers.get('Mcp-Session-Id')).to.be.ok; });",
+                  "pm.collectionVariables.set('mcpSessionId', pm.response.headers.get('Mcp-Session-Id'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "att-003r",
+          "name": "Legacy: notifications/initialized → 202",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json, text/event-stream"
+              },
+              {
+                "key": "Mcp-Session-Id",
+                "value": "{{mcpSessionId}}"
+              },
+              {
+                "key": "MCP-Protocol-Version",
+                "value": "2025-11-25"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/mcp",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "mcp"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"method\": \"notifications/initialized\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 202', () => pm.response.to.have.status(202));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "att-003s",
+          "name": "Legacy: tools/list in the session",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json, text/event-stream"
+              },
+              {
+                "key": "Mcp-Session-Id",
+                "value": "{{mcpSessionId}}"
+              },
+              {
+                "key": "MCP-Protocol-Version",
+                "value": "2025-11-25"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/mcp",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "mcp"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": 2,\n  \"method\": \"tools/list\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('22 tools, no 2026-07-28 fields', () => { const r = pm.response.json().result; pm.expect(r.tools.length).to.eql(22); pm.expect(r.resultType).to.be.undefined; });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "att-003t",
+          "name": "Legacy: DELETE ends the session",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Mcp-Session-Id",
+                "value": "{{mcpSessionId}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/mcp",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "mcp"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 204', () => pm.response.to.have.status(204));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "att-003u",
+          "name": "Legacy: the ended session → 404",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json, text/event-stream"
+              },
+              {
+                "key": "Mcp-Session-Id",
+                "value": "{{mcpSessionId}}"
+              },
+              {
+                "key": "MCP-Protocol-Version",
+                "value": "2025-11-25"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/mcp",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "mcp"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": 3,\n  \"method\": \"tools/list\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 404', () => pm.response.to.have.status(404));",
+                  "pm.test('JSON-RPC error -32001', () => pm.expect(pm.response.json().error.code).to.eql(-32001));"
+                ]
+              }
+            }
+          ]
+        }
+      ],
+      "description": "Mock MCP server at /mcp: protocol 2026-07-28 requests (with the required headers) and a 2025-11-25 session. Uses the active auth mode."
+    },
+    {
+      "id": "att-004b",
+      "name": "GraphQL",
+      "item": [
+        {
+          "id": "att-003w",
           "name": "SDL (always open)",
           "request": {
             "method": "GET",
@@ -4672,7 +5599,7 @@
           ]
         },
         {
-          "id": "att-003f",
+          "id": "att-003x",
           "name": "Query: offset page with nested department",
           "request": {
             "method": "POST",
@@ -4717,7 +5644,7 @@
           ]
         },
         {
-          "id": "att-003g",
+          "id": "att-003y",
           "name": "Query over GET",
           "request": {
             "method": "GET",
@@ -4753,7 +5680,7 @@
           ]
         },
         {
-          "id": "att-003h",
+          "id": "att-003z",
           "name": "Relay connection: first page",
           "request": {
             "method": "POST",
@@ -4797,7 +5724,7 @@
           ]
         },
         {
-          "id": "att-003i",
+          "id": "att-0040",
           "name": "Relay connection: next page",
           "request": {
             "method": "POST",
@@ -4841,7 +5768,7 @@
           ]
         },
         {
-          "id": "att-003j",
+          "id": "att-0041",
           "name": "Filter and sort",
           "request": {
             "method": "POST",
@@ -4885,7 +5812,7 @@
           ]
         },
         {
-          "id": "att-003k",
+          "id": "att-0042",
           "name": "Mutation: create department",
           "request": {
             "method": "POST",
@@ -4929,7 +5856,7 @@
           ]
         },
         {
-          "id": "att-003l",
+          "id": "att-0043",
           "name": "Mutation: update (merge patch)",
           "request": {
             "method": "POST",
@@ -4973,7 +5900,7 @@
           ]
         },
         {
-          "id": "att-003m",
+          "id": "att-0044",
           "name": "Mutation: delete",
           "request": {
             "method": "POST",
@@ -5017,7 +5944,7 @@
           ]
         },
         {
-          "id": "att-003n",
+          "id": "att-0045",
           "name": "Not found → field error NOT_FOUND (HTTP 200)",
           "request": {
             "method": "POST",
@@ -5061,7 +5988,7 @@
           ]
         },
         {
-          "id": "att-003o",
+          "id": "att-0046",
           "name": "Validation → BAD_USER_INPUT with field errors",
           "request": {
             "method": "POST",
@@ -5105,7 +6032,7 @@
           ]
         },
         {
-          "id": "att-003p",
+          "id": "att-0047",
           "name": "Invalid query → 400 with graphql-response+json",
           "request": {
             "method": "POST",
@@ -5154,7 +6081,7 @@
           ]
         },
         {
-          "id": "att-003q",
+          "id": "att-0048",
           "name": "Injected field error → partial data",
           "request": {
             "method": "POST",
@@ -5201,7 +6128,7 @@
           ]
         },
         {
-          "id": "att-003r",
+          "id": "att-0049",
           "name": "Mutation over GET → 405",
           "request": {
             "method": "GET",
@@ -5237,7 +6164,7 @@
           ]
         },
         {
-          "id": "att-003s",
+          "id": "att-004a",
           "name": "X-Force-Error: 503 → errors with the real status",
           "request": {
             "method": "POST",
@@ -5286,11 +6213,11 @@
       ]
     },
     {
-      "id": "att-004c",
+      "id": "att-004u",
       "name": "OData v4",
       "item": [
         {
-          "id": "att-003u",
+          "id": "att-004c",
           "name": "Service document (open)",
           "request": {
             "method": "GET",
@@ -5320,7 +6247,7 @@
           ]
         },
         {
-          "id": "att-003v",
+          "id": "att-004d",
           "name": "$metadata (open)",
           "request": {
             "method": "GET",
@@ -5353,7 +6280,7 @@
           ]
         },
         {
-          "id": "att-003w",
+          "id": "att-004e",
           "name": "Filter, select, orderby, count",
           "request": {
             "method": "GET",
@@ -5403,7 +6330,7 @@
           ]
         },
         {
-          "id": "att-003x",
+          "id": "att-004f",
           "name": "Functions and lambda",
           "request": {
             "method": "GET",
@@ -5444,7 +6371,7 @@
           ]
         },
         {
-          "id": "att-003y",
+          "id": "att-004g",
           "name": "Expand with nested options",
           "request": {
             "method": "GET",
@@ -5481,7 +6408,7 @@
           ]
         },
         {
-          "id": "att-003z",
+          "id": "att-004h",
           "name": "$count",
           "request": {
             "method": "GET",
@@ -5519,7 +6446,7 @@
           ]
         },
         {
-          "id": "att-0040",
+          "id": "att-004i",
           "name": "Property value",
           "request": {
             "method": "GET",
@@ -5553,7 +6480,7 @@
           ]
         },
         {
-          "id": "att-0041",
+          "id": "att-004j",
           "name": "Reset the paging walker",
           "request": {
             "method": "GET",
@@ -5582,7 +6509,7 @@
           ]
         },
         {
-          "id": "att-0042",
+          "id": "att-004k",
           "name": "Server paging: follow @odata.nextLink to the end",
           "request": {
             "method": "GET",
@@ -5623,7 +6550,7 @@
           ]
         },
         {
-          "id": "att-0043",
+          "id": "att-004l",
           "name": "Create employee with @odata.bind",
           "request": {
             "method": "POST",
@@ -5668,7 +6595,7 @@
           ]
         },
         {
-          "id": "att-0044",
+          "id": "att-004m",
           "name": "PATCH with a stale If-Match → 412",
           "request": {
             "method": "PATCH",
@@ -5718,7 +6645,7 @@
           ]
         },
         {
-          "id": "att-0045",
+          "id": "att-004n",
           "name": "PATCH with If-Match → 204",
           "request": {
             "method": "PATCH",
@@ -5766,7 +6693,7 @@
           ]
         },
         {
-          "id": "att-0046",
+          "id": "att-004o",
           "name": "PATCH return=representation → 200",
           "request": {
             "method": "PATCH",
@@ -5815,7 +6742,7 @@
           ]
         },
         {
-          "id": "att-0047",
+          "id": "att-004p",
           "name": "DELETE → 204",
           "request": {
             "method": "DELETE",
@@ -5845,7 +6772,7 @@
           ]
         },
         {
-          "id": "att-0048",
+          "id": "att-004q",
           "name": "Deleted → 404",
           "request": {
             "method": "GET",
@@ -5877,7 +6804,7 @@
           ]
         },
         {
-          "id": "att-0049",
+          "id": "att-004r",
           "name": "Unknown property in $filter → 400",
           "request": {
             "method": "GET",
@@ -5915,7 +6842,7 @@
           ]
         },
         {
-          "id": "att-004a",
+          "id": "att-004s",
           "name": "Validation → 422 with details",
           "request": {
             "method": "POST",
@@ -5962,7 +6889,7 @@
           ]
         },
         {
-          "id": "att-004b",
+          "id": "att-004t",
           "name": "X-Force-Error: 503 → OData error",
           "request": {
             "method": "GET",
@@ -6007,11 +6934,11 @@
       ]
     },
     {
-      "id": "att-004u",
+      "id": "att-005c",
       "name": "S3-compatible API",
       "item": [
         {
-          "id": "att-004d",
+          "id": "att-004v",
           "name": "ListBuckets",
           "request": {
             "method": "GET",
@@ -6064,7 +6991,7 @@
           ]
         },
         {
-          "id": "att-004e",
+          "id": "att-004w",
           "name": "HeadBucket",
           "request": {
             "method": "HEAD",
@@ -6118,7 +7045,7 @@
           ]
         },
         {
-          "id": "att-004f",
+          "id": "att-004x",
           "name": "ListObjectsV2 (page of 3)",
           "request": {
             "method": "GET",
@@ -6184,7 +7111,7 @@
           ]
         },
         {
-          "id": "att-004g",
+          "id": "att-004y",
           "name": "ListObjectsV2 (next page)",
           "request": {
             "method": "GET",
@@ -6252,7 +7179,7 @@
           ]
         },
         {
-          "id": "att-004h",
+          "id": "att-004z",
           "name": "PutObject with metadata",
           "request": {
             "method": "PUT",
@@ -6321,7 +7248,7 @@
           ]
         },
         {
-          "id": "att-004i",
+          "id": "att-0050",
           "name": "HeadObject",
           "request": {
             "method": "HEAD",
@@ -6378,7 +7305,7 @@
           ]
         },
         {
-          "id": "att-004j",
+          "id": "att-0051",
           "name": "GetObject",
           "request": {
             "method": "GET",
@@ -6435,7 +7362,7 @@
           ]
         },
         {
-          "id": "att-004k",
+          "id": "att-0052",
           "name": "GetObject with Range → 206",
           "request": {
             "method": "GET",
@@ -6497,7 +7424,7 @@
           ]
         },
         {
-          "id": "att-004l",
+          "id": "att-0053",
           "name": "CopyObject",
           "request": {
             "method": "PUT",
@@ -6559,7 +7486,7 @@
           ]
         },
         {
-          "id": "att-004m",
+          "id": "att-0054",
           "name": "List a \"folder\" with a delimiter",
           "request": {
             "method": "GET",
@@ -6628,7 +7555,7 @@
           ]
         },
         {
-          "id": "att-004n",
+          "id": "att-0055",
           "name": "The copy is in the file pool (/v1/files)",
           "request": {
             "method": "GET",
@@ -6664,7 +7591,7 @@
           ]
         },
         {
-          "id": "att-004o",
+          "id": "att-0056",
           "name": "DeleteObjects",
           "request": {
             "method": "POST",
@@ -6733,7 +7660,7 @@
           ]
         },
         {
-          "id": "att-004p",
+          "id": "att-0057",
           "name": "Deleted → 404 NoSuchKey",
           "request": {
             "method": "GET",
@@ -6790,7 +7717,7 @@
           ]
         },
         {
-          "id": "att-004q",
+          "id": "att-0058",
           "name": "Unknown bucket → 404 NoSuchBucket",
           "request": {
             "method": "GET",
@@ -6851,7 +7778,7 @@
           ]
         },
         {
-          "id": "att-004r",
+          "id": "att-0059",
           "name": "Wrong secret → 403 SignatureDoesNotMatch",
           "request": {
             "method": "GET",
@@ -6912,7 +7839,7 @@
           ]
         },
         {
-          "id": "att-004s",
+          "id": "att-005a",
           "name": "Unsigned → 403 AccessDenied",
           "request": {
             "method": "GET",
@@ -6946,7 +7873,7 @@
           ]
         },
         {
-          "id": "att-004t",
+          "id": "att-005b",
           "name": "X-Force-Error: 503 → S3 XML error",
           "request": {
             "method": "GET",
@@ -7015,11 +7942,11 @@
       "description": "The file pool as an S3 bucket (path-style). Requests use Postman's AWS Signature auth with {{s3AccessKeyId}}, {{s3SecretAccessKey}} and {{s3Region}}, independent of {{authMode}}."
     },
     {
-      "id": "att-004x",
+      "id": "att-005f",
       "name": "Headers & inspector",
       "item": [
         {
-          "id": "att-004v",
+          "id": "att-005d",
           "name": "Request id echo",
           "request": {
             "method": "GET",
@@ -7059,7 +7986,7 @@
           ]
         },
         {
-          "id": "att-004w",
+          "id": "att-005e",
           "name": "Inspector catch-all",
           "request": {
             "method": "POST",

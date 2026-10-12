@@ -92,7 +92,7 @@ function makeAuth(ctx) {
           req.auth.principal = payload.sub;
           req.auth.claims = payload;
           if (mode === 'oauth2') {
-            const need = ['GET', 'HEAD', 'OPTIONS'].includes(req.method) ? 'read' : 'write';
+            const need = req.requiredScope || (['GET', 'HEAD', 'OPTIONS'].includes(req.method) ? 'read' : 'write'); // a protocol can name it (MCP: read unless a tool writes)
             const scopes = String(payload.scope || '').split(/\s+/);
             if (!scopes.includes(need)) {
               return fail(req, res, `Token lacks required scope "${need}"`, `Bearer realm="api-test-tool", error="insufficient_scope", scope="${need}"`, 403, 'insufficient-scope');

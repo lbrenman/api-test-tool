@@ -14,7 +14,7 @@
   const q = (s) => `'${String(s).replace(/'/g, "'\\''")}'`;
   // Paths that take API credentials: the /v1 mock API and SOAP requests (the WSDL and /soap listing are open).
   const isApiPath = (p) => p === '/v1' || p.startsWith('/v1/') || p.startsWith('/v1?') || (p.startsWith('/soap/') && !/[?.]wsdl$/i.test(p))
-    || p.startsWith('/sse/') || p === '/graphql' || p.startsWith('/graphql?') || p.startsWith('/llm/v1/')
+    || p.startsWith('/sse/') || p === '/graphql' || p.startsWith('/graphql?') || p.startsWith('/llm/v1/') || p === '/mcp' || p.startsWith('/mcp?')
     || (p.startsWith('/odata/v4/') && !/^\/odata\/v4\/(\$metadata)?([?#]|$)/.test(p));
 
   /**
@@ -222,7 +222,7 @@
           `Configure credentials to match the active auth mode: ${C.authLabel}.`,
           `Point webhooks at any path that is not reserved, e.g. \`${B}/hooks/orders\`, and watch them on the Inspector page.`,
           `Import \`${B}/openapi.json\` into your client tool to get every endpoint pre-defined.`,
-          'The other entries are the same data over SOAP, WebSocket, SSE, GraphQL and OData, an OpenAI-compatible mock LLM, and the file pool as an S3 bucket (endpoint = the base URL); the Protocols page has the details for each.',
+          'The other entries are the same data over SOAP, WebSocket, SSE, GraphQL and OData, an OpenAI-compatible mock LLM, an MCP server, and the file pool as an S3 bucket (endpoint = the base URL); the Protocols page has the details for each.',
         ],
         curls: [
           ['List two employees', curl('GET', '/v1/employees?limit=2')],
@@ -314,7 +314,7 @@
       // ------------------------------------------------------------ inspector
       'inspector.capture': {
         title: 'Inspector',
-        purpose: 'A webhook catcher. Any call to a path the tool does not reserve is recorded with its headers, detected auth, body and the response sent back. Calls to the APIs (/v1, SOAP, WebSocket upgrades, SSE, GraphQL, OData, the LLM mock, the S3 API and OAuth) are recorded too while "Record API calls" is on.',
+        purpose: 'A webhook catcher. Any call to a path the tool does not reserve is recorded with its headers, detected auth, body and the response sent back. Calls to the APIs (/v1, SOAP, WebSocket upgrades, SSE, GraphQL, OData, the LLM mock, the MCP server, the S3 API and OAuth) are recorded too while "Record API calls" is on.',
         steps: [
           `Configure the system under test to send its webhook or callback to \`${B}/<any-path>\`, for example \`${B}/hooks/orders\`.`,
           'Trigger the event. The request appears here live — click it to see Request, Auth, Response and a ready-made curl.',
@@ -511,7 +511,7 @@
       // ------------------------------------------------------------ auth
       'auth.mode': {
         title: 'Mode & credentials',
-        purpose: 'How every API call must authenticate: /v1, SOAP, WebSocket upgrades, SSE, GraphQL, OData and the LLM mock all use this mode (the S3 API signs with its own keys instead). The mode comes from AUTH_MODE in the environment unless it is overridden here. The examples in these guides always follow the active mode.',
+        purpose: 'How every API call must authenticate: /v1, SOAP, WebSocket upgrades, SSE, GraphQL, OData, the LLM mock and the MCP server all use this mode (the S3 API signs with its own keys instead). The mode comes from AUTH_MODE in the environment unless it is overridden here. The examples in these guides always follow the active mode.',
         steps: [
           `The active mode is \`${C.mode}\`: ${C.authLabel}.`,
           'Configure your integration with the credentials shown in the form (API key name and location, Basic user and password, Bearer token, JWT settings or the HMAC key).',
@@ -625,7 +625,7 @@
       // ------------------------------------------------------------ chaos
       'chaos.rates': {
         title: 'Rates & latency',
-        purpose: 'Random failures and slowness on every API protocol (/v1, SOAP, WebSocket, SSE, GraphQL, OData, LLM, S3), so you can test retries, timeouts and error handling under realistic conditions.',
+        purpose: 'Random failures and slowness on every API protocol (/v1, SOAP, WebSocket, SSE, GraphQL, OData, LLM, MCP, S3), so you can test retries, timeouts and error handling under realistic conditions.',
         steps: [
           'Set an error rate (0–100 %) and the error types to draw from: any status, `timeout`, `reset`, `malformed-json`, `truncated-body`, `empty-body`, `wrong-content-type`, `slow-drip`.',
           'Add a latency range to slow every call, and a requests-per-minute limit to trigger 429 with `Retry-After`.',
@@ -686,7 +686,7 @@
       },
       'headers.required': {
         title: 'Required request headers',
-        purpose: 'Headers every API request must carry on every protocol (/v1, SOAP, WebSocket, SSE, GraphQL, OData, LLM, S3), optionally with an exact value. Missing or wrong ones return 400 in that protocol\'s error format (problem+json on /v1).',
+        purpose: 'Headers every API request must carry on every protocol (/v1, SOAP, WebSocket, SSE, GraphQL, OData, LLM, MCP, S3), optionally with an exact value. Missing or wrong ones return 400 in that protocol\'s error format (problem+json on /v1).',
         steps: [
           'Enter a JSON list such as `[{"name":"X-Tenant"},{"name":"X-Env","value":"demo"}]` and Save.',
           'Configure the same headers in your integration.',
@@ -867,6 +867,75 @@
         ],
         curls: [
           ['The same stream from a terminal', curl('GET', '/sse/ticks?interval=500&count=5', { extra: ['-N'] })],
+        ],
+      },
+
+      // ------------------------------------------------------------ protocols: MCP
+      'protocols.mcp': (() => {
+        const M = 'io.modelcontextprotocol/';
+        const meta = { [`${M}protocolVersion`]: '2026-07-28', [`${M}clientCapabilities`]: {}, [`${M}clientInfo`]: { name: 'curl', version: '1' } };
+        const accept = { Accept: 'application/json, text/event-stream' };
+        const modern = (method, params = {}, extraHeaders = {}) => curl('POST', '/mcp', {
+          json: { jsonrpc: '2.0', id: 1, method, params: { ...params, _meta: { ...meta, ...(params._meta || {}) } } },
+          headers: { ...accept, 'MCP-Protocol-Version': '2026-07-28', 'Mcp-Method': method, ...(params.name || params.uri ? { 'Mcp-Name': params.name || params.uri } : {}), ...extraHeaders },
+        });
+        const legacy = (method, params, o = {}) => curl('POST', '/mcp', {
+          json: { jsonrpc: '2.0', ...(o.notification ? {} : { id: 2 }), method, ...(params ? { params } : {}) },
+          headers: { ...accept, 'MCP-Protocol-Version': '2025-11-25' }, extra: ['-H "Mcp-Session-Id: $SID"'],
+        });
+        return {
+          title: 'MCP server',
+          purpose: 'A mock MCP server (Streamable HTTP) whose tools, resources and prompts read and change the same employees, products, departments, categories and files as every other protocol. Point an MCP client, an agent platform or an MCP gateway at it. It uses the active auth mode, rate limit, required headers and chaos like /v1.',
+          steps: [
+            `Give your MCP client the server URL \`${B}/mcp\`. Credentials: ${C.authLabel}. In the jwt and oauth2 modes an MCP client can find the OAuth server itself: a 401 carries \`resource_metadata\` pointing at \`${B}/.well-known/oauth-protected-resource/mcp\`, and dynamic client registration is open by default.`,
+            'Protocol 2026-07-28 is stateless: every request carries `io.modelcontextprotocol/protocolVersion` and `clientCapabilities` in `params._meta`, plus the `MCP-Protocol-Version`, `Mcp-Method` and `Mcp-Name` headers, which must match the body (400 with -32020 HeaderMismatch otherwise). `server/discover` lists the supported versions.',
+            'Older clients (2025-11-25, 2025-06-18, 2025-03-26) send `initialize` first: the response carries an `Mcp-Session-Id` header that every later request repeats; GET opens the session\'s notification stream and DELETE ends it.',
+            'Tools: search_employees, get_employee, create/update/delete_employee, the same for products, departments and categories, get_stats, list_files, read_file, echo, long_running_task (progress) and simulate_error. Missing records and bad arguments come back as tool errors (`isError: true`); an unknown tool is a JSON-RPC error.',
+            'search_employees marks its `department` argument with `x-mcp-header: Department`, so a 2026-07-28 client must also send `Mcp-Param-Department` (a test for clients and gateways).',
+            'Resources: `att://departments/1`, `att://employees/{id}`, `att://files/{id}` and more (resources/list, templates, read); `subscriptions/listen` (or a legacy GET stream) sends `notifications/resources/updated` when a record changes through any protocol. Prompts: summarize_department, draft_welcome_email, compare_products.',
+            'Chaos: `X-Force-MCP-Error: tool` (a tool error), `rpc` or `rpc:-32603` (a JSON-RPC error) or `drop` (the connection closes), on top of X-Force-Error and the other chaos settings.',
+          ],
+          curls: [
+            ['Discover the server (2026-07-28)', modern('server/discover')],
+            ['List the tools', modern('tools/list')],
+            ['Call a tool', modern('tools/call', { name: 'get_employee', arguments: { id: 1 } })],
+            ['A tool whose argument is mirrored in a header', modern('tools/call', { name: 'search_employees', arguments: { department: 'Engineering', limit: 3 } }, { 'Mcp-Param-Department': 'Engineering' })],
+            ['Progress notifications (streamed response)', modern('tools/call', { name: 'long_running_task', arguments: { seconds: 3, steps: 3 }, _meta: { progressToken: 'p1' } })],
+            ['Read a resource', modern('resources/read', { uri: 'att://departments/1' })],
+            ['Get a prompt', modern('prompts/get', { name: 'summarize_department', arguments: { departmentId: '1' } })],
+            ['A forced tool error', modern('tools/call', { name: 'echo', arguments: { message: 'hi' } }, { 'X-Force-MCP-Error': 'tool' })],
+            ['Legacy: initialize (copy the Mcp-Session-Id header into SID)', curl('POST', '/mcp', { json: { jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-11-25', capabilities: {}, clientInfo: { name: 'curl', version: '1' } } }, headers: accept, include: true })],
+            ['Legacy: initialized, then list the tools in the session', `SID='<the Mcp-Session-Id value>'\n${legacy('notifications/initialized', undefined, { notification: true })}\n${legacy('tools/list')}`],
+            ['Protected resource metadata (for OAuth clients)', plain('GET', '/.well-known/oauth-protected-resource/mcp')],
+          ],
+        };
+      })(),
+      'protocols.mcp-settings': {
+        title: 'MCP settings',
+        purpose: 'Turn the MCP server on or off, make it read-only, choose JSON or streamed answers, and decide how strict it is about headers and which protocol versions it serves.',
+        steps: [
+          '`mcpAllowWrites` off hides the create, update and delete tools; open notification streams get `notifications/tools/list_changed`.',
+          '`mcpResponseMode`: auto answers in JSON unless a tools/call asks for progress; sse always streams (useful to test a gateway with SSE); json never does.',
+          '`mcpValidateHeaders` off accepts 2026-07-28 requests without matching MCP-Protocol-Version, Mcp-Method, Mcp-Name or Mcp-Param-* headers. `mcpLegacy` off serves 2026-07-28 only (initialize is refused with the supported versions).',
+          '`mcpSessionTtlMinutes`: idle legacy sessions are dropped after this; `mcpKeepAliveSeconds`: comment lines on open notification streams.',
+          ...pw,
+        ],
+        curls: [
+          ['Read-only tools', admin('PUT', '/settings', { json: { mcpAllowWrites: false } })],
+          ['Always stream responses', admin('PUT', '/settings', { json: { mcpResponseMode: 'sse' } })],
+          ['Back to the defaults', admin('POST', '/settings/reset', { json: { section: 'mcp' } })],
+        ],
+      },
+      'protocols.mcp-try': {
+        title: 'Try an MCP request',
+        purpose: 'Send any MCP request from this page with the active auth mode, as a 2026-07-28 client or as a session-based 2025 client, and see the status, headers, streamed notifications and the result.',
+        steps: [
+          'Pick a protocol version and a method. A session version sends initialize and notifications/initialized first and keeps the session for later requests.',
+          'Run tools/list once to fill the tool names. For tools/call, edit the arguments; tick progress on long_running_task to see a streamed response.',
+          'Fill X-Force-MCP-Error with tool, rpc or drop to see how failures look.',
+        ],
+        curls: [
+          ['The same tools/list from a terminal', curl('POST', '/mcp', { json: { jsonrpc: '2.0', id: 1, method: 'tools/list', params: { _meta: { 'io.modelcontextprotocol/protocolVersion': '2026-07-28', 'io.modelcontextprotocol/clientCapabilities': {} } } }, headers: { Accept: 'application/json, text/event-stream', 'MCP-Protocol-Version': '2026-07-28', 'Mcp-Method': 'tools/list' } })],
         ],
       },
 

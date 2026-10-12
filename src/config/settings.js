@@ -125,6 +125,15 @@ const DEFS = [
   { key: 'llmStreamDelayMs', env: 'LLM_STREAM_DELAY_MS', def: 25, type: 'int', section: 'llm', min: 0, max: 5000, desc: 'Delay between streamed chunks (stream: true)' },
   { key: 'llmToolCallRate', env: 'LLM_TOOL_CALL_RATE', def: 50, type: 'int', section: 'llm', min: 0, max: 100, desc: 'Percent of requests with tools (tool_choice auto) answered with a tool call; required or a named tool always calls, none never does, and a reply to a tool result is always text' },
 
+  // ---- mcp (mock MCP server) ----
+  { key: 'mcpEnabled', env: 'MCP_ENABLED', def: true, type: 'bool', section: 'mcp', desc: 'serve the mock MCP server at /mcp (Streamable HTTP: protocol 2026-07-28, and 2025-11-25 / 2025-06-18 / 2025-03-26 clients that initialize)' },
+  { key: 'mcpAllowWrites', env: 'MCP_ALLOW_WRITES', def: true, type: 'bool', section: 'mcp', desc: 'offer the create/update/delete tools (off = read-only tools; connected clients get notifications/tools/list_changed)' },
+  { key: 'mcpResponseMode', env: 'MCP_RESPONSE_MODE', def: 'auto', type: 'enum', options: ['auto', 'json', 'sse'], section: 'mcp', desc: 'How requests are answered: auto = JSON, or an SSE stream when a tools/call carries a progressToken; json = always JSON; sse = always an SSE stream (when the client accepts it)' },
+  { key: 'mcpValidateHeaders', env: 'MCP_VALIDATE_HEADERS', def: true, type: 'bool', section: 'mcp', desc: 'Check 2026-07-28 requests: MCP-Protocol-Version, Mcp-Method, Mcp-Name and Mcp-Param-* must be present and match the body (400, -32020 HeaderMismatch), and Accept must list application/json and text/event-stream' },
+  { key: 'mcpLegacy', env: 'MCP_LEGACY', def: true, type: 'bool', section: 'mcp', desc: 'also serve clients that start with initialize (sessions with Mcp-Session-Id, GET stream, DELETE); off = 2026-07-28 only' },
+  { key: 'mcpSessionTtlMinutes', env: 'MCP_SESSION_TTL_MINUTES', def: 30, type: 'int', section: 'mcp', min: 1, max: 1440, desc: 'Idle legacy sessions are forgotten after this long (the client then gets 404 and must initialize again)' },
+  { key: 'mcpKeepAliveSeconds', env: 'MCP_KEEPALIVE_SECONDS', def: 15, type: 'int', section: 'mcp', min: 0, max: 3600, desc: 'Comment line sent this often on open notification streams (subscriptions/listen, legacy GET); 0 = off' },
+
   // ---- webhooks ----
   { key: 'webhooksEnabled', env: 'WEBHOOKS_ENABLED', def: true, type: 'bool', section: 'webhooks', desc: 'send the outgoing webhooks defined on the Webhooks page (off = pause all deliveries; the definitions are kept)' },
   { key: 'webhookTimeoutMs', env: 'WEBHOOK_TIMEOUT_MS', def: 10000, type: 'int', section: 'webhooks', min: 100, max: 60000, desc: 'How long a delivery waits for the receiver before it is logged as failed' },
@@ -132,7 +141,7 @@ const DEFS = [
 
   // ---- inspector ----
   { key: 'inspectorRetention', env: 'INSPECTOR_RETENTION', def: 500, type: 'int', section: 'inspector', min: 1 },
-  { key: 'inspectorLogAll', env: 'INSPECTOR_LOG_ALL', def: true, type: 'bool', section: 'inspector', desc: 'also record /v1/*, /soap/*, /ws/* (upgrades), /sse/*, /graphql, /odata/*, /llm/*, S3 API and /oauth/* calls (the dashboard, docs and health probes are never recorded)' },
+  { key: 'inspectorLogAll', env: 'INSPECTOR_LOG_ALL', def: true, type: 'bool', section: 'inspector', desc: 'also record /v1/*, /soap/*, /ws/* (upgrades), /sse/*, /graphql, /odata/*, /llm/*, /mcp, S3 API and /oauth/* calls (the dashboard, docs and health probes are never recorded)' },
   { key: 'inspectorResponseStatus', env: 'INSPECTOR_RESPONSE_STATUS', def: 200, type: 'int', section: 'inspector', min: 100, max: 599 },
   { key: 'inspectorResponseContentType', env: 'INSPECTOR_RESPONSE_CONTENT_TYPE', def: 'application/json', type: 'string', section: 'inspector' },
   { key: 'inspectorResponseBody', env: 'INSPECTOR_RESPONSE_BODY', def: '', type: 'string', section: 'inspector', desc: 'blank = JSON receipt with the capture id' },

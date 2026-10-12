@@ -40,6 +40,7 @@ const graphqlRouter = require('./protocols/graphql/router');
 const odataRouter = require('./protocols/odata/router');
 const s3Router = require('./protocols/s3/router');
 const llmRouter = require('./protocols/llm/router');
+const mcpRouter = require('./protocols/mcp/router');
 
 const LEVELS = { debug: 10, info: 20, warn: 30, error: 40 };
 
@@ -132,6 +133,7 @@ async function createApp(opts = {}) {
   // Platform + OAuth (always open)
   app.use(platformRouter(ctx, { adminAuth }));
   app.use(oauthRouter(ctx));
+  app.use(mcpRouter.wellKnown(ctx)); // RFC 9728 protected resource metadata for /mcp
 
   // Dashboard + admin API
   app.get('/', (req, res) => res.redirect(302, '/dashboard'));
@@ -169,6 +171,8 @@ async function createApp(opts = {}) {
   app.use('/odata', odataRouter(ctx));
   // OpenAI-compatible mock LLM (base URL /llm/v1): chat completions with random token usage, embeddings, models.
   app.use('/llm', llmRouter(ctx));
+  // Mock MCP server (Streamable HTTP; 2026-07-28 stateless and 2025-xx session clients) over the same data.
+  app.use('/mcp', mcpRouter(ctx));
 
   // Everything else: the inspector
   app.use(catchAll(ctx));

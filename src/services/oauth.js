@@ -288,17 +288,28 @@ class OAuthService {
     return req;
   }
 
-  async issueAccessToken(req, { client, scopes, subject, refresh }) {
+  // RFC 8707 resource indicator: a resource on this server (e.g. <base>/mcp) is added to the token's audience.
+  checkResource(req, resource) {
+    if (resource === undefined || resource === null || resource === '') return undefined;
+    const r = Array.isArray(resource) ? resource[0] : String(resource);
+    const base = this.ctx.baseUrl(req);
+    let ok = false;
+    try { const u = new URL(r); ok = !u.hash && (r === base || r.startsWith(`${base}/`)); } catch { ok = false; }
+    if (!ok) throw new OAuthError('invalid_target', `resource must be an absolute URL on this server (${base}/…)`);
+    return r;
+  }
+
+  async issueAccessToken(req, { client, scopes, subject, refresh, resource }) {
     const ttl = this.ctx.settings.get('oauthTokenTtl');
     const token = await this.ctx.keys.sign(
       { client_id: client.clientId, scope: scopes.join(' '), token_use: 'access' },
-      { ttl, issuer: this.issuer(req), audience: this.audience(), subject: subject || client.clientId },
+      { ttl, issuer: this.issuer(req), audience: resource && resource !== this.audience() ? [this.audience(), resource] : this.audience(), subject: subject || client.clientId },
     );
     const out = { access_token: token, token_type: 'Bearer', expires_in: ttl, scope: scopes.join(' ') };
     if (refresh) {
       const rt = crypto.randomBytes(32).toString('base64url');
       await this.ctx.repo.put('oauth_refresh', rt, {
-        token: rt, clientId: client.clientId, scopes, subject,
+        token: rt, clientId: client.clientId, scopes, subject, resource,
         expiresAt: Date.now() + this.ctx.settings.get('oauthRefreshTtl') * 1000,
       });
       out.refresh_token = rt;
@@ -306,9 +317,9 @@ class OAuthService {
     return out;
   }
 
-  createCode({ clientId, redirectUri, scopes, subject, codeChallenge, codeChallengeMethod, state }) {
+  createCode({ clientId, redirectUri, scopes, subject, codeChallenge, codeChallengeMethod, state, resource }) {
     const code = crypto.randomBytes(24).toString('base64url');
-    this.codes.set(code, { clientId, redirectUri, scopes, subject, codeChallenge, codeChallengeMethod, state, expiresAt: Date.now() + 120000 });
+    this.codes.set(code, { clientId, redirectUri, scopes, subject, codeChallenge, codeChallengeMethod, state, resource, expiresAt: Date.now() + 120000 });
     return code;
   }
 

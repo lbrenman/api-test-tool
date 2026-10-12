@@ -52,9 +52,9 @@ module.exports = function oauthRouter(ctx) {
   const r = express.Router();
   const forms = [express.urlencoded({ extended: false, verify }), express.json({ verify })];
 
-  const AUTH_PARAMS = ['response_type', 'client_id', 'redirect_uri', 'scope', 'state', 'code_challenge', 'code_challenge_method'];
+  const AUTH_PARAMS = ['response_type', 'client_id', 'redirect_uri', 'scope', 'state', 'code_challenge', 'code_challenge_method', 'resource'];
 
-  async function validateAuthorize(q) {
+  async function validateAuthorize(q, req) {
     if (q.response_type !== 'code') throw new OAuthError('unsupported_response_type', 'response_type must be "code"');
     const client = await oauth.client(q.client_id);
     if (!client) throw new OAuthError('invalid_client', 'Unknown client_id');
@@ -65,12 +65,13 @@ module.exports = function oauthRouter(ctx) {
     if (client.grantTypes && !client.grantTypes.includes('authorization_code')) throw new OAuthError('unauthorized_client', 'This client is not registered for the authorization_code grant');
     if (q.code_challenge_method && !['S256', 'plain'].includes(q.code_challenge_method)) throw new OAuthError('invalid_request', 'code_challenge_method must be S256 or plain');
     const scopes = oauth.resolveScopes(client, q.scope);
-    return { client, scopes };
+    const resource = oauth.checkResource(req, q.resource);
+    return { client, scopes, resource };
   }
 
   r.get('/oauth/authorize', async (req, res) => {
     try {
-      const { client } = await validateAuthorize(req.query);
+      const { client } = await validateAuthorize(req.query, req);
       const params = Object.fromEntries(AUTH_PARAMS.filter((k) => req.query[k]).map((k) => [k, req.query[k]]));
       res.type('html').send(loginPage({ client, params }));
     } catch (e) {
@@ -83,7 +84,7 @@ module.exports = function oauthRouter(ctx) {
     const b = req.body || {};
     let ctxv;
     try {
-      ctxv = await validateAuthorize(b);
+      ctxv = await validateAuthorize(b, req);
     } catch (e) {
       if (e instanceof OAuthError) return res.status(400).type('html').send(`<p>${esc(e.error)}: ${esc(e.description)}</p>`);
       throw e;
@@ -95,7 +96,7 @@ module.exports = function oauthRouter(ctx) {
     }
     const code = oauth.createCode({
       clientId: ctxv.client.clientId, redirectUri: b.redirect_uri, scopes: ctxv.scopes, subject: b.username,
-      codeChallenge: b.code_challenge, codeChallengeMethod: b.code_challenge_method, state: b.state,
+      codeChallenge: b.code_challenge, codeChallengeMethod: b.code_challenge_method, state: b.state, resource: ctxv.resource,
     });
     redirectWith(res, b.redirect_uri, { code, state: b.state });
   });
@@ -114,7 +115,7 @@ module.exports = function oauthRouter(ctx) {
         const { client } = await oauth.authenticateClient(req);
         allowedGrant(client);
         const scopes = oauth.resolveScopes(client, b.scope);
-        return res.json(await oauth.issueAccessToken(req, { client, scopes }));
+        return res.json(await oauth.issueAccessToken(req, { client, scopes, resource: oauth.checkResource(req, b.resource) }));
       }
       if (grant === 'authorization_code') {
         const { client, public: isPublic } = await oauth.authenticateClient(req, { allowPublic: true });
@@ -124,7 +125,9 @@ module.exports = function oauthRouter(ctx) {
         if (code.redirectUri !== b.redirect_uri) throw new OAuthError('invalid_grant', 'redirect_uri does not match the authorization request');
         if (isPublic && !code.codeChallenge) throw new OAuthError('invalid_request', 'Public clients must use PKCE');
         if (!OAuthService.verifyPkce(b.code_verifier, code.codeChallenge, code.codeChallengeMethod)) throw new OAuthError('invalid_grant', 'PKCE code_verifier does not match code_challenge');
-        return res.json(await oauth.issueAccessToken(req, { client, scopes: code.scopes, subject: code.subject, refresh: mayRefresh(client) }));
+        const resource = oauth.checkResource(req, b.resource) ?? code.resource;
+        if (code.resource && resource !== code.resource) throw new OAuthError('invalid_target', 'resource does not match the authorization request');
+        return res.json(await oauth.issueAccessToken(req, { client, scopes: code.scopes, subject: code.subject, refresh: mayRefresh(client), resource }));
       }
       if (grant === 'refresh_token') {
         const { client } = await oauth.authenticateClient(req, { allowPublic: true });
@@ -133,7 +136,7 @@ module.exports = function oauthRouter(ctx) {
         if (!rt || rt.expiresAt < Date.now() || rt.clientId !== client.clientId) throw new OAuthError('invalid_grant', 'Refresh token is invalid, expired or belongs to another client');
         await ctx.repo.del('oauth_refresh', rt.token); // rotation
         const scopes = b.scope ? b.scope.split(/\s+/).filter((s) => rt.scopes.includes(s)) : rt.scopes;
-        return res.json(await oauth.issueAccessToken(req, { client, scopes, subject: rt.subject, refresh: true }));
+        return res.json(await oauth.issueAccessToken(req, { client, scopes, subject: rt.subject, refresh: true, resource: oauth.checkResource(req, b.resource) ?? rt.resource }));
       }
       throw new OAuthError('unsupported_grant_type', `Unsupported grant_type "${grant || ''}"`);
     } catch (e) {

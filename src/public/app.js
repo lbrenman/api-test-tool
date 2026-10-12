@@ -237,13 +237,13 @@
     overview: { purpose: 'Your starting point: the URLs to give integrations, current auth mode, health, data counts and copy-ready curl commands.' },
     settings: { purpose: 'Every setting in one place. Environment variables set defaults; changes here override them and survive restarts. Badges show where each value comes from.' },
     data: { purpose: 'The seeded mock data (employees, products, departments, categories): counts, a preview, re-seed with different sizes, or clear it.' },
-    inspector: { purpose: 'Every call made to this server shows up here live, with headers, auth, body and the response that was returned: webhooks and other calls to unreserved paths, plus calls to every API the tool serves (/v1, SOAP, WebSocket upgrades, SSE, GraphQL, OData, the LLM mock, the S3 API and OAuth). Filter by source, or switch API recording off with the checkbox at the top of the page.' },
+    inspector: { purpose: 'Every call made to this server shows up here live, with headers, auth, body and the response that was returned: webhooks and other calls to unreserved paths, plus calls to every API the tool serves (/v1, SOAP, WebSocket upgrades, SSE, GraphQL, OData, the LLM mock, the MCP server, the S3 API and OAuth). Filter by source, or switch API recording off with the checkbox at the top of the page.' },
     webhooks: { purpose: 'Outgoing webhooks: when an employee, product, department or category is created, updated or deleted, or a file is uploaded, downloaded or deleted (through any protocol), POST its type and id to URLs you choose. Stored in the database, so they survive restarts; every delivery is logged with the response.' },
     files: { purpose: 'The shared file pool used by every file protocol (multipart, raw/octet-stream, base64, tus, presigned, range, chunked) and by the S3-compatible API, where it is a bucket. The Upload card\'s ? guides have curl examples for testing each upload protocol, including error cases (413, 400, 415); upload, download, delete or regenerate samples.' },
-    auth: { purpose: 'Choose how API calls must authenticate (none, API key, Basic, Bearer, JWT, OAuth2, HMAC) on /v1, SOAP, WebSocket, SSE, GraphQL, OData and the LLM mock; see the credentials, manage OAuth clients (added here, from OAUTH_CLIENTS, or registered dynamically), control dynamic client registration and get test tokens. The S3 API signs with its own keys (Protocols page).' },
+    auth: { purpose: 'Choose how API calls must authenticate (none, API key, Basic, Bearer, JWT, OAuth2, HMAC) on /v1, SOAP, WebSocket, SSE, GraphQL, OData, the LLM mock and the MCP server; see the credentials, manage OAuth clients (added here, from OAUTH_CLIENTS, or registered dynamically), control dynamic client registration and get test tokens. The S3 API signs with its own keys (Protocols page).' },
     chaos: { purpose: 'Make the mock API misbehave on purpose: random errors, latency, timeouts, broken JSON and rate limits, globally or per route, so you can test client error handling.' },
     headers: { purpose: 'Headers added to every response, and headers every API request must carry on every protocol (missing ones are rejected with 400 in that protocol\'s error format).' },
-    protocols: { purpose: 'The same mock data over other protocols: SOAP 1.1/1.2 services with live WSDLs, WebSocket channels (echo, JSON-RPC, live change feed) with an AsyncAPI document and a live console, Server-Sent Events streams (change feed with replay, ticks, LLM-style streaming) with a live viewer, GraphQL (queries, mutations, subscriptions), OData v4, an OpenAI-compatible mock LLM (chat completions with random token usage, tool calls, streaming, embeddings), and the file pool as an S3-compatible bucket (AWS Signature V4), each with a console. Auth (the S3 API uses its own keys), chaos, rate limits and required headers apply as on /v1.' },
+    protocols: { purpose: 'The same mock data over other protocols: SOAP 1.1/1.2 services with live WSDLs, WebSocket channels (echo, JSON-RPC, live change feed) with an AsyncAPI document and a live console, Server-Sent Events streams (change feed with replay, ticks, LLM-style streaming) with a live viewer, GraphQL (queries, mutations, subscriptions), OData v4, an OpenAI-compatible mock LLM (chat completions with random token usage, tool calls, streaming, embeddings), an MCP server (tools, resources and prompts over the data; protocol 2026-07-28 and session-based 2025 clients), and the file pool as an S3-compatible bucket (AWS Signature V4), each with a console. Auth (the S3 API uses its own keys), chaos, rate limits and required headers apply as on /v1.' },
     openapi: { purpose: 'Two live OpenAPI 3.1 specs: the Mock Data API (/openapi.json) for integrations to import, and the Admin API (/admin/api/openapi.json) for scripting the tool itself.' },
     tester: { purpose: 'Test an API you built: load its OpenAPI spec (REST), WSDL (SOAP) or AsyncAPI document (WebSocket), call your implementation, and check every response or message against the contract.' },
     help: { purpose: 'What this tool does and how to use each page.' },
@@ -454,7 +454,7 @@
     const filterText = h('input', { type: 'text', placeholder: 'Filter path, header, body…', 'aria-label': 'Filter' });
     const filterMethod = h('select', { 'aria-label': 'Method' }, ['', 'GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'].map((m) => h('option', { value: m }, m || 'All methods')));
     const filterSource = h('select', { 'aria-label': 'Source' },
-      [['', 'All sources'], ['catch-all', 'Webhooks / other paths'], ['v1', 'Mock API (/v1)'], ['soap', 'SOAP (/soap)'], ['ws', 'WebSocket (/ws)'], ['sse', 'SSE (/sse)'], ['graphql', 'GraphQL (/graphql)'], ['odata', 'OData (/odata)'], ['llm', 'LLM (/llm)'], ['s3', 'S3 API (/<bucket>)'], ['oauth', 'OAuth (/oauth)']].map(([v, l]) => h('option', { value: v }, l)));
+      [['', 'All sources'], ['catch-all', 'Webhooks / other paths'], ['v1', 'Mock API (/v1)'], ['soap', 'SOAP (/soap)'], ['ws', 'WebSocket (/ws)'], ['sse', 'SSE (/sse)'], ['graphql', 'GraphQL (/graphql)'], ['odata', 'OData (/odata)'], ['llm', 'LLM (/llm)'], ['mcp', 'MCP (/mcp)'], ['s3', 'S3 API (/<bucket>)'], ['oauth', 'OAuth (/oauth)']].map(([v, l]) => h('option', { value: v }, l)));
     const live = h('span', { class: 'live-dot' });
     const count = h('span', { class: 'muted small' });
     const logAll = h('input', { type: 'checkbox', checked: !!sval('inspectorLogAll') });
@@ -571,7 +571,7 @@
     const fwdEnabled = h('input', { type: 'checkbox', checked: sval('inspectorForwardEnabled') });
     const fwdUrl = h('input', { type: 'url', value: sval('inspectorForwardUrl') || '', placeholder: 'https://example.com/webhooks' });
 
-    el.append(header('Inspector', 'Every call to this server, live: webhooks to any unreserved path, plus calls to every API the tool serves (/v1, SOAP, WebSocket, SSE, GraphQL, OData, LLM, S3, OAuth).',
+    el.append(header('Inspector', 'Every call to this server, live: webhooks to any unreserved path, plus calls to every API the tool serves (/v1, SOAP, WebSocket, SSE, GraphQL, OData, LLM, MCP, S3, OAuth).',
       live, count,
       h('label', { class: 'check', title: 'INSPECTOR_LOG_ALL' }, logAll, 'Record API calls'),
       h('a', { class: 'btn', href: '/admin/api/inspector/export' }, 'Export JSON'),
@@ -636,7 +636,7 @@
     const hmacBody = h('textarea', { rows: 3, placeholder: 'JSON body (exact bytes you will send)' });
     const hmacOut = h('div');
 
-    el.append(header('Auth', `Active mode: ${a.mode}. Applies to /v1, SOAP, WebSocket, SSE, GraphQL, OData and the LLM mock (the S3 API signs with its own keys).`));
+    el.append(header('Auth', `Active mode: ${a.mode}. Applies to /v1, SOAP, WebSocket, SSE, GraphQL, OData, the LLM mock and the MCP server (the S3 API signs with its own keys).`));
     el.append(h('div', { class: 'grid cols-2' },
       h('div', { class: 'card stack' }, titled('Mode & credentials', 'auth.mode'), settingsForm(['authMode', 'apiKey', 'apiKeyName', 'apiKeyIn', 'basicUser', 'basicPass', 'bearerToken', 'jwtAlg', 'jwtIssuer', 'jwtAudience', 'hmacKeyId', 'hmacSecret', 'hmacMaxSkewSeconds'], { onSaved: route })),
       h('div', null,
@@ -971,6 +971,7 @@
     graphqlSection(el);
     odataSection(el);
     await llmSection(el);
+    await mcpSection(el);
     await s3Section(el);
     return () => { wsCleanup?.(); sseCleanup?.(); }; // close the live consoles when leaving the page
   };
@@ -1082,6 +1083,116 @@
         field('max_tokens', maxTok), field('seed', seed), field('X-Force-Error', forceErr)),
       h('div', { class: 'row' }, h('button', { class: 'primary', onclick: send }, 'Send'),
         h('span', { class: 'small muted' }, `Sent from your browser with the active auth mode (${CURL?.mode || 'none'}). The call also appears on the Inspector page.`)),
+      out));
+  }
+
+  // ---- Mock MCP server: endpoint, settings and a console that speaks either protocol era.
+  async function mcpSection(el) {
+    const on = !!sval('mcpEnabled');
+    const base = location.origin;
+    const MODERN = '2026-07-28';
+    el.append(h('div', { class: 'grid cols-2' },
+      h('div', { class: 'card' }, titled('MCP server', 'protocols.mcp'),
+        !on ? h('p', { class: 'muted' }, 'The MCP mock is off. Turn on mcpEnabled in the settings next to this card.')
+          : h('div', { class: 'stack' },
+            h('div', { class: 'kv' },
+              h('div', null, 'Endpoint'), h('div', null, h('code', null, `${base}/mcp`), ' ', h('button', { class: 'small', onclick: () => copy(`${base}/mcp`) }, 'copy')),
+              h('div', null, 'Protocol'), h('div', null, h('code', null, MODERN), sval('mcpLegacy') ? h('span', { class: 'small muted' }, ' + 2025-11-25, 2025-06-18, 2025-03-26 (initialize + Mcp-Session-Id)') : null),
+              h('div', null, 'OAuth metadata'), h('div', null, h('a', { href: `${base}/.well-known/oauth-protected-resource/mcp`, target: '_blank', rel: 'noopener' }, '/.well-known/oauth-protected-resource/mcp ↗'))),
+            h('div', { class: 'small muted' }, `Tools search, read and ${sval('mcpAllowWrites') ? 'change' : '(writes are off) do not change'} employees, products, departments, categories and files; resources (att://…) and prompts too. Credentials: the active auth mode (${CURL?.mode || 'none'}).`))),
+      h('div', { class: 'card' }, titled('MCP settings', 'protocols.mcp-settings'),
+        settingsForm(['mcpEnabled', 'mcpAllowWrites', 'mcpResponseMode', 'mcpValidateHeaders', 'mcpLegacy', 'mcpSessionTtlMinutes', 'mcpKeepAliveSeconds'], { onSaved: () => route() }))));
+    if (!on) return;
+
+    const era = h('select', { 'aria-label': 'Protocol version' }, [MODERN, ...(sval('mcpLegacy') ? ['2025-11-25', '2025-06-18', '2025-03-26'] : [])].map((v) => h('option', { value: v }, v === MODERN ? `${v} (stateless)` : `${v} (session)`)));
+    const METHODS = ['server/discover', 'tools/list', 'tools/call', 'resources/list', 'resources/templates/list', 'resources/read', 'prompts/list', 'prompts/get'];
+    const methodSel = h('select', { 'aria-label': 'Method' }, METHODS.map((m) => h('option', { value: m }, m)));
+    const nameIn = h('input', { type: 'text', list: 'mcp-tool-names', placeholder: 'tool / prompt name, or resource URI', style: { minWidth: '240px' } });
+    const names = h('datalist', { id: 'mcp-tool-names' });
+    const argsIn = h('textarea', { rows: 4, class: 'mono', spellcheck: 'false', 'aria-label': 'Arguments (JSON)' }, '{ "query": "engineer", "limit": 3 }');
+    const progress = h('input', { type: 'checkbox' });
+    const forceErr = h('input', { type: 'text', placeholder: 'tool, rpc or drop', style: { maxWidth: '140px' } });
+    const out = h('div', { class: 'stack' });
+    const sessions = {};
+    let rid = 0;
+    nameIn.value = 'search_employees';
+    methodSel.value = 'tools/call';
+    methodSel.addEventListener('change', () => {
+      const m = methodSel.value;
+      if (m === 'resources/read') { nameIn.value = 'att://departments/1'; argsIn.value = ''; }
+      else if (m === 'prompts/get') { nameIn.value = 'summarize_department'; argsIn.value = '{ "departmentId": "1" }'; }
+      else if (m === 'tools/call') { nameIn.value = 'search_employees'; argsIn.value = '{ "query": "engineer", "limit": 3 }'; }
+    });
+
+    // One POST; returns { status, headers, messages } (an SSE response yields several messages).
+    async function post(body, extraHeaders) {
+      const text = JSON.stringify(body);
+      const hdrs = { 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream', ...extraHeaders, ...(await protocolAuthHeaders('POST', '/mcp', text)) };
+      const url = CURL?.ctx?.mode === 'apikey' && CURL.ctx.apiKey.in === 'query' ? `/mcp?${encodeURIComponent(CURL.ctx.apiKey.name)}=${encodeURIComponent(CURL.ctx.apiKey.value)}` : '/mcp';
+      const res = await fetch(url, { method: 'POST', headers: hdrs, body: text, credentials: 'omit' });
+      const raw = await res.text();
+      let messages = [];
+      if ((res.headers.get('content-type') || '').includes('text/event-stream')) {
+        messages = raw.split('\n\n').map((b) => b.split('\n').filter((l) => l.startsWith('data:')).map((l) => l.slice(5).trim()).join('\n')).filter(Boolean).map((d) => { try { return JSON.parse(d); } catch { return d; } });
+      } else if (raw) { try { messages = [JSON.parse(raw)]; } catch { messages = [raw]; } }
+      return { status: res.status, headers: res.headers, messages, raw };
+    }
+
+    async function session(v) {
+      if (sessions[v]) return sessions[v];
+      const init = await post({ jsonrpc: '2.0', id: ++rid, method: 'initialize', params: { protocolVersion: v, capabilities: {}, clientInfo: { name: 'api-test-tool-dashboard', version: '1' } } }, {});
+      const sid = init.headers.get('mcp-session-id');
+      if (!sid) throw new Error(`initialize failed (${init.status}): ${init.raw.slice(0, 200)}`);
+      await post({ jsonrpc: '2.0', method: 'notifications/initialized' }, { 'Mcp-Session-Id': sid, ...(v !== '2025-03-26' ? { 'MCP-Protocol-Version': v } : {}) });
+      sessions[v] = sid;
+      return sid;
+    }
+
+    const send = guard(async () => {
+      const v = era.value;
+      const m = methodSel.value;
+      const params = {};
+      let args;
+      if (argsIn.value.trim()) { try { args = JSON.parse(argsIn.value); } catch (e) { throw new Error(`Arguments are not valid JSON: ${e.message}`); } }
+      if (m === 'tools/call' || m === 'prompts/get') { params.name = nameIn.value.trim(); if (args) params.arguments = args; }
+      if (m === 'resources/read') params.uri = nameIn.value.trim();
+      if (m === 'tools/call' && progress.checked) params._meta = { progressToken: `p${rid + 1}` };
+      const hdrs = {};
+      if (forceErr.value.trim()) hdrs['X-Force-MCP-Error'] = forceErr.value.trim();
+      if (v === MODERN) {
+        params._meta = { ...(params._meta || {}), 'io.modelcontextprotocol/protocolVersion': MODERN, 'io.modelcontextprotocol/clientCapabilities': {}, 'io.modelcontextprotocol/clientInfo': { name: 'api-test-tool-dashboard', version: '1' } };
+        Object.assign(hdrs, { 'MCP-Protocol-Version': MODERN, 'Mcp-Method': m });
+        if (params.name || params.uri) hdrs['Mcp-Name'] = params.name || params.uri;
+        if (m === 'tools/call' && args && typeof args.department === 'string') hdrs['Mcp-Param-Department'] = args.department;
+      } else {
+        hdrs['Mcp-Session-Id'] = await session(v);
+        if (v !== '2025-03-26') hdrs['MCP-Protocol-Version'] = v;
+      }
+      const started = performance.now();
+      const r = await post({ jsonrpc: '2.0', id: ++rid, method: m, params }, hdrs);
+      if (r.status === 404 && v !== MODERN) delete sessions[v]; // expired session: the next send initializes again
+      const final = r.messages.find((x) => x && typeof x === 'object' && ('result' in x || 'error' in x));
+      if (m === 'tools/list' && final?.result?.tools) clear(names).append(...final.result.tools.map((t) => h('option', { value: t.name }, t.title || '')));
+      const shown = ['content-type', 'mcp-session-id', 'x-chaos-injected', 'www-authenticate', 'retry-after'];
+      const res = final?.result;
+      const badges = [];
+      if (final?.error) badges.push(h('span', { class: 'badge fail' }, `JSON-RPC ${final.error.code}`));
+      if (res?.isError) badges.push(h('span', { class: 'badge warn' }, 'tool error (isError)'));
+      if (r.messages.length > 1) badges.push(h('span', { class: 'badge' }, `${r.messages.length - 1} notification${r.messages.length > 2 ? 's' : ''} streamed`));
+      clear(out).append(
+        h('div', { class: 'row' }, h('span', { class: statusClass(r.status) }, String(r.status)), h('span', { class: 'muted small' }, `${Math.round(performance.now() - started)} ms`), ...badges),
+        kv(Object.fromEntries(shown.filter((k) => r.headers.get(k)).map((k) => [k, r.headers.get(k)]))),
+        h('div', { class: 'row between' }, h('span', { class: 'small muted' }, 'Response'), h('button', { class: 'small', onclick: () => copy(r.raw) }, 'copy')),
+        codeBlock(r.messages.length ? r.messages.map((x) => (typeof x === 'string' ? x : JSON.stringify(x, null, 2))).join('\n\n') : '(empty body)', { maxHeight: '480px' }));
+    });
+
+    el.append(h('div', { class: 'card stack' }, titled('Try an MCP request', 'protocols.mcp-try'),
+      names,
+      h('div', { class: 'row' }, field('Protocol version', era), field('Method', methodSel), field('Name or URI', nameIn)),
+      field('Arguments (JSON)', argsIn),
+      h('div', { class: 'row' }, h('label', { class: 'check' }, progress, h('span', null, 'Ask for progress (tools/call: streamed response)')), field('X-Force-MCP-Error', forceErr)),
+      h('div', { class: 'row' }, h('button', { class: 'primary', onclick: send }, 'Send'),
+        h('span', { class: 'small muted' }, 'A session version sends initialize first and keeps the session. Run tools/list to fill the tool names. Calls appear on the Inspector page.')),
       out));
   }
 
@@ -1957,6 +2068,7 @@
             h('li', null, 'Files over every common HTTP protocol, and the same file pool as an S3-compatible bucket.'),
             h('li', null, 'The same data over SOAP, WebSocket, Server-Sent Events, GraphQL and OData (Protocols page).'),
             h('li', null, 'An OpenAI-compatible mock LLM (/llm/v1) that answers with vague text, tool calls or JSON and reports random token usage.'),
+            h('li', null, 'A mock MCP server (/mcp) whose tools, resources and prompts read and change the same data, for MCP clients, agents and MCP gateways.'),
             h('li', null, 'Outgoing webhooks to your endpoints when data or files change.'),
             h('li', null, 'Errors and slowness on demand (Chaos), on every protocol.'),
             h('li', null, 'An Inspector that catches webhooks and any other call your integration makes.'),
@@ -1978,7 +2090,7 @@
         h('span', null, 'Send webhooks or any unknown call to ', code(`${B}/<any-path>`), ' and watch them arrive on the ', link('#/inspector', 'Inspector'), ' page.'),
         h('span', null, 'Test error handling: add ', code('X-Force-Error: 503'), ' to one request, or set a random error rate on the ', link('#/chaos', 'Chaos'), ' page.'),
         h('span', null, 'Import the live spec from ', link('#/openapi', 'OpenAPI'), ' (', code(`${B}/openapi.json`), ') into your API platform or Postman to get every endpoint pre-defined.'),
-        h('span', null, 'Calling SOAP, GraphQL, OData, SSE, an LLM or S3 instead? The ', link('#/protocols', 'Protocols'), ' page has each endpoint, its contract (WSDL, SDL, CSDL) or connection details, and a console. To receive events, add a webhook on the ', link('#/webhooks', 'Webhooks'), ' page.'))));
+        h('span', null, 'Calling SOAP, GraphQL, OData, SSE, an LLM, MCP or S3 instead? The ', link('#/protocols', 'Protocols'), ' page has each endpoint, its contract (WSDL, SDL, CSDL) or connection details, and a console. To receive events, add a webhook on the ', link('#/webhooks', 'Webhooks'), ' page.'))));
 
     el.append(section('quick-incoming', 'Quick start: incoming testing',
       steps(
@@ -1990,7 +2102,7 @@
         h('span', null, 'No implementation yet? "Install mock & use as target" serves the spec\'s own examples from this server so you can rehearse the run.'))));
 
     el.append(section('urls', 'URLs and reserved paths',
-      h('p', null, 'These paths belong to the tool. ', h('b', null, 'Every other path is captured by the Inspector'), ' and answered with its default response or a matching rule. Calls to the APIs (/v1, SOAP, WebSocket upgrades, SSE, GraphQL, OData, the LLM mock, the S3 API and OAuth) are recorded on the Inspector too, with their real responses, unless "Record API calls" is switched off; the dashboard, docs and health checks are never recorded.'),
+      h('p', null, 'These paths belong to the tool. ', h('b', null, 'Every other path is captured by the Inspector'), ' and answered with its default response or a matching rule. Calls to the APIs (/v1, SOAP, WebSocket upgrades, SSE, GraphQL, OData, the LLM mock, the MCP server, the S3 API and OAuth) are recorded on the Inspector too, with their real responses, unless "Record API calls" is switched off; the dashboard, docs and health checks are never recorded.'),
       h('div', { class: 'table-wrap' }, h('table', null, h('tbody', null,
         [
           ['/v1/employees, /v1/products, /v1/departments, /v1/categories', 'Mock API with full CRUD (list, create, get, replace, patch, delete). Lists use offset pagination.'],
@@ -2003,6 +2115,7 @@
           ['/odata/v4, /odata/v4/$metadata', 'OData v4 (JSON) over the same data: query options, paging with @odata.nextLink, navigation and CRUD. $metadata is always open.'],
           ['/graphql, /graphql/schema.graphql', 'GraphQL over the same data: queries (offset pages and Relay connections), mutations, and a changes subscription over WebSocket (graphql-transport-ws). GraphiQL in a browser; the SDL is always open.'],
           ['/llm, /llm/v1/{chat/completions|embeddings|models}', 'OpenAI-compatible mock LLM: vague answers, tool calls and JSON output, streaming, and random token usage. Point an OpenAI client at base URL /llm/v1 with the active auth mode\'s credentials.'],
+          ['/mcp, /.well-known/oauth-protected-resource/mcp', 'Mock MCP server (Streamable HTTP): tools, resources and prompts over the same data. Protocol 2026-07-28 (stateless) and 2025-11-25/06-18/03-26 clients that initialize a session. The protected resource metadata points OAuth-capable MCP clients at the built-in OAuth server.'],
           ['/files, /files/{key} (the S3 bucket name)', 'S3-compatible API over the file pool: path-style, signed with AWS Signature V4 using the S3 API keys (a signed GET / is ListBuckets). The bucket name is a setting.'],
           ['/oauth/token, /oauth/authorize, /oauth/introspect, /oauth/revoke, /oauth/register', 'Built-in OAuth 2.0 server, with dynamic client registration (RFC 7591) at /oauth/register.'],
           ['/.well-known/jwks.json, /.well-known/oauth-authorization-server', 'Signing keys and OAuth discovery.'],
@@ -2031,6 +2144,7 @@
           ['If-Match: <etag>', 'On PUT/PATCH/DELETE: 412 if the resource changed since you read it.'],
           ['If-None-Match: <etag>', 'On GET: 304 if nothing changed.'],
           ['X-Force-Stream-Drop: 3 / X-Force-Stream-Error: 3', 'On a streamed LLM chat completion: cut the connection, or send an error chunk, after that many chunks.'],
+          ['X-Force-MCP-Error: tool | rpc | rpc:-32603 | drop', 'On an MCP request: a tool error (isError), a JSON-RPC error, or a dropped connection.'],
           ['X-Request-Id / X-Correlation-Id', 'Echoed back (generated if missing) for tracing.'],
         ].map(([hd, d]) => h('tr', null, h('td', null, code(hd)), h('td', null, d))))))));
 

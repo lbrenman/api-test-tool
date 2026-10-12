@@ -57,6 +57,7 @@ Ues Cases:
   - [OData v4](#odata-v4)
   - [GraphQL](#graphql)
   - [Mock LLM (OpenAI-compatible)](#mock-llm-openai-compatible)
+  - [MCP server](#mcp-server)
   - [S3-compatible API](#s3-compatible-api)
   - [Inspector](#inspector)
   - [Outgoing webhooks](#outgoing-webhooks)
@@ -133,13 +134,14 @@ Fly.io, Render and Northflank are covered in [Deployment](#deployment).
 | **S3-compatible API** | The file pool as an S3 bucket at the base URL (path-style), whether files are stored locally or in S3: ListBuckets, HeadBucket, GetBucketLocation, ListObjects v1/v2 (prefix, delimiter, paging, `encoding-type=url`), Get/Head (Range, conditional headers, `response-*` overrides), Put (aws-chunked streaming, CRC32/SHA checksums, Content-MD5), Copy, Delete, DeleteObjects, multipart uploads and presigned URLs. Real AWS Signature V4 checks against a configurable access key, secret and region; S3 XML errors; works with the AWS SDKs, the AWS CLI, curl `--aws-sigv4` and Postman's AWS Signature auth. |
 | **GraphQL** | `/graphql` over the same data: queries with offset pages and Relay connections (filters, sort, search), nested department/category/manager resolvers, CRUD mutations with merge-patch updates, and a live `changes` subscription over WebSocket (graphql-transport-ws). Field errors come back as HTTP 200 with partial data and `extensions.code`; auth, rate-limit and chaos errors keep their HTTP status. GraphQL-over-HTTP media types, introspection on/off, depth limit, injected field errors (`X-Force-GraphQL-Error`), SDL at `/graphql/schema.graphql`, GraphiQL in the browser and a query console in the dashboard. |
 | **Mock LLM** | An OpenAI-compatible API at `/llm/v1` for testing LLM connectors, proxies and cost tracking without a real model: `chat/completions` answers with vague, plausible prose (or JSON for `response_format`, or tool calls generated from each tool's JSON Schema) and reports `usage` with prompt tokens estimated from the request and a random number of completion tokens; `max_tokens` cuts with `finish_reason: "length"`, `reasoning_effort` adds reasoning tokens, `seed` makes it repeatable. Streaming (`chat.completion.chunk`, usage chunk, `[DONE]`) with stream chaos (`X-Force-Stream-Drop`, `X-Force-Stream-Error`), `embeddings` (deterministic unit vectors), `models`, OpenAI-shaped errors and `x-ratelimit-*` headers. Auth mode, chaos, rate limits and required headers apply as on `/v1`. |
+| **MCP server** | A mock MCP server at `/mcp` (Streamable HTTP) for MCP clients, agent platforms and MCP gateways. 22 tools that search, read and change the same employees, products, departments, categories and files (structured output, annotations, tool errors as `isError`), resources (`att://…`, templates, subscriptions), prompts and completions. Dual-era: protocol **2026-07-28** (stateless; `_meta` version and capabilities, `MCP-Protocol-Version` / `Mcp-Method` / `Mcp-Name` / `Mcp-Param-*` header checks with -32020, `server/discover`, `subscriptions/listen`, `resultType`, `ttlMs`/`cacheScope`) and **2025-11-25 / 2025-06-18 / 2025-03-26** clients (initialize, `Mcp-Session-Id`, GET stream, DELETE). JSON or SSE responses with progress notifications, MCP chaos (`X-Force-MCP-Error`), RFC 9728 protected resource metadata so OAuth-capable clients find the built-in OAuth server, and a console in the dashboard. |
 | **Outgoing webhooks** | Any number of webhooks that POST `{event, resource, resourceId, href, …}` to your URL when an employee, product, department or category is created, updated or deleted, or a file is uploaded, downloaded or deleted, through any protocol. Per webhook: resources, events, optional record data, HMAC signing secret and extra headers. Stored in the database (they survive restarts); every delivery is logged with the response, with Test and Resend buttons. |
 | **Inspector** | Catch-all capture with the actual path, live stream (SSE), detected auth (Basic user, decoded JWT, API keys), pretty bodies and multipart parts, copy as curl, replay, auto-forward, configurable responses and path rules. |
 | **Generated OpenAPI** | Two OAS 3.1 specs, regenerated from the live settings. **Mock Data API** (`/openapi.json`, `/openapi.yaml`) is for integrations: `/v1` resources, every pagination path, the file endpoints, the SSE streams, the mock LLM and the OAuth token endpoint, reflecting the server URL, date format, auth scheme, required headers and chaos headers. **Admin API** (`/admin/api/openapi.json`, `.yaml`, password protected) is for operators and scripts: settings, seeding, files, OAuth clients, inspector, tester, `/health` and `/ready`. Swagger UI at `/docs` shows both (`/docs?spec=admin` for the admin spec). |
 | **API tester** | Upload, paste or URL load for OAS 3.0, 3.1 and Swagger 2.0 (REST), WSDL 1.1 (SOAP 1.1/1.2, with XSD validation and WS-Security) and AsyncAPI 2.x/3.0 (WebSocket, with message validation, correlation and scripted scenarios). Spec lint, per-operation "try it" with generated samples that honour `pattern`/`format`/`enum`/limits, auth profiles (none, API key, Basic, Bearer, OAuth2 client credentials), response validation, run-all contract mode with ID chaining and negative tests, run history, and JSON and HTML reports. "Mock from spec" serves a spec's examples from this tool. |
 | **Back office app** | `/app` is a business-style app over the mock data, for demos and non-technical viewers: KPIs (headcount, payroll, stock value, stock health), charts, searchable and sortable lists, record pages with related records, and forms to create, edit and delete employees, products, departments and categories. It reads and writes the same data as `/v1` but through its own backend (`/admin/api/app/*`), so the `/v1` auth mode, chaos, rate limits and required headers never break it. Uses the dashboard password. |
 | **Facade API sample** | [`facade/`](facade/): a ready-made contract for an orchestration layer your platform builds in front of this tool. Six operations (people directory search, person 360° profile, idempotent new-hire onboarding, team list, department team snapshot, storefront catalog search), each combining one or more `/v1` calls into one business object; an OpenAPI 3.0.1 spec with examples, `DATA_MAPPING.md` (backend calls, field mappings, aggregation rules, error mapping), and **Acme Front Office** (Experience console), a single-file, mobile-friendly web app with demo mode, a settings tab for credentials (API key, Bearer, Basic, OAuth2 client credentials), a Trace tab showing every request and response with headers and payloads, and built-in help. |
-| **Dashboard** | Overview, Settings (with source badges and resets), Data, Inspector, Files, Auth, Chaos, Headers, Protocols (SOAP services, WebSocket channels, SSE streams, GraphQL, OData, the mock LLM and the S3 API: endpoints, settings, a SOAP try-it panel, a live WebSocket console, a live SSE viewer, a chat console and query consoles), OpenAPI, API Tester, and About & Help (what each page does, quick starts, reserved paths, handy headers). Every page has a "? Help" link, and every main component has a **"?" guide** (hover, focus or tap) with numbered steps for using it in your integration or tests and copy-ready curl commands. The curls use the resolved base URL, the auth mode that is active right now (from `AUTH_MODE` or a dashboard override — the guides never change it), and any required request headers; in `jwt`/`oauth2` mode they fetch a token first, and in `hmac` mode they sign the request with `openssl`. The tester's **Try it → Request** tab adds "Copy as curl" for the exact call it sent. Responsive, with light and dark themes. |
+| **Dashboard** | Overview, Settings (with source badges and resets), Data, Inspector, Files, Auth, Chaos, Headers, Protocols (SOAP services, WebSocket channels, SSE streams, GraphQL, OData, the mock LLM, the MCP server and the S3 API: endpoints, settings, a SOAP try-it panel, a live WebSocket console, a live SSE viewer, a chat console, an MCP console and query consoles), OpenAPI, API Tester, and About & Help (what each page does, quick starts, reserved paths, handy headers). Every page has a "? Help" link, and every main component has a **"?" guide** (hover, focus or tap) with numbered steps for using it in your integration or tests and copy-ready curl commands. The curls use the resolved base URL, the auth mode that is active right now (from `AUTH_MODE` or a dashboard override — the guides never change it), and any required request headers; in `jwt`/`oauth2` mode they fetch a token first, and in `hmac` mode they sign the request with `openssl`. The tester's **Try it → Request** tab adds "Copy as curl" for the exact call it sent. Responsive, with light and dark themes. |
 
 ---
 
@@ -224,11 +226,18 @@ Settings marked **restart** can only be set through the environment.
 | `LLM_COMPLETION_TOKENS_MIN` / `LLM_COMPLETION_TOKENS_MAX` | `20` / `300` | Range of completion tokens in a random answer |
 | `LLM_STREAM_DELAY_MS` | `25` | Delay between streamed chunks |
 | `LLM_TOOL_CALL_RATE` | `50` | Percent of `tool_choice: "auto"` requests with tools answered with a tool call |
+| `MCP_ENABLED` | `true` | Serve the mock MCP server at `/mcp` |
+| `MCP_ALLOW_WRITES` | `true` | Offer the create/update/delete tools (off = read-only; open streams get `tools/list_changed`) |
+| `MCP_RESPONSE_MODE` | `auto` | `auto` (JSON; SSE when a `tools/call` carries a progressToken), `json` or `sse` |
+| `MCP_VALIDATE_HEADERS` | `true` | 2026-07-28 requests must carry `MCP-Protocol-Version`, `Mcp-Method`, `Mcp-Name`, `Mcp-Param-*` matching the body (400, -32020) and an `Accept` with both media types |
+| `MCP_LEGACY` | `true` | Also serve clients that `initialize` (2025-11-25, 2025-06-18, 2025-03-26); off = 2026-07-28 only |
+| `MCP_SESSION_TTL_MINUTES` | `30` | Idle legacy sessions are dropped after this long |
+| `MCP_KEEPALIVE_SECONDS` | `15` | Keep-alive comment interval on open notification streams; 0 = off |
 | `WEBHOOKS_ENABLED` | `true` | Send the outgoing webhooks (off pauses them all; definitions are kept) |
 | `WEBHOOK_TIMEOUT_MS` | `10000` | How long a delivery waits for the receiver (100–60000) |
 | `WEBHOOK_DELIVERY_RETENTION` | `200` | Deliveries kept in the log, all webhooks together (10–10000) |
 | `INSPECTOR_RETENTION` | `500` | Captures kept |
-| `INSPECTOR_LOG_ALL` | `true` | Also record `/v1/*`, `/soap/*`, `/ws/*` (upgrades), `/sse/*`, `/graphql`, `/odata/*`, `/llm/*`, S3 API and `/oauth/*` calls (with their real responses). Toggle with **Record API calls** on the Inspector page. |
+| `INSPECTOR_LOG_ALL` | `true` | Also record `/v1/*`, `/soap/*`, `/ws/*` (upgrades), `/sse/*`, `/graphql`, `/odata/*`, `/llm/*`, `/mcp`, S3 API and `/oauth/*` calls (with their real responses). Toggle with **Record API calls** on the Inspector page. |
 | `INSPECTOR_RESPONSE_STATUS`, `INSPECTOR_RESPONSE_CONTENT_TYPE`, `INSPECTOR_RESPONSE_BODY`, `INSPECTOR_RESPONSE_HEADERS`, `INSPECTOR_RESPONSE_DELAY_MS` | `200`, `application/json`, receipt, —, `0` | Default catch-all response |
 | `INSPECTOR_RULES` | — | JSON path rules (first match wins) |
 | `INSPECTOR_FORWARD_ENABLED` / `INSPECTOR_FORWARD_URL` | `false` / — | Auto-forward captures |
@@ -239,7 +248,7 @@ Settings marked **restart** can only be set through the environment.
 
 ## Route map
 
-These prefixes are reserved: `/v1`, `/soap`, `/ws`, `/sse`, `/graphql`, `/odata`, `/llm`, the S3 bucket name (`/files` by default), `/oauth`, `/.well-known`, `/admin`, `/dashboard`, `/app`, `/docs`, `/openapi.json`, `/openapi.yaml`, `/samples`, `/health`, `/ready`, and `GET /` (which redirects to the dashboard; a request signed with AWS Signature V4 to `/` is the S3 API's ListBuckets). **Every other path, and every method, is captured by the inspector.** Calls to `/v1`, `/soap`, `/ws` (the upgrade), `/sse`, `/graphql`, `/odata`, `/llm`, the S3 API and `/oauth` are recorded there too (unless `INSPECTOR_LOG_ALL=false`); the dashboard, admin API, docs and health probes never are.
+These prefixes are reserved: `/v1`, `/soap`, `/ws`, `/sse`, `/graphql`, `/odata`, `/llm`, `/mcp`, the S3 bucket name (`/files` by default), `/oauth`, `/.well-known`, `/admin`, `/dashboard`, `/app`, `/docs`, `/openapi.json`, `/openapi.yaml`, `/samples`, `/health`, `/ready`, and `GET /` (which redirects to the dashboard; a request signed with AWS Signature V4 to `/` is the S3 API's ListBuckets). **Every other path, and every method, is captured by the inspector.** Calls to `/v1`, `/soap`, `/ws` (the upgrade), `/sse`, `/graphql`, `/odata`, `/llm`, `/mcp`, the S3 API and `/oauth` are recorded there too (unless `INSPECTOR_LOG_ALL=false`); the dashboard, admin API, docs and health probes never are.
 
 | Path | Purpose |
 |---|---|
@@ -264,6 +273,8 @@ These prefixes are reserved: `/v1`, `/soap`, `/ws`, `/sse`, `/graphql`, `/odata`
 | `POST /graphql`, `GET /graphql?query=`, `GET /graphql` (upgrade) | GraphQL queries, mutations and subscriptions; GraphiQL in a browser (see [GraphQL](#graphql)) |
 | `GET /llm` | Mock LLM summary: base URL, models, token range (open) |
 | `/llm/v1/chat/completions`, `/llm/v1/embeddings`, `/llm/v1/models` | OpenAI-compatible mock LLM (see [Mock LLM](#mock-llm-openai-compatible)) |
+| `POST /mcp` (and `GET`/`DELETE /mcp` with a legacy session) | Mock MCP server (see [MCP server](#mcp-server)) |
+| `GET /.well-known/oauth-protected-resource/mcp` | Protected resource metadata (RFC 9728) for `/mcp` |
 | `/{bucket}`, `/{bucket}/{key}` (bucket `files` by default), signed `GET /` | S3-compatible API over the file pool (see [S3-compatible API](#s3-compatible-api)) |
 | `/oauth/token`, `/oauth/authorize`, `/oauth/introspect`, `/oauth/revoke` | OAuth 2.0 server |
 | `POST /oauth/register`, `GET`/`DELETE /oauth/register/{clientId}` | Dynamic client registration (RFC 7591) and its management (RFC 7592) |
@@ -705,6 +716,44 @@ The dashboard's **Protocols** page shows the base URL and models, holds the LLM 
 
 ---
 
+## MCP server
+
+`/mcp` is a mock [Model Context Protocol](https://modelcontextprotocol.io) server over the Streamable HTTP transport. Give an MCP client, agent platform or MCP gateway the URL `$B/mcp`. Its tools, resources and prompts read and change the same data as every other protocol, so a record created through an MCP tool shows up on `/v1`, GraphQL, OData, the change feeds and the webhooks.
+
+**Two protocol eras on one endpoint** (the 2026-07-28 revision calls this a dual-era server):
+
+| | 2026-07-28 (stateless) | 2025-11-25, 2025-06-18, 2025-03-26 (sessions) |
+|---|---|---|
+| Start | Nothing; optionally `server/discover` | `initialize` → `Mcp-Session-Id` header, then `notifications/initialized` |
+| Every request | `params._meta` with `io.modelcontextprotocol/protocolVersion` and `clientCapabilities`; headers `MCP-Protocol-Version`, `Mcp-Method`, `Mcp-Name` (tools/call, prompts/get, resources/read) and `Mcp-Param-*` for `x-mcp-header` arguments, checked against the body (400, `-32020` HeaderMismatch); `Accept` with `application/json` and `text/event-stream` | `Mcp-Session-Id` (404 when unknown or expired); `MCP-Protocol-Version` from 2025-06-18 |
+| Results | `resultType: "complete"`, `_meta.serverInfo`, `ttlMs` + `cacheScope` on the cacheable lists and reads | as in that revision |
+| Server notifications | `subscriptions/listen` (SSE stream: acknowledgement, then `tools/list_changed`, `resources/list_changed`, `resources/updated` tagged with the subscription id) | `GET /mcp` stream for the session, `resources/subscribe` / `unsubscribe` |
+| Other | unknown method → 404 + `-32601`; an unsupported version → 400 + `-32022` with `supported`; `GET`/`DELETE` → 405 | `ping`, `logging/setLevel`, `DELETE /mcp` ends the session |
+
+| Capability | What it offers |
+|---|---|
+| Tools | `search_employees` (its `department` argument is `x-mcp-header: Department`), `get_employee`, `create_employee`, `update_employee` (merge patch), `delete_employee`, the same for products, `list_departments`, `get_department`, `create_department`, `list_categories`, `get_category`, `create_category`, `get_stats`, `list_files`, `read_file`, `echo`, `long_running_task` (progress notifications; closing the stream cancels it), `simulate_error`. Each has an input schema, annotations (`readOnlyHint`, `destructiveHint`, …) and, for the lists, an `outputSchema` with `structuredContent`. Not found, validation, conflicts and bad arguments are tool errors (`isError: true`); an unknown tool is JSON-RPC `-32602`. `MCP_ALLOW_WRITES=false` hides the write tools. |
+| Resources | `att://stats`, `att://departments/{id}`, `att://categories/{id}`, `att://files/{id}` (listed, paginated with `nextCursor`), plus templates for employees and products. Files come back as text or base64 `blob`. Not found: `-32602` (2026-07-28) or `-32002` (older versions). |
+| Prompts | `summarize_department`, `draft_welcome_email`, `compare_products`, each with the records embedded as resources; `completion/complete` suggests ids. |
+| Responses | JSON, or an SSE stream (`MCP_RESPONSE_MODE`): by default a `tools/call` with `_meta.progressToken` streams `notifications/progress` before the result. A per-request log level (`io.modelcontextprotocol/logLevel`, or `logging/setLevel` in a session) adds `notifications/message`. |
+
+- **Auth:** `AUTH_MODE` applies to `/mcp`. In the `oauth2` mode, reading needs scope `read` and the write tools need `write`. A 401 with a Bearer challenge carries `resource_metadata` pointing at `/.well-known/oauth-protected-resource/mcp`, which names this tool's OAuth server; with dynamic client registration (open by default) and PKCE an OAuth-capable MCP client can sign in on its own. A `resource` parameter (RFC 8707) on the authorize and token requests is added to the token's audience.
+- **Errors** before the request reaches MCP (auth, rate limit, required headers, `X-Force-Error`) are JSON-RPC error objects with their real HTTP status (401, 429, 503, …).
+- **Chaos:** `X-Force-MCP-Error: tool` turns a tool call into a tool error, `rpc` or `rpc:<code>` returns a JSON-RPC error, `drop` closes the connection.
+- **Not built:** the deprecated HTTP+SSE transport (2024-11-05), JSON-RPC batches, server-to-client requests (sampling, elicitation, roots, or their 2026-07-28 replacement, multi round-trip input requests), the tasks extension, and client ID metadata documents (dynamic client registration is offered instead).
+
+```bash
+H='-H Content-Type:application/json -H Accept:application/json,text/event-stream -H MCP-Protocol-Version:2026-07-28'
+META='"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}'
+curl -s "$B/mcp" $H -H 'Mcp-Method: tools/list' -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\",\"params\":{$META}}"
+curl -s "$B/mcp" $H -H 'Mcp-Method: tools/call' -H 'Mcp-Name: get_employee' \
+  -d "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"get_employee\",\"arguments\":{\"id\":1},$META}}"
+```
+
+The dashboard's **Protocols** page holds the MCP settings and a console that sends any request as a 2026-07-28 client or as a session-based 2025 client (it initializes for you), showing streamed notifications and the result.
+
+---
+
 ## S3-compatible API
 
 The file pool is also served as an **S3 bucket**, so a platform's S3 connector (or any AWS SDK, the AWS CLI, rclone, …) can list, read, write and delete the tool's files. It works the same whether the files are stored on local disk or in an S3 bucket behind the tool (`FILE_STORE`). The `S3_API_*` settings below are the credentials *clients* use; they are unrelated to the `S3_*` variables that choose where the tool itself stores files.
@@ -930,7 +979,7 @@ the facade spec in the **API tester** and pressing **Run all** contract-tests yo
 
 ## Postman and Newman
 
-- `postman/API-Test-Tool.postman_collection.json` has 162 requests with test scripts, covering:
+- `postman/API-Test-Tool.postman_collection.json` has 179 requests with test scripts, covering:
   - health, OpenAPI and discovery;
   - OAuth: token, introspect, revoke, error cases, and dynamic client registration (register, token for the new client, RFC 7592 read and delete, invalid metadata);
   - each auth mode (with and without credentials);
@@ -945,9 +994,10 @@ the facade spec in the **API tester** and pressing **Run all** contract-tests yo
   - OData v4: service document, `$metadata`, filters (functions, lambdas), `$expand` with nested options, `$count`, `$value`, a walk through every page via `@odata.nextLink`, create with `@odata.bind`, If-Match (412 and 204), `return=representation`, delete, and error cases;
   - the S3-compatible API with Postman's AWS Signature auth: ListBuckets, HeadBucket, paged ListObjectsV2, put with metadata (MD5 ETag), head, get, Range, copy, delimiter listing, DeleteObjects, and NoSuchKey / NoSuchBucket / SignatureDoesNotMatch / AccessDenied / injected 503 errors (multipart uploads are covered by `npm test`);
   - the mock LLM: models, chat completions (usage, `max_tokens` → `length`, repeatable `seed`, tool calls, JSON output), streaming with a usage chunk and `[DONE]`, embeddings, and OpenAI-shaped errors (400, 404, injected 429);
+  - the MCP server: server/discover, tools/list, tool calls (structured results, tool errors, an unknown tool), a header mismatch, an unsupported version, resources and prompts, a streamed progress call, and a legacy session (initialize, initialized, tools/list, DELETE);
   - headers and the inspector.
   - WebSocket channels and GraphQL subscriptions are not covered (Postman collections cannot drive WebSockets); `npm test` covers them.
-- `postman/API-Test-Tool.postman_environment.json` holds `baseUrl`, `authMode` and credentials. Set `authMode` to the server's `AUTH_MODE`; the collection-level pre-request script then authenticates every `/v1` call, SOAP request, SSE stream, GraphQL, OData and mock LLM request, fetching and caching an OAuth token for `jwt` and `oauth2` and signing requests for `hmac`. The S3 requests sign themselves with `s3AccessKeyId`, `s3SecretAccessKey` and `s3Region` in every mode.
+- `postman/API-Test-Tool.postman_environment.json` holds `baseUrl`, `authMode` and credentials. Set `authMode` to the server's `AUTH_MODE`; the collection-level pre-request script then authenticates every `/v1` call, SOAP request, SSE stream, GraphQL, OData, mock LLM and MCP request, fetching and caching an OAuth token for `jwt` and `oauth2` and signing requests for `hmac`. The S3 requests sign themselves with `s3AccessKeyId`, `s3SecretAccessKey` and `s3Region` in every mode.
 - `npm run postman` boots a fresh server for each auth mode and runs Newman against it. `npm run postman -- --mode hmac` runs one mode, and `npm run postman -- --url https://your-app.fly.dev --mode none` runs against a deployed instance.
 - `.github/workflows/newman.yml` runs `npm test` and then a Newman matrix over all seven auth modes (SQLite + local files) on every push.
 - The collection is generated by `scripts/build-postman.js`. Edit that file and run `npm run postman:build`.
@@ -1066,6 +1116,8 @@ npm run postman        # Newman across all auth modes
 | S3 client: `AuthorizationHeaderMalformed` … region | The client signs with a different region; set it to `S3_API_REGION` (shown in the error), or change the setting. |
 | S3 client: DNS errors for `files.<host>` | The client uses virtual-hosted-style addressing; turn on path-style ("force path style"). |
 | OpenAI client to `/llm/v1`: 401 `invalid_api_key` | The API key must be the active auth mode's credential: in `bearer` mode the bearer token, in `apikey` mode set the header name the client sends (`Authorization` won't match `X-API-Key`; prefer `bearer` for OpenAI SDKs), in `jwt`/`oauth2` mode a token from `/oauth/token`. With `AUTH_MODE=none` any key works. |
+| MCP client: 400 with `-32020` HeaderMismatch | A 2026-07-28 request needs `MCP-Protocol-Version`, `Mcp-Method`, `Mcp-Name` (tools/call, prompts/get, resources/read) and `Mcp-Param-Department` when `search_employees` gets a `department`, all matching the body. A gateway in front may be dropping them. `MCP_VALIDATE_HEADERS=false` relaxes the check. |
+| MCP client: 404 "Session not found" | The legacy session expired (`MCP_SESSION_TTL_MINUTES`) or the server restarted; the client must send `initialize` again. |
 | OpenAI client: 404 `model_not_found` | `LLM_REQUIRE_KNOWN_MODEL` is on; use a model from `LLM_MODELS`, or turn the setting off. |
 | `/v1/...` returns 400 "Missing required header" | `REQUIRED_HEADERS` is set (see the Headers page). |
 | Inspector doesn't show API calls (`/v1`, SOAP, GraphQL, S3, …) | Tick **Record API calls** on the Inspector page (or set `INSPECTOR_LOG_ALL=true`). The dashboard, docs and `/health` are never recorded. |

@@ -57,6 +57,7 @@ function apiKind(path, req) {
   if (path === '/graphql' || path.startsWith('/graphql/')) return 'graphql';
   if (path === '/odata' || path.startsWith('/odata/')) return 'odata';
   if (path === '/llm' || path.startsWith('/llm/')) return 'llm';
+  if (path === '/mcp' || path.startsWith('/mcp/')) return 'mcp';
   if (path.startsWith('/oauth/') || path.startsWith('/.well-known/')) return 'oauth';
   return null;
 }
