@@ -58,7 +58,8 @@ const DEFS = [
 
   // ---- oauth ----
   { key: 'oauthClients', env: 'OAUTH_CLIENTS', def: 'demo-client:demo-secret:read write', type: 'string', section: 'oauth', desc: 'id:secret:scopes;… (dashboard-added clients are stored separately)' },
-  { key: 'oauthUsers', env: 'OAUTH_USERS', def: 'demo:demo', type: 'string', section: 'oauth', desc: 'user:password;… for the authorization_code login page' },
+  { key: 'oauthUsers', env: 'OAUTH_USERS', def: 'demo:demo', type: 'string', section: 'oauth', desc: 'user:password[:roles[:attributes]];… for the authorization_code login page. Roles comma separated, attributes key=value comma separated (e.g. alice:pw:admin,buyer:region=EMEA,tier=gold). Users added on the Auth page are stored separately' },
+  { key: 'oauthRolesClaim', env: 'OAUTH_ROLES_CLAIM', def: 'realm_access.roles', type: 'string', section: 'oauth', desc: 'Where a user\'s roles go in the token: dotted claim paths, comma separated (realm_access.roles = Keycloak style; e.g. realm_access.roles,roles for both)' },
   { key: 'oauthTokenTtl', env: 'OAUTH_TOKEN_TTL', def: 3600, type: 'int', section: 'oauth', min: 1 },
   { key: 'oauthRefreshTtl', env: 'OAUTH_REFRESH_TTL', def: 86400, type: 'int', section: 'oauth', min: 1 },
   { key: 'oauthRegistration', env: 'OAUTH_REGISTRATION', def: 'open', type: 'enum', options: ['off', 'open', 'token'], section: 'oauth', desc: 'Dynamic client registration (RFC 7591) at /oauth/register: open = anyone may register (MCP clients expect this), token = needs the initial access token below, off = no registration endpoint' },

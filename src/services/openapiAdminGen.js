@@ -110,7 +110,7 @@ async function generateAdminOpenApi(ctx, req) {
 
   // ---- Auth
   add(`${A}/auth`, 'get', op('Auth', 'getAuthConfig', 'Active /v1 auth mode, every mode\'s credentials, the S3 API keys, OAuth endpoints and clients', {
-    responses: { ...ok('Auth configuration', anyObj('mode, apiKey, basic, bearer, jwt, hmac, s3 (S3 API endpoint, bucket, region and keys), oauth, clients')), ...AUTHED },
+    responses: { ...ok('Auth configuration', anyObj('mode, apiKey, basic, bearer, jwt, hmac, s3 (S3 API endpoint, bucket, region and keys), oauth, clients, users')), ...AUTHED },
   }));
   add(`${A}/oauth/clients`, 'post', op('Auth', 'createOAuthClient', 'Add an OAuth client (stored in the DB)', {
     requestBody: body(obj({ clientId: { type: 'string' }, secret: { type: 'string' }, scopes: { description: 'Space/comma-separated string or array', anyOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }] }, redirectUris: { anyOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }] } }), { clientId: 'fusion', secret: 's3cret', scopes: 'read write' }),
@@ -125,9 +125,26 @@ async function generateAdminOpenApi(ctx, req) {
     parameters: [pathParam('id', 'Client id')],
     responses: { ...noContent('Deleted'), ...AUTHED, ...NF },
   }));
-  add(`${A}/auth/test-token`, 'post', op('Auth', 'issueTestToken', 'Issue an access token for a client without a token request; returns it decoded', {
-    requestBody: body(obj({ clientId: { type: 'string' }, scope: { type: 'string' } }), { clientId: 'demo-client', scope: 'read write' }, false),
-    responses: { ...ok('Token', anyObj('access_token, token_type, expires_in, scope, clientId, decoded {header, payload}')), ...BAD, ...AUTHED },
+  const userBody = { password: { type: 'string', description: 'Blank or omitted = generate one' }, roles: { description: 'Array, or a space/comma-separated string', anyOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }] }, attributes: { type: 'object', additionalProperties: true, description: 'Claim name → JSON value, added to the user\'s tokens. Reserved claims (iss, sub, aud, exp, scope, client_id, preferred_username, the roles claim\'s top level, …) are refused.' } };
+  add(`${A}/oauth/users`, 'get', op('Auth', 'listOAuthUsers', 'Users for the authorization_code login page (OAUTH_USERS and dashboard-added), with roles and attributes', {
+    responses: { ...ok('Users', obj({ items: { type: 'array', items: S('OAuthUser') }, rolesClaim: { type: 'string' } })), ...AUTHED },
+  }));
+  add(`${A}/oauth/users`, 'post', op('Auth', 'createOAuthUser', 'Add a user (stored in the DB). Its roles go to the OAUTH_ROLES_CLAIM paths and each attribute becomes a claim in its tokens.', {
+    requestBody: body(obj({ username: { type: 'string', pattern: '^[A-Za-z0-9._@+-]{1,64}$' }, ...userBody }, ['username']), { username: 'alice', password: 'alice', roles: ['admin', 'buyer'], attributes: { region: 'EMEA', tier: 'gold', costCenters: [4100, 4200] } }),
+    responses: { ...created('User created', S('OAuthUser')), ...BAD, ...AUTHED, 409: R('Problem') },
+  }));
+  add(`${A}/oauth/users/{username}`, 'patch', op('Auth', 'updateOAuthUser', 'Edit a user: password ("" = generate a new one), roles, attributes (replaced as a whole). Omitted fields are kept. Editing an env user stores a copy that overrides OAUTH_USERS; deleting the copy reverts it.', {
+    parameters: [pathParam('username', 'Username')],
+    requestBody: body(obj(userBody), { roles: ['viewer'], attributes: { region: 'APAC' } }),
+    responses: { ...ok('Updated user', S('OAuthUser')), ...BAD, ...AUTHED, ...NF },
+  }));
+  add(`${A}/oauth/users/{username}`, 'delete', op('Auth', 'deleteOAuthUser', 'Delete a dashboard-added or edited user (deleting an edited env user reverts it to OAUTH_USERS)', {
+    parameters: [pathParam('username', 'Username')],
+    responses: { ...noContent('Deleted'), ...AUTHED, ...NF },
+  }));
+  add(`${A}/auth/test-token`, 'post', op('Auth', 'issueTestToken', 'Issue an access token for a client without a token request; returns it decoded. With username, the token carries that user\'s subject, roles and attributes, as the authorization_code flow would.', {
+    requestBody: body(obj({ clientId: { type: 'string' }, scope: { type: 'string' }, username: { type: 'string' } }), { clientId: 'demo-client', scope: 'read write' }, false),
+    responses: { ...ok('Token', anyObj('access_token, token_type, expires_in, scope, clientId, username, decoded {header, payload}')), ...BAD, ...AUTHED },
   }));
   add(`${A}/auth/hmac-sign`, 'post', op('Auth', 'hmacSign', 'Compute the HMAC canonical string and headers for a request', {
     requestBody: body(obj({ method: { type: 'string' }, path: { type: 'string' }, body: { type: 'string' } }), { method: 'GET', path: '/v1/employees?limit=1' }),
@@ -364,6 +381,7 @@ async function generateAdminOpenApi(ctx, req) {
           id: { type: 'string' }, name: { type: 'string' }, contentType: { type: 'string' }, size: { type: ['integer', 'null'] }, sha256: { type: ['string', 'null'] },
           source: { type: 'string', enum: ['generated', 'uploaded'] }, createdAt: {}, updatedAt: {}, links: { type: 'object', additionalProperties: { type: 'string' } },
         }, ['id', 'name']),
+        OAuthUser: obj({ username: { type: 'string' }, password: { type: 'string' }, roles: { type: 'array', items: { type: 'string' } }, attributes: { type: 'object', additionalProperties: true }, source: { type: 'string', enum: ['env', 'dashboard'] }, overridesEnv: { type: 'boolean' } }, ['username'], { additionalProperties: true }),
         OAuthClient: obj({ clientId: { type: 'string' }, secret: { type: 'string' }, scopes: {}, redirectUris: { type: 'array', items: { type: 'string' } }, source: { type: 'string' } }, ['clientId'], { additionalProperties: true }),
         WebhookInput: obj({
           name: { type: 'string', maxLength: 120 },

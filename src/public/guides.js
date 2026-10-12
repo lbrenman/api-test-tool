@@ -542,7 +542,7 @@
         purpose: 'A standalone OAuth 2.0 / OIDC-style server: client credentials, authorization code with PKCE, refresh tokens, introspection, revocation, dynamic client registration, discovery and JWKS.',
         steps: [
           'Point your platform\'s OAuth configuration at the discovery document, or enter the token and authorize URLs by hand.',
-          'For authorization code + PKCE, send the user to the authorize URL; they sign in with a demo user and consent.',
+          'For authorization code + PKCE, send the user to the authorize URL; they sign in as one of the OAuth users (see the OAuth users card for their roles and attributes) and consent.',
           'Validate tokens yourself with the JWKS, or ask the server with introspection.',
           'Clients that register themselves (MCP clients, for example) find `registration_endpoint` in the discovery document; see the Dynamic client registration card.',
           'MCP clients find this server from the MCP endpoint\'s 401 (its `resource_metadata` points at `/.well-known/oauth-protected-resource/mcp`). A `resource` parameter (RFC 8707) on the authorize or token request is added to the token\'s audience.',
@@ -571,6 +571,32 @@
           ['Get a token for it', `curl -s -u 'read-only-app:SECRET' -d grant_type=client_credentials ${q(C.ctx.tokenUrl)}`],
           ['Add a redirect URI to an existing client', admin('PATCH', `/oauth/clients/${encodeURIComponent(c.clientId)}`, { json: { redirectUris: ['https://oauth.pstmn.io/v1/callback', 'http://localhost:8080/callback'] } })],
           ['Regenerate its secret', admin('PATCH', `/oauth/clients/${encodeURIComponent(c.clientId)}`, { json: { secret: '' } })],
+        ],
+      },
+      'auth.users': {
+        title: 'OAuth users',
+        purpose: 'The users who can sign in on the authorization_code (PKCE) login page, and the roles and attributes their tokens carry. Users come from OAUTH_USERS (env) and from this card (stored in the database).',
+        steps: [
+          `Roles go to each claim path in \`oauthRolesClaim\` (now \`${extra.rolesClaim || 'realm_access.roles'}\`). The default \`realm_access.roles\` is the Keycloak shape; list several paths, comma separated (e.g. \`realm_access.roles,roles\`), to write the roles to each. A user with no roles gets no roles claim.`,
+          'Attributes are a JSON object: each key becomes a top-level claim with its value (string, number, boolean, array or object). Standard and server claims (`iss`, `sub`, `aud`, `exp`, `scope`, `client_id`, `preferred_username`, …) and the roles claim\'s top level cannot be attributes.',
+          'A user\'s token also has `sub` and `preferred_username` set to the username. Introspection returns the same roles and attributes, and a refreshed token picks up the user\'s current roles and attributes; a deleted user\'s codes and refresh tokens stop working.',
+          'Editing a user from OAUTH_USERS stores an edited copy that wins over the env entry; Revert removes it. In OAUTH_USERS: `user:password:role1,role2:key=value,key2=value2`, entries separated by `;` (a value that is valid JSON, like `42` or `true`, is kept as JSON).',
+          'To see a user\'s claims without signing in, pick the user under "Get a test token".',
+          ...pw,
+        ],
+        curls: [
+          ['Add a user with roles and attributes', admin('POST', '/oauth/users', { json: { username: 'alice', password: 'alice', roles: ['admin', 'buyer'], attributes: { region: 'EMEA', tier: 'gold' } } })],
+          ['Change their roles', admin('PATCH', '/oauth/users/alice', { json: { roles: ['viewer'] } })],
+          ['The token alice would get (decoded)', admin('POST', '/auth/test-token', { json: { clientId: c.clientId, username: 'alice' } })],
+          ['Sign in as alice with PKCE from a terminal, then introspect the token', [
+            "VERIFIER=$(openssl rand -hex 32)",
+            "CHALLENGE=$(printf %s \"$VERIFIER\" | openssl dgst -sha256 -binary | openssl base64 -A | tr '+/' '-_' | tr -d '=')",
+            `LOC=$(curl -s -o /dev/null -w '%{redirect_url}' -d response_type=code -d client_id=${q(c.clientId)} -d redirect_uri=https://oauth.pstmn.io/v1/callback -d scope=read -d code_challenge="$CHALLENGE" -d code_challenge_method=S256 -d decision=allow -d username=alice -d password=alice ${q(`${B}/oauth/authorize`)})`,
+            "CODE=$(printf %s \"$LOC\" | sed -E 's/.*[?&]code=([^&]+).*/\\1/')",
+            `TOKEN=$(curl -s -u ${q(`${c.clientId}:${c.secret}`)} -d grant_type=authorization_code -d code="$CODE" -d redirect_uri=https://oauth.pstmn.io/v1/callback -d code_verifier="$VERIFIER" ${q(C.ctx.tokenUrl)} | sed -E 's/.*"access_token":"([^"]+)".*/\\1/')`,
+            `curl -s -u ${q(`${c.clientId}:${c.secret}`)} -d "token=$TOKEN" ${q(`${B}/oauth/introspect`)}`,
+          ].join('\n')],
+          ['Put the roles in both shapes', admin('PUT', '/settings', { json: { oauthRolesClaim: 'realm_access.roles,roles' } })],
         ],
       },
       'auth.registration': {

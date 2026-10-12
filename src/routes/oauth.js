@@ -37,7 +37,7 @@ ${hidden}
 <label>Requested scopes</label><div class="scopes">${esc(params.scope || client.scopes.join(' '))}</div>
 ${error ? `<div class="err">${esc(error)}</div>` : ''}
 <div class="row"><button type="submit" name="decision" value="deny">Deny</button><button class="primary" type="submit" name="decision" value="allow">Allow</button></div>
-<div class="hint">Demo users come from OAUTH_USERS (default demo / demo).</div>
+<div class="hint">Users come from OAUTH_USERS and the dashboard's Auth page (default demo / demo).</div>
 </form></body></html>`;
 }
 
@@ -51,6 +51,13 @@ module.exports = function oauthRouter(ctx) {
   const { oauth, keys, baseUrl, settings } = ctx;
   const r = express.Router();
   const forms = [express.urlencoded({ extended: false, verify }), express.json({ verify })];
+
+  // The user a code or refresh token was issued for; gone (deleted, or removed from OAUTH_USERS) = invalid_grant.
+  async function signedInUser(username) {
+    const user = await oauth.user(username);
+    if (!user) throw new OAuthError('invalid_grant', `The user ${username} no longer exists`);
+    return user;
+  }
 
   const AUTH_PARAMS = ['response_type', 'client_id', 'redirect_uri', 'scope', 'state', 'code_challenge', 'code_challenge_method', 'resource'];
 
@@ -91,7 +98,7 @@ module.exports = function oauthRouter(ctx) {
     }
     const params = Object.fromEntries(AUTH_PARAMS.filter((k) => b[k]).map((k) => [k, b[k]]));
     if (b.decision === 'deny') return redirectWith(res, b.redirect_uri, { error: 'access_denied', state: b.state });
-    if (!oauth.checkUser(b.username, b.password)) {
+    if (!(await oauth.checkUser(b.username, b.password))) {
       return res.status(401).type('html').send(loginPage({ client: ctxv.client, params, error: 'Invalid username or password' }));
     }
     const code = oauth.createCode({
@@ -127,7 +134,8 @@ module.exports = function oauthRouter(ctx) {
         if (!OAuthService.verifyPkce(b.code_verifier, code.codeChallenge, code.codeChallengeMethod)) throw new OAuthError('invalid_grant', 'PKCE code_verifier does not match code_challenge');
         const resource = oauth.checkResource(req, b.resource) ?? code.resource;
         if (code.resource && resource !== code.resource) throw new OAuthError('invalid_target', 'resource does not match the authorization request');
-        return res.json(await oauth.issueAccessToken(req, { client, scopes: code.scopes, subject: code.subject, refresh: mayRefresh(client), resource }));
+        const user = await signedInUser(code.subject);
+        return res.json(await oauth.issueAccessToken(req, { client, scopes: code.scopes, subject: code.subject, user, refresh: mayRefresh(client), resource }));
       }
       if (grant === 'refresh_token') {
         const { client } = await oauth.authenticateClient(req, { allowPublic: true });
@@ -136,7 +144,8 @@ module.exports = function oauthRouter(ctx) {
         if (!rt || rt.expiresAt < Date.now() || rt.clientId !== client.clientId) throw new OAuthError('invalid_grant', 'Refresh token is invalid, expired or belongs to another client');
         await ctx.repo.del('oauth_refresh', rt.token); // rotation
         const scopes = b.scope ? b.scope.split(/\s+/).filter((s) => rt.scopes.includes(s)) : rt.scopes;
-        return res.json(await oauth.issueAccessToken(req, { client, scopes, subject: rt.subject, refresh: true, resource: oauth.checkResource(req, b.resource) ?? rt.resource }));
+        const user = rt.subject ? await signedInUser(rt.subject) : null; // current roles and attributes, not the ones at sign-in
+        return res.json(await oauth.issueAccessToken(req, { client, scopes, subject: rt.subject, user, refresh: true, resource: oauth.checkResource(req, b.resource) ?? rt.resource }));
       }
       throw new OAuthError('unsupported_grant_type', `Unsupported grant_type "${grant || ''}"`);
     } catch (e) {

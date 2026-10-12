@@ -190,7 +190,8 @@ Settings marked **restart** can only be set through the environment.
 | `HMAC_KEY_ID` / `HMAC_SECRET` | `demo` / `demo-hmac` | |
 | `HMAC_MAX_SKEW_SECONDS` | `300` | |
 | `OAUTH_CLIENTS` | `demo-client:demo-secret:read write` | `id:secret:scopes;…`. More clients can be added in the dashboard. |
-| `OAUTH_USERS` | `demo:demo` | `user:password;…` for the authorization_code login page |
+| `OAUTH_USERS` | `demo:demo` | Users for the authorization_code login page: `user:password[:roles[:attributes]];…`, e.g. `alice:alice:admin,buyer:region=EMEA,tier=gold`. More on the Auth page. |
+| `OAUTH_ROLES_CLAIM` | `realm_access.roles` | Where a user's roles go in the token: dotted claim paths, comma separated (`realm_access.roles` = Keycloak style; `realm_access.roles,roles` writes both) |
 | `OAUTH_TOKEN_TTL` / `OAUTH_REFRESH_TTL` | `3600` / `86400` | seconds |
 | `OAUTH_REGISTRATION` | `open` | Dynamic client registration at `/oauth/register`: `open`, `token` (needs `OAUTH_REGISTRATION_TOKEN`) or `off` |
 | `OAUTH_REGISTRATION_TOKEN` | | Initial access token clients send as `Authorization: Bearer …` when `OAUTH_REGISTRATION=token` |
@@ -352,6 +353,39 @@ curl -s -u demo-client:demo-secret -d "token=$TOKEN" "$B/oauth/revoke"
 
 **authorization_code + PKCE**: open `$B/oauth/authorize?response_type=code&client_id=demo-client&redirect_uri=https://oauth.pstmn.io/v1/callback&scope=read&state=xyz&code_challenge=<S256>&code_challenge_method=S256`, sign in as `demo` / `demo`, then exchange the code at `/oauth/token` with `grant_type=authorization_code`, `code`, `redirect_uri` and `code_verifier`. The response includes a `refresh_token`, which rotates on every use. Swagger UI at `/docs` runs this whole flow for you.
 
+**Users, roles and attributes.** Anyone in `OAUTH_USERS` or on the Auth page's **OAuth users** card can sign in on the login page. Each user has roles and attributes, and the tokens they get carry them:
+
+- `sub` and `preferred_username` are the username.
+- Roles go to each path in `OAUTH_ROLES_CLAIM`. The default `realm_access.roles` is what Keycloak issues; `realm_access.roles,roles` writes both shapes, and paths such as `groups` or `resource_access.my-app.roles` work too. A user without roles gets no roles claim.
+- Each attribute is a top-level claim with its JSON value (string, number, boolean, array or object). Standard and server claims (`iss`, `sub`, `aud`, `exp`, `nbf`, `iat`, `jti`, `scope`, `client_id`, `azp`, `token_use`, `preferred_username`) and the roles claim's top level are refused as attribute names.
+- Introspection returns the same claims. A refreshed token gets the user's current roles and attributes; when a user is deleted, their codes and refresh tokens stop working (`invalid_grant`).
+
+```bash
+# a user with roles and attributes (admin API; the Auth page does the same)
+curl -s -X POST "$B/admin/api/oauth/users" -u "admin:$ADMIN_PASSWORD" -H 'Content-Type: application/json' \
+  -d '{"username":"alice","password":"alice","roles":["admin","buyer"],"attributes":{"region":"EMEA","tier":"gold"}}'
+# the token alice would get, decoded, without signing in
+curl -s -X POST "$B/admin/api/auth/test-token" -u "admin:$ADMIN_PASSWORD" -H 'Content-Type: application/json' \
+  -d '{"clientId":"demo-client","username":"alice"}'
+```
+
+alice's access token then contains:
+
+```json
+{
+  "region": "EMEA",
+  "tier": "gold",
+  "preferred_username": "alice",
+  "realm_access": { "roles": ["admin", "buyer"] },
+  "client_id": "demo-client",
+  "scope": "read",
+  "sub": "alice",
+  "iss": "https://your-app.example", "aud": "api-test-tool", "iat": 1760300000, "exp": 1760303600, "jti": "…"
+}
+```
+
+`PATCH /admin/api/oauth/users/{username}` changes the password (`""` generates one), `roles` or `attributes` (replaced as a whole); fields left out are kept. Editing a user from `OAUTH_USERS` stores an edited copy that wins over the env entry, and `DELETE` on it reverts to the env values. In `OAUTH_USERS`, a user is `user:password:role1,role2:key=value,key2=value2`; a value that is valid JSON (`42`, `true`, `[1,2]`, `{"a":1}`) is kept as JSON.
+
 **hmac**
 
 ```
@@ -421,7 +455,7 @@ curl -s "$B/oauth/register" -H 'Content-Type: application/json' \
 - **Errors:** RFC 7591 JSON, `invalid_client_metadata` or `invalid_redirect_uri` (400); `invalid_token` (401, `WWW-Authenticate: Bearer`) when an initial access token is needed and missing; `access_denied` (403) at the `OAUTH_REGISTRATION_MAX` limit.
 - **Control:** `OAUTH_REGISTRATION=open` (default; anyone may register, as MCP clients expect), `token` (requires `Authorization: Bearer $OAUTH_REGISTRATION_TOKEN`), or `off` (no endpoint, not advertised). Registered clients are stored in the database (they survive restarts and redeploys) and appear on the Auth page with source `registered`, where they can be deleted.
 
-The dashboard's **Auth** page has a "Get a test token" button, an OAuth client manager, the registration settings, and an HMAC signer that produces a ready-to-run curl.
+The dashboard's **Auth** page has a "Get a test token" button (for a client, or as a chosen user), an OAuth client manager, an OAuth user manager (roles and attributes), the registration settings, and an HMAC signer that produces a ready-to-run curl.
 
 **Editing clients.** Every client in the Auth page's table has an **Edit** button: add or remove redirect URIs (typical while developing a callback; loopback `http://127.0.0.1|localhost` URIs match on any port), change scopes or grant types, set or regenerate the secret, rename it. Fields you don't touch are kept. Editing a client from `OAUTH_CLIENTS` stores an edited copy in the database that takes precedence over the env entry; **Revert** removes the copy. The same through the admin API:
 

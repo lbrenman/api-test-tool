@@ -627,6 +627,7 @@
     const tokenOut = h('div');
     const clientSel = h('select', null, a.clients.map((c) => h('option', { value: c.clientId }, `${c.clientId} (${c.scopes.join(' ')})`)));
     const scope = h('input', { type: 'text', placeholder: 'scope (blank = all of the client)' });
+    const userSel = h('select', null, h('option', { value: '' }, '(none: client token)'), a.users.map((u) => h('option', { value: u.username }, u.username)));
     const newId = h('input', { type: 'text', placeholder: 'client id' });
     const newSecret = h('input', { type: 'text', placeholder: 'secret (blank = generate)' });
     const newScopes = h('input', { type: 'text', value: 'read write' });
@@ -640,14 +641,14 @@
     el.append(h('div', { class: 'grid cols-2' },
       h('div', { class: 'card stack' }, titled('Mode & credentials', 'auth.mode'), settingsForm(['authMode', 'apiKey', 'apiKeyName', 'apiKeyIn', 'basicUser', 'basicPass', 'bearerToken', 'jwtAlg', 'jwtIssuer', 'jwtAudience', 'hmacKeyId', 'hmacSecret', 'hmacMaxSkewSeconds'], { onSaved: route })),
       h('div', null,
-        h('div', { class: 'card stack' }, titled('Get a test token', 'auth.token'), field('Client', clientSel), field('Scope', scope),
+        h('div', { class: 'card stack' }, titled('Get a test token', 'auth.token'), field('Client', clientSel), field('Scope', scope), field('As user', userSel, 'Pick a user to see the token the authorization_code flow would give them: their subject, roles and attributes.'),
           h('button', { class: 'primary', onclick: guard(async () => {
-            const t = await api('POST', '/auth/test-token', { clientId: clientSel.value, scope: scope.value || undefined });
+            const t = await api('POST', '/auth/test-token', { clientId: clientSel.value, scope: scope.value || undefined, username: userSel.value || undefined });
             clear(tokenOut).append(h('div', { class: 'stack' }, h('div', { class: 'row' }, h('b', null, `expires in ${t.expires_in}s`), h('button', { class: 'small', onclick: () => copy(t.access_token) }, 'Copy token'), h('button', { class: 'small', onclick: () => copy(`Authorization: Bearer ${t.access_token}`) }, 'Copy header')),
               codeBlock(t.access_token), codeBlock(pretty(t.decoded))));
           }) }, 'Issue token'), tokenOut,
           h('div', { class: 'small muted' }, 'curl:'), codeBlock(`curl -s -u '${a.clients[0]?.clientId || 'demo-client'}:${a.clients[0]?.secret || 'demo-secret'}' -d grant_type=client_credentials -d scope="read write" '${a.oauth.tokenUrl}'`)),
-        h('div', { class: 'card' }, titled('OAuth server', 'auth.server'), kv({ token: a.oauth.tokenUrl, authorize: a.oauth.authorizeUrl, metadata: a.oauth.metadata, jwks: a.jwt.jwks, issuer: a.jwt.issuer, audience: a.jwt.audience, alg: a.jwt.alg, 'demo users': a.oauth.users.join(', ') })))));
+        h('div', { class: 'card' }, titled('OAuth server', 'auth.server'), kv({ token: a.oauth.tokenUrl, authorize: a.oauth.authorizeUrl, metadata: a.oauth.metadata, jwks: a.jwt.jwks, issuer: a.jwt.issuer, audience: a.jwt.audience, alg: a.jwt.alg, users: a.oauth.users.join(', '), 'roles claim': a.oauth.rolesClaim })))));
     // Inline editor for one client (redirect URIs, scopes, secret, grants, name).
     const editBox = h('div');
     function editClient(c) {
@@ -702,6 +703,59 @@
         toast(`Client ${c.clientId} created (secret ${c.secret})`, 'ok');
         route();
       }) }, 'Add client'))));
+    // ---- users for the authorization_code login page, with roles and attributes
+    const userEditBox = h('div');
+    const attrsText = (o) => (o && Object.keys(o).length ? JSON.stringify(o, null, 2) : '');
+    const parseAttrs = (text) => {
+      if (!text.trim()) return {};
+      try { return JSON.parse(text); } catch (e) { throw new Error(`Attributes must be a JSON object: ${e.message}`); }
+    };
+    function editUser(u) {
+      const pwIn = h('input', { type: 'text', placeholder: 'leave blank to keep the current password' });
+      const regen = h('input', { type: 'checkbox' });
+      const rolesIn = h('input', { type: 'text', value: (u.roles || []).join(' '), placeholder: 'e.g. admin buyer (space or comma separated)' });
+      const attrsIn = h('textarea', { rows: 5, class: 'mono', spellcheck: 'false', placeholder: '{"region": "EMEA", "tier": "gold"}' }, attrsText(u.attributes));
+      clear(userEditBox).append(h('div', { class: 'card stack', style: { marginTop: '12px' } },
+        h('div', { class: 'row between' }, h('b', null, `Edit ${u.username}`), h('button', { class: 'small', onclick: () => clear(userEditBox) }, 'Cancel')),
+        u.source === 'env' ? h('div', { class: 'small muted' }, 'This user comes from OAUTH_USERS. Saving stores an edited copy that takes precedence; Revert goes back to the env values.') : null,
+        field('Roles', rolesIn, `Written to ${a.oauth.rolesClaim || '(no roles claim set)'} in the token. Empty = no roles claim.`),
+        field('Attributes (JSON object)', attrsIn, 'Each key becomes a top-level claim; values can be strings, numbers, booleans, arrays or objects. Replaces all attributes.'),
+        h('div', { class: 'grid cols-2' }, field('New password', pwIn), h('label', { class: 'check', style: { alignSelf: 'end' } }, regen, 'Generate a new password')),
+        h('div', { class: 'row' }, h('button', { class: 'primary', onclick: guard(async () => {
+          const body = { roles: rolesIn.value, attributes: parseAttrs(attrsIn.value) };
+          if (regen.checked) body.password = '';
+          else if (pwIn.value) body.password = pwIn.value;
+          const updated = await api('PATCH', `/oauth/users/${encodeURIComponent(u.username)}`, body);
+          toast(body.password !== undefined ? `Saved ${updated.username} (password ${updated.password})` : `Saved ${updated.username}`, 'ok');
+          route();
+        }) }, 'Save'))));
+      userEditBox.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+    const newUser = h('input', { type: 'text', placeholder: 'username' });
+    const newPw = h('input', { type: 'text', placeholder: 'password (blank = generate)' });
+    const newRoles = h('input', { type: 'text', placeholder: 'roles, e.g. admin buyer' });
+    const newAttrs = h('textarea', { rows: 3, class: 'mono', spellcheck: 'false', placeholder: 'attributes (optional JSON object), e.g. {"region": "EMEA", "tier": "gold"}' });
+    el.append(h('div', { class: 'card' }, titled('OAuth users', 'auth.users', { rolesClaim: a.oauth.rolesClaim }),
+      h('div', { class: 'small muted', style: { marginBottom: '8px' } }, 'Who can sign in on the authorization_code (PKCE) login page. Their roles and attributes go into the access token, introspection and refreshed tokens.'),
+      h('div', { class: 'table-wrap' }, h('table', null, h('thead', null, h('tr', null, ['Username', 'Password', 'Roles', 'Attributes', 'Source', ''].map((x) => h('th', null, x)))),
+        h('tbody', null, a.users.map((u) => h('tr', null, h('td', { class: 'mono' }, u.username), h('td', { class: 'mono' }, u.password),
+          h('td', null, (u.roles || []).length ? u.roles.map((r) => h('span', { class: 'badge', style: { marginRight: '4px' } }, r)) : h('span', { class: 'muted small' }, 'none')),
+          h('td', { class: 'mono small' }, Object.keys(u.attributes || {}).length ? JSON.stringify(u.attributes) : h('span', { class: 'muted' }, 'none')),
+          h('td', null, h('span', { class: 'badge' }, u.source), u.overridesEnv ? h('div', { class: 'small muted' }, 'edited (overrides env)') : null),
+          h('td', null, h('div', { class: 'row', style: { flexWrap: 'nowrap' } },
+            h('button', { class: 'small', onclick: () => editUser(u) }, 'Edit'),
+            u.source !== 'env' ? h('button', { class: 'small danger', onclick: guard(async () => {
+              if (!confirm(u.overridesEnv ? `Revert ${u.username} to its OAUTH_USERS values?` : `Delete user ${u.username}?`)) return;
+              await api('DELETE', `/oauth/users/${encodeURIComponent(u.username)}`); route();
+            }) }, u.overridesEnv ? 'Revert' : 'Delete') : null))))))),
+      userEditBox,
+      h('h3', null, 'Add user'), h('div', { class: 'grid cols-3' }, newUser, newPw, newRoles), h('div', { style: { marginTop: '8px' } }, newAttrs),
+      h('div', { class: 'row', style: { marginTop: '8px' } }, h('button', { onclick: guard(async () => {
+        const u = await api('POST', '/oauth/users', { username: newUser.value, password: newPw.value || undefined, roles: newRoles.value, attributes: parseAttrs(newAttrs.value) });
+        toast(`User ${u.username} created (password ${u.password})`, 'ok');
+        route();
+      }) }, 'Add user')),
+      h('h3', null, 'Settings'), settingsForm(['oauthRolesClaim', 'oauthUsers'], { onSaved: route })));
     el.append(h('div', { class: 'card stack' }, titled('HMAC signer', 'auth.hmac'),
       h('div', { class: 'small muted' }, 'Canonical string: METHOD \\n PATH+QUERY \\n X-Timestamp \\n hex(SHA-256(body)). Signature: base64(HMAC-SHA256(secret, canonical)).'),
       h('div', { class: 'grid cols-3' }, field('Method', hmacMethod), field('Path + query', hmacPath)), field('Body', hmacBody),
