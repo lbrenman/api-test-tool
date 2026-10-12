@@ -32,8 +32,11 @@ function makeEngine(ctx) {
     }
   }
 
+  // The task as clients see it. createdAt / lastModified are kept for sorting and filtering only: the 1.0 Task
+  // message has no such fields, and protobuf-based clients reject unknown fields.
   function snapshot(r, historyLength, { includeArtifacts = true } = {}) {
-    const t = JSON.parse(JSON.stringify(r.task));
+    const { createdAt, lastModified, ...rest } = r.task; // eslint-disable-line no-unused-vars
+    const t = JSON.parse(JSON.stringify(rest));
     if (historyLength !== undefined && historyLength !== null) t.history = historyLength > 0 ? (t.history || []).slice(-historyLength) : [];
     if (!includeArtifacts) delete t.artifacts;
     return t;

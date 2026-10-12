@@ -179,7 +179,7 @@ module.exports = function a2aRouter(ctx) {
 
   function pushOut(c, version) {
     const base = { id: c.id, url: c.url, ...(c.token ? { token: c.token } : {}), ...(c.authentication ? { authentication: c.authentication } : {}) };
-    return version === '1.0' ? { taskId: c.taskId, ...base, createdAt: c.createdAt } : { taskId: c.taskId, pushNotificationConfig: base };
+    return version === '1.0' ? { taskId: c.taskId, ...base } : { taskId: c.taskId, pushNotificationConfig: base };
   }
 
   // In the oauth2 auth mode: "write" for messages that change data, otherwise "read".

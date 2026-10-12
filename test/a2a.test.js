@@ -72,7 +72,8 @@ test('answers: direct message, completed tasks with artifacts, failed, rejected,
 
   const team = (await ask('Who works in Engineering?')).task;
   assert.equal(team.status.state, 'TASK_STATE_COMPLETED');
-  assert.ok(team.id && team.contextId && team.createdAt && team.lastModified);
+  assert.ok(team.id && team.contextId);
+  assert.ok(!('createdAt' in team) && !('lastModified' in team), 'no fields outside the 1.0 Task message');
   assert.match(textOf(team), /Found \d+ employee/);
   const data = team.artifacts.find((a) => a.name === 'data');
   assert.equal(data.metadata.operation, 'search_employees');
@@ -271,7 +272,7 @@ test('push notifications: every event is POSTed with the configured credentials'
   assert.match(c.headers['content-type'], /application\/a2a\+json/);
 
   const cfg = (await rpc('CreateTaskPushNotificationConfig', { taskId: sent.id, url: `${t.url}/hooks/a2a-2` }).expect(200)).body.result;
-  assert.ok(cfg.id && cfg.createdAt);
+  assert.ok(cfg.id && cfg.taskId === sent.id);
   assert.equal((await rpc('ListTaskPushNotificationConfigs', { taskId: sent.id }).expect(200)).body.result.configs.length, 2);
   assert.equal((await rpc('GetTaskPushNotificationConfig', { taskId: sent.id, id: cfg.id }).expect(200)).body.result.url, `${t.url}/hooks/a2a-2`);
   assert.deepEqual((await rpc('DeleteTaskPushNotificationConfig', { taskId: sent.id, id: cfg.id }).expect(200)).body.result, {});
