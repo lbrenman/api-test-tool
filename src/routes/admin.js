@@ -136,11 +136,24 @@ module.exports = function adminRouter(ctx, { adminAuth, filesApi }) {
       hmac: { keyId: settings.get('hmacKeyId'), secret: settings.get('hmacSecret'), maxSkewSeconds: settings.get('hmacMaxSkewSeconds') },
       s3: { enabled: settings.get('s3ApiEnabled'), endpoint: baseUrl(req), bucket: settings.get('s3ApiBucket'), region: settings.get('s3ApiRegion'), accessKeyId: settings.get('s3ApiAccessKeyId'), secretAccessKey: settings.get('s3ApiSecretAccessKey') },
       oauth: {
-        tokenUrl: `${baseUrl(req)}/oauth/token`, authorizeUrl: `${baseUrl(req)}/oauth/authorize`, metadata: `${baseUrl(req)}/.well-known/oauth-authorization-server`, users: oauth.users().map((u) => u.username),
+        tokenUrl: `${baseUrl(req)}/oauth/token`, authorizeUrl: `${baseUrl(req)}/oauth/authorize`, metadata: `${baseUrl(req)}/.well-known/oauth-authorization-server`, users: (await oauth.users()).map((u) => u.username), rolesClaim: settings.get('oauthRolesClaim'),
         registration: settings.get('oauthRegistration') !== 'off' ? `${baseUrl(req)}/oauth/register` : null, registrationMode: settings.get('oauthRegistration'),
       },
       clients: (await oauth.clients()).map(({ registrationTokenHash, ...c }) => c), // eslint-disable-line no-unused-vars
+      users: await oauth.users(),
     });
+  });
+  // Users for the authorization_code login page, with the roles and attributes that go into their tokens.
+  r.get('/oauth/users', async (req, res) => res.json({ items: await oauth.users(), rolesClaim: settings.get('oauthRolesClaim') }));
+  r.post('/oauth/users', async (req, res) => res.status(201).json(await oauth.addUser(req.body || {})));
+  r.patch('/oauth/users/:username', async (req, res) => {
+    const doc = await oauth.updateUser(req.params.username, req.body || {});
+    if (!doc) throw new HttpError(404, `No OAuth user ${req.params.username}`);
+    res.json(doc);
+  });
+  r.delete('/oauth/users/:username', async (req, res) => {
+    if (!(await oauth.removeUser(req.params.username))) throw new HttpError(404, 'Only dashboard-added or edited users can be deleted (env users come from OAUTH_USERS)');
+    res.status(204).end();
   });
   r.post('/oauth/clients', async (req, res) => res.status(201).json(await oauth.addClient(req.body || {})));
   r.patch('/oauth/clients/:id', async (req, res) => {
@@ -158,8 +171,12 @@ module.exports = function adminRouter(ctx, { adminAuth, filesApi }) {
     const client = clients.find((c) => c.clientId === req.body?.clientId) || clients[0];
     if (!client) throw new HttpError(400, 'No OAuth clients configured');
     const scopes = oauth.resolveScopes(client, req.body?.scope);
-    const tok = await oauth.issueAccessToken(req, { client, scopes });
-    res.json({ ...tok, clientId: client.clientId, decoded: ctx.keys.decode(tok.access_token) });
+    // With a username: the token that user would get from the authorization_code flow (roles and attributes included).
+    const username = req.body?.username;
+    const user = username ? await oauth.user(username) : null;
+    if (username && !user) throw new HttpError(400, `No OAuth user ${username}`);
+    const tok = await oauth.issueAccessToken(req, { client, scopes, ...(user ? { subject: user.username, user } : {}) });
+    res.json({ ...tok, clientId: client.clientId, ...(user ? { username: user.username } : {}), decoded: ctx.keys.decode(tok.access_token) });
   });
   r.post('/auth/hmac-sign', (req, res) => {
     const b = req.body || {};

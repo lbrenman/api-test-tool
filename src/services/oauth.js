@@ -11,6 +11,9 @@ class OAuthError extends Error {
   }
 }
 
+// Claims set by the server itself; a user attribute may not use these names.
+const RESERVED_CLAIMS = ['iss', 'sub', 'aud', 'exp', 'nbf', 'iat', 'jti', 'scope', 'client_id', 'token_use', 'azp', 'preferred_username'];
+
 function safeEq(a, b) {
   const x = Buffer.from(String(a ?? ''));
   const y = Buffer.from(String(b ?? ''));
@@ -237,15 +240,157 @@ class OAuthService {
     });
   }
 
-  users() {
-    return String(this.ctx.settings.get('oauthUsers') || '').split(';').map((s) => s.trim()).filter(Boolean).map((e) => {
-      const i = e.indexOf(':');
-      return { username: e.slice(0, i), password: e.slice(i + 1) };
-    });
+  // ---- Users for the authorization_code login page, with roles and attributes that go into their tokens ----
+
+  /**
+   * Users from OAUTH_USERS: `user:password[:roles[:attributes]]` separated by `;`, roles comma separated,
+   * attributes `key=value` comma separated (a value that parses as JSON is kept as JSON: numbers, booleans, arrays).
+   */
+  envUsers() {
+    return String(this.ctx.settings.get('oauthUsers') || '').split(';').map((s) => s.trim()).filter(Boolean).map((entry) => {
+      const [username, password = '', roles = '', ...rest] = entry.split(':');
+      const attributes = {};
+      for (const pair of OAuthService.splitTopLevel(rest.join(':')).map((s) => s.trim()).filter(Boolean)) {
+        const i = pair.indexOf('=');
+        if (i <= 0) continue;
+        attributes[pair.slice(0, i).trim()] = OAuthService.attributeValue(pair.slice(i + 1).trim());
+      }
+      return { username, password, roles: roles.split(',').map((r) => r.trim()).filter(Boolean), attributes, source: 'env' };
+    }).filter((u) => u.username);
   }
 
-  checkUser(username, password) {
-    return this.users().some((u) => u.username === username && safeEq(u.password, password));
+  /** Split on commas that are not inside [], {} or double quotes, so `tags=["a","b"],tier=gold` is two attributes. */
+  static splitTopLevel(text) {
+    const parts = [];
+    let depth = 0;
+    let quoted = false;
+    let cur = '';
+    for (let i = 0; i < text.length; i += 1) {
+      const ch = text[i];
+      if (quoted) {
+        if (ch === '\\') { cur += ch + (text[i + 1] ?? ''); i += 1; continue; }
+        if (ch === '"') quoted = false;
+      } else if (ch === '"') quoted = true;
+      else if (ch === '[' || ch === '{') depth += 1;
+      else if ((ch === ']' || ch === '}') && depth > 0) depth -= 1;
+      else if (ch === ',' && depth === 0) { parts.push(cur); cur = ''; continue; }
+      cur += ch;
+    }
+    parts.push(cur);
+    return parts;
+  }
+
+  static attributeValue(raw) {
+    if (raw === '') return '';
+    try { return JSON.parse(raw); } catch { return raw; }
+  }
+
+  async users() {
+    const envNames = new Set(this.envUsers().map((u) => u.username));
+    const stored = (await this.ctx.repo.list('oauth_users')).map((u) => ({ ...u, source: 'dashboard', ...(envNames.has(u.username) ? { overridesEnv: true } : {}) }));
+    const env = this.envUsers().filter((u) => !stored.some((s) => s.username === u.username));
+    return [...env, ...stored];
+  }
+
+  async user(username) { return (await this.users()).find((u) => u.username === username) || null; }
+
+  /** The user for a username and password, or null. */
+  async checkUser(username, password) {
+    const u = await this.user(String(username ?? ''));
+    return u && safeEq(u.password, password) ? u : null;
+  }
+
+  /** Where roles go in a user's token: dotted claim paths from OAUTH_ROLES_CLAIM (default realm_access.roles). */
+  rolesClaimPaths() {
+    return String(this.ctx.settings.get('oauthRolesClaim') || '').split(/[\s,]+/).filter(Boolean).map((p) => p.split('.').filter(Boolean)).filter((p) => p.length);
+  }
+
+  /** Claim names an attribute may not use: the standard JWT claims, the server's own, and the roles claim's top level. */
+  reservedClaims() {
+    return new Set([...RESERVED_CLAIMS, ...this.rolesClaimPaths().map((p) => p[0])]);
+  }
+
+  static parseRoles(v) {
+    const roles = (Array.isArray(v) ? v : String(v ?? '').split(/[\s,]+/)).map((r) => String(r).trim()).filter(Boolean);
+    return [...new Set(roles)];
+  }
+
+  parseAttributes(v) {
+    let attrs = v;
+    if (typeof attrs === 'string') {
+      if (!attrs.trim()) attrs = {};
+      else {
+        try { attrs = JSON.parse(attrs); } catch { throw new OAuthError('invalid_request', 'attributes must be a JSON object'); }
+      }
+    }
+    if (attrs === null || attrs === undefined) attrs = {};
+    if (typeof attrs !== 'object' || Array.isArray(attrs)) throw new OAuthError('invalid_request', 'attributes must be a JSON object of claim names and values');
+    const reserved = this.reservedClaims();
+    for (const k of Object.keys(attrs)) {
+      if (!k.trim() || k.length > 200) throw new OAuthError('invalid_request', 'Attribute names must be 1-200 characters');
+      if (reserved.has(k)) throw new OAuthError('invalid_request', `"${k}" is a reserved claim and cannot be an attribute (reserved: ${[...reserved].join(', ')})`);
+    }
+    return attrs;
+  }
+
+  async addUser({ username, password, roles, attributes }) {
+    if (!username || !/^[A-Za-z0-9._@+-]{1,64}$/.test(username)) throw new OAuthError('invalid_request', 'username must be 1-64 chars [A-Za-z0-9._@+-]');
+    if (await this.user(username)) throw new OAuthError('invalid_request', `User ${username} already exists (edit it instead)`, 409);
+    const doc = {
+      username,
+      password: password === undefined || password === null || password === '' ? crypto.randomBytes(9).toString('base64url') : String(password),
+      roles: OAuthService.parseRoles(roles),
+      attributes: this.parseAttributes(attributes),
+      createdAt: new Date().toISOString(),
+    };
+    await this.ctx.repo.put('oauth_users', username, doc);
+    return { ...doc, source: 'dashboard' };
+  }
+
+  /**
+   * Edit a user: password, roles, attributes. Fields left out are kept. An env user (OAUTH_USERS) gets a stored
+   * copy that takes precedence over the env entry; deleting the copy reverts to the env values.
+   */
+  async updateUser(username, patch = {}) {
+    const current = await this.user(username);
+    if (!current) return null;
+    const { source, overridesEnv, ...base } = current; // eslint-disable-line no-unused-vars
+    const doc = { ...base };
+    if (source === 'env') doc.createdAt = new Date().toISOString();
+    if (patch.password !== undefined) {
+      doc.password = patch.password === '' || patch.password === null ? crypto.randomBytes(9).toString('base64url') : String(patch.password);
+    }
+    if (patch.roles !== undefined) doc.roles = OAuthService.parseRoles(patch.roles);
+    if (patch.attributes !== undefined) doc.attributes = this.parseAttributes(patch.attributes);
+    doc.updatedAt = new Date().toISOString();
+    await this.ctx.repo.put('oauth_users', username, doc);
+    return { ...doc, source: 'dashboard', ...(source === 'env' || overridesEnv ? { overridesEnv: true } : {}) };
+  }
+
+  async removeUser(username) { return this.ctx.repo.del('oauth_users', username); }
+
+  /**
+   * The claims a user adds to a token: preferred_username, the roles at each OAUTH_ROLES_CLAIM path (left out when the
+   * user has none, as Keycloak does), and each attribute as a top-level claim. Reserved names are skipped, so an
+   * attribute stored before OAUTH_ROLES_CLAIM changed cannot overwrite the roles or a standard claim.
+   */
+  userClaims(user) {
+    if (!user) return {};
+    const reserved = this.reservedClaims();
+    const out = {};
+    for (const [k, v] of Object.entries(user.attributes || {})) if (!reserved.has(k)) out[k] = v;
+    out.preferred_username = user.username;
+    if (user.roles?.length) {
+      for (const path of this.rolesClaimPaths()) {
+        let node = out;
+        for (const seg of path.slice(0, -1)) {
+          if (!node[seg] || typeof node[seg] !== 'object' || Array.isArray(node[seg])) node[seg] = {};
+          node = node[seg];
+        }
+        node[path[path.length - 1]] = [...user.roles];
+      }
+    }
+    return out;
   }
 
   // Client authentication from Basic header or form body.
@@ -299,10 +444,10 @@ class OAuthService {
     return r;
   }
 
-  async issueAccessToken(req, { client, scopes, subject, refresh, resource }) {
+  async issueAccessToken(req, { client, scopes, subject, user, refresh, resource }) {
     const ttl = this.ctx.settings.get('oauthTokenTtl');
     const token = await this.ctx.keys.sign(
-      { client_id: client.clientId, scope: scopes.join(' '), token_use: 'access' },
+      { ...this.userClaims(user), client_id: client.clientId, scope: scopes.join(' '), token_use: 'access' },
       { ttl, issuer: this.issuer(req), audience: resource && resource !== this.audience() ? [this.audience(), resource] : this.audience(), subject: subject || client.clientId },
     );
     const out = { access_token: token, token_type: 'Bearer', expires_in: ttl, scope: scopes.join(' ') };
@@ -350,13 +495,17 @@ class OAuthService {
     const rt = await this.ctx.repo.get('oauth_refresh', token);
     if (rt) {
       if (rt.expiresAt < Date.now()) return { active: false };
-      return { active: true, token_type: 'refresh_token', client_id: rt.clientId, scope: rt.scopes.join(' '), sub: rt.subject || rt.clientId, exp: Math.floor(rt.expiresAt / 1000) };
+      return { active: true, token_type: 'refresh_token', client_id: rt.clientId, scope: rt.scopes.join(' '), sub: rt.subject || rt.clientId, ...(rt.subject ? { username: rt.subject } : {}), exp: Math.floor(rt.expiresAt / 1000) };
     }
     try {
       const { payload } = await this.verifyAccess(req, token);
+      // A user's token: its roles and attributes come back too (RFC 7662 allows extra members).
+      const { token_use: tokenUse, nbf, ...claims } = payload; // eslint-disable-line no-unused-vars
       return {
+        ...claims,
         active: true, token_type: 'Bearer', scope: payload.scope, client_id: payload.client_id, sub: payload.sub,
         exp: payload.exp, iat: payload.iat, iss: payload.iss, aud: payload.aud, jti: payload.jti,
+        ...(payload.preferred_username ? { username: payload.preferred_username } : {}),
       };
     } catch {
       return { active: false };
@@ -377,4 +526,4 @@ class OAuthService {
   }
 }
 
-module.exports = { OAuthService, OAuthError, safeEq };
+module.exports = { OAuthService, OAuthError, safeEq, RESERVED_CLAIMS };
