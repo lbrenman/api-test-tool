@@ -5,21 +5,23 @@
 
 One deployable app for testing an API platform or integration in both directions:
 
-1. **Outgoing testing — a realistic mock target.** Your integration calls this tool. It serves seeded employees and products with every JSON type you need to parse, seven pagination styles side by side, error and latency injection, a shared file pool exposed over every common HTTP file protocol, seven auth modes with a built-in OAuth 2.0 server, custom and required headers, and a **webhook.site-style inspector** that captures anything sent to any other path.
-2. **Incoming testing — a contract tester.** Load the OpenAPI spec you implemented (3.0, 3.1 or Swagger 2.0). The tool generates sample requests, calls your implementation through a server-side proxy, validates every response against the spec, and runs the whole contract with ID chaining and negative tests.
+1. **Outgoing testing — a realistic mock target.** Your integration calls this tool. It serves seeded employees and products with every JSON type you need to parse, seven pagination styles side by side, error and latency injection, a shared file pool exposed over every common HTTP file protocol (and as an S3-compatible bucket), seven auth modes with a built-in OAuth 2.0 server, custom and required headers, outgoing webhooks, and a **webhook.site-style inspector** that captures anything sent to any other path. The same data is also served over SOAP, WebSocket, Server-Sent Events, GraphQL and OData.
+2. **AI-facing mocks — for LLM connectors, MCP clients and agent platforms.** An OpenAI-compatible [mock LLM](#mock-llm-openai-compatible) (`/llm/v1`) that answers with vague text and random token usage, an [MCP server](#mcp-server) (`/mcp`) whose tools read and change the mock data, and an [A2A agent](#a2a-agent) (`/a2a`, A2A 1.0 and 0.3) that answers questions about the data as tasks. No real model is called, so the answers, costs and failures are under your control.
+3. **Incoming testing — a contract tester.** Load the contract you implemented (OpenAPI 3.0, 3.1 or Swagger 2.0, WSDL 1.1 for SOAP, or AsyncAPI for WebSocket). The tool generates sample requests, calls your implementation through a server-side proxy, validates every response against the contract, and runs the whole contract with ID chaining and negative tests.
 
 Contains:
 
 * Admin web dashboard for configuring the server, re-seeding data, managing files, retrieving OpenAPI specs, inspecting incoming API calls and getting help with the system
-* Operation web console to emulate a back office app for the business represted by the data, including full CRUD support of data via web forms
+* Operation web console to emulate a back office app for the business represented by the data, including full CRUD support of data via web forms
 * OpenAPI Spec for use in your client application
 * Postman collection for making calls to the server
 * Employee and Product data exposed via configurable APIs to test authentication, pagination, errors, webhooks, file access
+* The same data over SOAP, WebSocket, SSE, GraphQL, OData and an S3-compatible API, plus a mock LLM, an MCP server and an A2A agent built on it
 * [Facade API sample](#facade-api-sample): an OpenAPI 3.0.1 experience API to build *in front of* this tool, with data-mapping instructions and **Acme Front Office**, a mobile-friendly web app that exercises it (the front-office counterpart to the Acme Back Office app)
 
 Everything runs in one Node.js process on one port, with a vanilla-JS dashboard (no build step). It is host-agnostic: Codespaces, Docker, Fly.io, Render and Northflank are configured with environment variables.
 
-Ues Cases:
+Use cases:
 
 * You need a reliable data source for an api demo
 * You need to secure your API with OAuth2 and need an external OAuth2 server
@@ -28,6 +30,8 @@ Ues Cases:
 * You need an S3 bucket to test an S3 connector, without an AWS account
 * You need to experiment with advanced orchestration/aggregation functions such as data aggregation/join/deduplication and you need a data source (the [facade sample](#facade-api-sample) gives you a ready-made contract and mapping)
 * You are debugging an http client call and need a web catcher to see what your platform is actually sending
+* You are building or proxying LLM calls and need an OpenAI-compatible endpoint with predictable token usage, streaming and failures, without paying for a model
+* You need an MCP server or an A2A agent to connect your agent platform, MCP gateway or A2A client to, with tools and tasks that work on real-looking data
 
 ![image](images/codespace.png)
 ![image](images/admin-web-dashboard.png)
@@ -126,7 +130,7 @@ Fly.io, Render and Northflank are covered in [Deployment](#deployment).
 | **Rate limiting** | A real per-client limiter with `RateLimit-*` headers and 429 + `Retry-After`. |
 | **Headers** | Custom headers added to every response, and required request headers (with optional expected values) enforced on `/v1/*`. |
 | **Auth** | `none`, `apikey` (header or query), `basic`, `bearer`, `jwt` (HS256/RS256, JWKS), `oauth2` (scopes), `hmac` (signed requests). |
-| **OAuth 2.0 server** | client_credentials, authorization_code + PKCE (login/consent page), refresh_token (rotating), introspection (RFC 7662), revocation (RFC 7009), RFC 8414 metadata, JWKS, and dynamic client registration (RFC 7591, with RFC 7592 read/delete) for MCP clients and other self-registering apps: public or confidential clients, loopback and custom-scheme redirects, open or token-protected. |
+| **OAuth 2.0 server** | client_credentials, authorization_code + PKCE (login/consent page), refresh_token (rotating), introspection (RFC 7662), revocation (RFC 7009), RFC 8414 metadata, JWKS, dynamic client registration (RFC 7591, with RFC 7592 read/delete) for MCP clients and other self-registering apps: public or confidential clients, loopback and custom-scheme redirects, open or token-protected, and resource indicators (RFC 8707: a `resource` parameter is added to the token's audience). |
 | **Files** | One shared pool (local disk or S3-compatible) behind multipart, raw, base64-in-JSON, tus resumable, presigned URLs, range downloads (206) and chunked downloads. Sample CSV, XLSX, JSON, PNG, JPG, PDF, TXT, ZIP and a 10 MB binary are generated on seed. |
 | **SOAP** | Mock SOAP 1.1 and 1.2 services (`EmployeeService`, `ProductService`) over the same data, with live WSDLs (document/literal, a SOAP 1.1 and a 1.2 binding). Get, List (paging, filters, text search, sort), Create, Update, Delete. Auth mode, chaos, rate limits and required headers apply as on `/v1`; errors are SOAP faults with field-level detail. Optional WS-Security UsernameToken (PasswordText and PasswordDigest) and SOAPAction checking. |
 | **WebSocket** | Mock channels over the same data: `/ws/echo`, `/ws/rpc` (JSON-RPC 2.0: get/list employees, products, departments, categories) and `/ws/changes` (live created/updated/deleted events from any protocol), with an AsyncAPI 3.0 document. The upgrade goes through auth, rate limiting, required headers and chaos. Size limit (1009), idle timeout, keep-alive pings, and a live console in the dashboard. In-house RFC 6455 implementation, no dependency. |
@@ -328,7 +332,7 @@ curl -s -u demo:demo "$B/v1/employees?limit=2"
 curl -s "$B/v1/employees?limit=2" -H 'Authorization: Bearer demo-token'
 ```
 
-**jwt** and **oauth2**: get a token from the built-in server. Under `jwt`, any valid token from the server is accepted (iss/aud/exp are checked). Under `oauth2`, scopes are also enforced: `read` for GET, and `write` for POST, PUT, PATCH and DELETE (403 `insufficient_scope` otherwise).
+**jwt** and **oauth2**: get a token from the built-in server. Under `jwt`, any valid token from the server is accepted (iss/aud/exp are checked). Under `oauth2`, scopes are also enforced: `read` for GET, and `write` for POST, PUT, PATCH and DELETE (403 `insufficient_scope` otherwise). The MCP server and the A2A agent decide by operation instead, since every call is a POST: reading tools and questions need `read`, tools and requests that change data need `write`.
 
 ```bash
 TOKEN=$(curl -s -u demo-client:demo-secret -d grant_type=client_credentials -d 'scope=read write' \

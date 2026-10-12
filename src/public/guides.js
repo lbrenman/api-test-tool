@@ -527,7 +527,7 @@
         title: 'Get a test token',
         purpose: 'Issue an access token from the built-in OAuth server. Tokens are signed JWTs and are accepted in both `jwt` and `oauth2` modes.',
         steps: [
-          'Pick a client and, optionally, a narrower scope (`read` allows GET; `write` allows changes in `oauth2` mode).',
+          'Pick a client and, optionally, a narrower scope (`read` allows GET; `write` allows changes in `oauth2` mode). The MCP server and the A2A agent check by operation: `read` for reading tools and questions, `write` for anything that changes data.',
           'Press "Issue token", then copy the token or the whole Authorization header.',
           `In your integration, use the client-credentials grant against \`${C.ctx.tokenUrl}\` to fetch tokens automatically.`,
         ],
@@ -545,6 +545,7 @@
           'For authorization code + PKCE, send the user to the authorize URL; they sign in with a demo user and consent.',
           'Validate tokens yourself with the JWKS, or ask the server with introspection.',
           'Clients that register themselves (MCP clients, for example) find `registration_endpoint` in the discovery document; see the Dynamic client registration card.',
+          'MCP clients find this server from the MCP endpoint\'s 401 (its `resource_metadata` points at `/.well-known/oauth-protected-resource/mcp`). A `resource` parameter (RFC 8707) on the authorize or token request is added to the token\'s audience.',
         ],
         curls: [
           ['Discovery metadata', plain('GET', '/.well-known/oauth-authorization-server')],

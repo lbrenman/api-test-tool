@@ -379,7 +379,7 @@
       const welcome = h('div', { class: 'card welcome' },
         h('div', { class: 'row between' }, h('b', null, 'New here?'),
           h('button', { class: 'small', onclick: () => { try { localStorage.setItem('att-welcome-dismissed', '1'); } catch { /* ignore */ } welcome.remove(); } }, 'Dismiss')),
-        h('p', { style: { margin: '6px 0 10px' } }, 'This tool does two jobs: it is a realistic API for your integrations to call (outgoing testing), and it checks an API you built against its OpenAPI spec (incoming testing).'),
+        h('p', { style: { margin: '6px 0 10px' } }, 'This tool does two jobs: it is a realistic API for your integrations to call (outgoing testing: REST, SOAP, WebSocket, SSE, GraphQL, OData, S3, plus a mock LLM, an MCP server and an A2A agent on the Protocols page), and it checks an API you built against its OpenAPI, WSDL or AsyncAPI contract (incoming testing).'),
         h('div', { class: 'row' }, h('a', { class: 'btn primary', href: '#/help' }, 'Read the guide'),
           h('a', { class: 'btn', href: '#/help/quick-outgoing' }, 'Quick start: outgoing'), h('a', { class: 'btn', href: '#/help/quick-incoming' }, 'Quick start: incoming')));
       el.append(welcome);
