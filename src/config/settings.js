@@ -104,7 +104,7 @@ const DEFS = [
 
   // ---- s3 api (an S3-compatible endpoint over the file pool; not the S3_* storage backend above) ----
   { key: 's3ApiEnabled', env: 'S3_API_ENABLED', def: true, type: 'bool', section: 's3api', desc: 'serve the file pool as an S3-compatible API at the base URL (path-style: <base>/<bucket>/<key>), signed with AWS Signature V4' },
-  { key: 's3ApiBucket', env: 'S3_API_BUCKET', def: 'files', type: 'string', section: 's3api', pattern: /^(?!(v1|admin|dashboard|docs|soap|ws|sse|graphql|odata|oauth|app|health|ready|samples|mock|problems|openapi\.json|openapi\.yaml)$)[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/, desc: 'Bucket name clients use (3-63 lowercase letters, digits, dots, hyphens; not a path the tool already uses)' },
+  { key: 's3ApiBucket', env: 'S3_API_BUCKET', def: 'files', type: 'string', section: 's3api', pattern: /^(?!(v1|admin|dashboard|docs|soap|ws|sse|graphql|odata|llm|mcp|oauth|app|health|ready|samples|mock|problems|openapi\.json|openapi\.yaml)$)[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/, desc: 'Bucket name clients use (3-63 lowercase letters, digits, dots, hyphens; not a path the tool already uses)' },
   { key: 's3ApiRegion', env: 'S3_API_REGION', def: 'us-east-1', type: 'string', section: 's3api', pattern: /^[a-z0-9-]{1,40}$/, desc: 'Region clients must sign with (e.g. us-east-1, eu-west-1, auto)' },
   { key: 's3ApiAccessKeyId', env: 'S3_API_ACCESS_KEY_ID', def: 'demo-access-key', type: 'string', section: 's3api', pattern: /^[A-Za-z0-9._-]{3,128}$/, desc: 'Access key ID clients sign with' },
   { key: 's3ApiSecretAccessKey', env: 'S3_API_SECRET_ACCESS_KEY', def: 'demo-secret-key', type: 'string', section: 's3api', secret: true, pattern: /^.{1,256}$/, desc: 'Secret access key clients sign with' },
@@ -116,6 +116,15 @@ const DEFS = [
   { key: 'sseReplayBuffer', env: 'SSE_REPLAY_BUFFER', def: 500, type: 'int', section: 'sse', min: 1, max: 100000, desc: 'Change events kept for Last-Event-ID resume on /sse/changes' },
   { key: 'sseTickIntervalMs', env: 'SSE_TICK_INTERVAL_MS', def: 1000, type: 'int', section: 'sse', min: 50, max: 60000, desc: 'Default interval of /sse/ticks (override with ?interval=)' },
 
+  // ---- llm (OpenAI-compatible mock) ----
+  { key: 'llmEnabled', env: 'LLM_ENABLED', def: true, type: 'bool', section: 'llm', desc: 'serve the OpenAI-compatible mock LLM at /llm/v1 (chat/completions, embeddings, models)' },
+  { key: 'llmModels', env: 'LLM_MODELS', def: 'mock-chat-large,mock-chat-small,mock-reasoning,mock-embed-small', type: 'string', section: 'llm', desc: 'Comma list of model ids returned by /llm/v1/models' },
+  { key: 'llmRequireKnownModel', env: 'LLM_REQUIRE_KNOWN_MODEL', def: false, type: 'bool', section: 'llm', desc: 'reject models not in LLM_MODELS with 404 model_not_found (off = any model name is accepted and echoed back)' },
+  { key: 'llmCompletionTokensMin', env: 'LLM_COMPLETION_TOKENS_MIN', def: 20, type: 'int', section: 'llm', min: 1, max: 16384, desc: 'Fewest completion tokens in a random answer' },
+  { key: 'llmCompletionTokensMax', env: 'LLM_COMPLETION_TOKENS_MAX', def: 300, type: 'int', section: 'llm', min: 1, max: 16384, desc: 'Most completion tokens in a random answer (max_tokens / max_completion_tokens cap it, with finish_reason "length")' },
+  { key: 'llmStreamDelayMs', env: 'LLM_STREAM_DELAY_MS', def: 25, type: 'int', section: 'llm', min: 0, max: 5000, desc: 'Delay between streamed chunks (stream: true)' },
+  { key: 'llmToolCallRate', env: 'LLM_TOOL_CALL_RATE', def: 50, type: 'int', section: 'llm', min: 0, max: 100, desc: 'Percent of requests with tools (tool_choice auto) answered with a tool call; required or a named tool always calls, none never does, and a reply to a tool result is always text' },
+
   // ---- webhooks ----
   { key: 'webhooksEnabled', env: 'WEBHOOKS_ENABLED', def: true, type: 'bool', section: 'webhooks', desc: 'send the outgoing webhooks defined on the Webhooks page (off = pause all deliveries; the definitions are kept)' },
   { key: 'webhookTimeoutMs', env: 'WEBHOOK_TIMEOUT_MS', def: 10000, type: 'int', section: 'webhooks', min: 100, max: 60000, desc: 'How long a delivery waits for the receiver before it is logged as failed' },
@@ -123,7 +132,7 @@ const DEFS = [
 
   // ---- inspector ----
   { key: 'inspectorRetention', env: 'INSPECTOR_RETENTION', def: 500, type: 'int', section: 'inspector', min: 1 },
-  { key: 'inspectorLogAll', env: 'INSPECTOR_LOG_ALL', def: true, type: 'bool', section: 'inspector', desc: 'also record /v1/*, /soap/*, /ws/* (upgrades), /sse/*, /graphql, /odata/*, S3 API and /oauth/* calls (the dashboard, docs and health probes are never recorded)' },
+  { key: 'inspectorLogAll', env: 'INSPECTOR_LOG_ALL', def: true, type: 'bool', section: 'inspector', desc: 'also record /v1/*, /soap/*, /ws/* (upgrades), /sse/*, /graphql, /odata/*, /llm/*, S3 API and /oauth/* calls (the dashboard, docs and health probes are never recorded)' },
   { key: 'inspectorResponseStatus', env: 'INSPECTOR_RESPONSE_STATUS', def: 200, type: 'int', section: 'inspector', min: 100, max: 599 },
   { key: 'inspectorResponseContentType', env: 'INSPECTOR_RESPONSE_CONTENT_TYPE', def: 'application/json', type: 'string', section: 'inspector' },
   { key: 'inspectorResponseBody', env: 'INSPECTOR_RESPONSE_BODY', def: '', type: 'string', section: 'inspector', desc: 'blank = JSON receipt with the capture id' },

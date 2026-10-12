@@ -32,6 +32,7 @@ const PROTOCOLS = {
   sse: { name: 'Server-Sent Events', kind: 'sse', samplePath: '/sse/changes', reserved: '/sse', readme: '## Server-Sent Events' },
   graphql: { name: 'GraphQL', kind: 'graphql', samplePath: '/graphql', reserved: '/graphql', readme: '## GraphQL' },
   odata: { name: 'OData', kind: 'odata', samplePath: '/odata/v4/Employees', reserved: '/odata/v4', readme: '## OData v4' },
+  llm: { name: 'LLM', kind: 'llm', samplePath: '/llm/v1/chat/completions', reserved: '/llm', readme: '## Mock LLM (OpenAI-compatible)' },
   s3: { name: 'S3', kind: 's3', reserved: '(the S3 bucket name)', readme: '## S3-compatible API' },
 };
 const NOT_PROTOCOLS = ['authMode', 'dateFormat', 'errorRate', 'errorTypes', 'latencyMs', 'rateLimitRpm', 'requiredHeaders', 'responseHeaders', 'inspectorLogAll', 'maxFileSizeMb', 'dashboardProtected', 'webhooks'];
@@ -61,7 +62,7 @@ test('every protocol in /health is described in the help, the Inspector filter, 
     assert.ok(reservedTable.includes(p.reserved), `the help page's reserved-paths table should list ${p.reserved}`);
     assert.ok(readme.includes(p.readme), `the README should have a "${p.readme}" section`);
   }
-  for (const name of ['SOAP', 'WebSocket', 'SSE', 'GraphQL', 'OData', 'S3']) {
+  for (const name of ['SOAP', 'WebSocket', 'SSE', 'GraphQL', 'OData', 'LLM', 'S3']) {
     assert.ok(inspectorHelp.includes(name), `PAGE_HELP.inspector should mention ${name}`);
   }
 });

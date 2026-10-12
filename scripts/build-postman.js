@@ -48,7 +48,7 @@ const collectionPreBody = [
   "if (skip) pm.request.headers.remove('X-Skip-Auth');",
   "const resolved = new sdk.Url(pm.variables.replaceIn(pm.request.url.toString()));",
   "const p = resolved.getPath();",
-  "const isApi = (p.indexOf('/v1/') === 0 && p.indexOf('/v1/files/presigned/') !== 0) || (p.indexOf('/soap/') === 0 && pm.request.method === 'POST') || p.indexOf('/sse/') === 0 || p === '/graphql' || (p.indexOf('/odata/v4/') === 0 && p !== '/odata/v4/' && p !== '/odata/v4/$metadata');",
+  "const isApi = (p.indexOf('/v1/') === 0 && p.indexOf('/v1/files/presigned/') !== 0) || (p.indexOf('/soap/') === 0 && pm.request.method === 'POST') || p.indexOf('/sse/') === 0 || p.indexOf('/llm/v1/') === 0 || p === '/graphql' || (p.indexOf('/odata/v4/') === 0 && p !== '/odata/v4/' && p !== '/odata/v4/$metadata');",
   "if (!isApi || skip || mode === 'none') return;",
   "const set = (k, v) => pm.request.headers.upsert({ key: k, value: v });",
   "if (mode === 'apikey') {",
@@ -91,7 +91,7 @@ const collectionPreBody = [
 ];
 // The sandbox does not allow top-level return, so the body runs inside a function.
 const collectionPre = [
-  '// Applies the auth mode in {{authMode}} to /v1 requests, SOAP POSTs, SSE streams, /graphql and OData. Requests with header X-Skip-Auth: 1 go out unauthenticated.',
+  '// Applies the auth mode in {{authMode}} to /v1 requests, SOAP POSTs, SSE streams, /graphql, OData and the mock LLM. Requests with header X-Skip-Auth: 1 go out unauthenticated.',
   '(function applyAuth() {',
   ...collectionPreBody.map((l) => `  ${l}`),
   '})();',
@@ -107,7 +107,7 @@ const collectionTest = [
 const platform = folder('Platform', [
   req('Health', 'GET', '/health', { tests: [status(200), "pm.test('ok', () => pm.expect(pm.response.json().status).to.eql('ok'));", "pm.environment.set('totalEmployees', pm.response.json().data.employees); pm.environment.set('totalProducts', pm.response.json().data.products);"] }),
   req('Ready', 'GET', '/ready', { tests: [status(200)] }),
-  req('OpenAPI JSON', 'GET', '/openapi.json', { tests: [status(200), "pm.test('3.1', () => pm.expect(pm.response.json().openapi).to.eql('3.1.0'));", "pm.test('auth mode reflected', () => { const s = pm.response.json().components.securitySchemes; const m = pm.environment.get('authMode'); if (m === 'none') pm.expect(Object.keys(s)).to.have.length(0); else pm.expect(Object.keys(s)).to.have.length(1); });", "pm.test('data API only (no admin or health paths)', () => pm.expect(Object.keys(pm.response.json().paths).filter((p) => !p.startsWith('/v1/') && !p.startsWith('/oauth/') && !p.startsWith('/sse/'))).to.have.length(0));"] }),
+  req('OpenAPI JSON', 'GET', '/openapi.json', { tests: [status(200), "pm.test('3.1', () => pm.expect(pm.response.json().openapi).to.eql('3.1.0'));", "pm.test('auth mode reflected', () => { const s = pm.response.json().components.securitySchemes; const m = pm.environment.get('authMode'); if (m === 'none') pm.expect(Object.keys(s)).to.have.length(0); else pm.expect(Object.keys(s)).to.have.length(1); });", "pm.test('data API only (no admin or health paths)', () => pm.expect(Object.keys(pm.response.json().paths).filter((p) => !p.startsWith('/v1/') && !p.startsWith('/oauth/') && !p.startsWith('/sse/') && !p.startsWith('/llm/'))).to.have.length(0));"] }),
   req('OpenAPI YAML', 'GET', '/openapi.yaml', { tests: [status(200), "pm.test('yaml', () => pm.expect(pm.response.text()).to.include('openapi: 3.1.0'));"] }),
   req('OpenAPI JSON (admin API)', 'GET', '/admin/api/openapi.json', {
     description: 'The admin / control-plane spec. Needs the dashboard password when ADMIN_PASSWORD is set (401 otherwise).',
@@ -297,6 +297,28 @@ const gql = (query, variables = '{}') => ({ mode: 'raw', raw: `{"query": ${JSON.
 const GQL_JSON = { 'Content-Type': 'application/json' };
 const gqlCode = (code, i = 0) => `pm.test('extensions.code ${code}', () => pm.expect(pm.response.json().errors[${i}].extensions.code).to.eql('${code}'));`;
 const gqlNoErrors = "pm.test('no errors', () => pm.expect(pm.response.json().errors).to.eql(undefined));";
+// ---------------------------------------------------------------- mock LLM (OpenAI-compatible)
+const jsonCt = { 'Content-Type': 'application/json' };
+const oaError = (code, errCode) => [status(code), "pm.test('OpenAI error shape', () => { const e = pm.response.json().error; pm.expect(e).to.be.an('object'); pm.expect(e.message).to.be.a('string'); pm.expect(e.type).to.be.a('string'); });",
+  ...(errCode ? [`pm.test('code ${errCode}', () => pm.expect(pm.response.json().error.code).to.eql('${errCode}'));`] : [])];
+const usageOk = "pm.test('usage adds up', () => { const u = pm.response.json().usage; pm.expect(u.prompt_tokens).to.be.above(0); pm.expect(u.completion_tokens).to.be.at.least(0); pm.expect(u.total_tokens).to.eql(u.prompt_tokens + u.completion_tokens); });";
+const weatherTool = { type: 'function', function: { name: 'get_weather', description: 'Current weather for a city', parameters: { type: 'object', properties: { city: { type: 'string' }, unit: { type: 'string', enum: ['celsius', 'fahrenheit'] } }, required: ['city', 'unit'] } } };
+const llmFolder = folder('Mock LLM (OpenAI-compatible)', [
+  req('List models', 'GET', '/llm/v1/models', { tests: [status(200), "pm.test('list of models', () => { const b = pm.response.json(); pm.expect(b.object).to.eql('list'); pm.expect(b.data.length).to.be.above(0); pm.expect(b.data[0].object).to.eql('model'); });"] }),
+  req('Chat completion', 'POST', '/llm/v1/chat/completions', { headers: jsonCt, body: json({ model: 'mock-chat-large', messages: [{ role: 'system', content: 'You are a helpful assistant.' }, { role: 'user', content: 'Summarize our Q3 plan in a few sentences.' }] }), tests: [status(200), "pm.test('chat.completion with text', () => { const b = pm.response.json(); pm.expect(b.object).to.eql('chat.completion'); pm.expect(b.model).to.eql('mock-chat-large'); pm.expect(b.choices[0].message.role).to.eql('assistant'); pm.expect(b.choices[0].message.content).to.be.a('string').and.not.empty; pm.expect(b.choices[0].finish_reason).to.eql('stop'); });", usageOk] }),
+  req('Same seed → same answer (1 of 2)', 'POST', '/llm/v1/chat/completions', { headers: jsonCt, body: json({ model: 'mock-chat-small', seed: 42, messages: [{ role: 'user', content: 'Hello' }] }), tests: [status(200), "pm.collectionVariables.set('llmSeedAnswer', pm.response.json().choices[0].message.content); pm.collectionVariables.set('llmSeedUsage', JSON.stringify(pm.response.json().usage));"] }),
+  req('Same seed → same answer (2 of 2)', 'POST', '/llm/v1/chat/completions', { headers: jsonCt, body: json({ model: 'mock-chat-small', seed: 42, messages: [{ role: 'user', content: 'Hello' }] }), tests: [status(200), "pm.test('repeatable', () => { pm.expect(pm.response.json().choices[0].message.content).to.eql(pm.collectionVariables.get('llmSeedAnswer')); pm.expect(JSON.stringify(pm.response.json().usage)).to.eql(pm.collectionVariables.get('llmSeedUsage')); });"] }),
+  req('max_tokens → finish_reason length', 'POST', '/llm/v1/chat/completions', { headers: jsonCt, body: json({ model: 'mock-chat-large', max_tokens: 5, messages: [{ role: 'user', content: 'Write a long essay.' }] }), tests: [status(200), "pm.test('cut at 5 tokens', () => { const b = pm.response.json(); pm.expect(b.choices[0].finish_reason).to.eql('length'); pm.expect(b.usage.completion_tokens).to.eql(5); });"] }),
+  req('Tool call (required)', 'POST', '/llm/v1/chat/completions', { headers: jsonCt, body: json({ model: 'mock-chat-large', tool_choice: 'required', tools: [weatherTool], messages: [{ role: 'user', content: 'Weather in Boston?' }] }), tests: [status(200), "pm.test('tool call with schema-valid arguments', () => { const c = pm.response.json().choices[0]; pm.expect(c.finish_reason).to.eql('tool_calls'); const tc = c.message.tool_calls[0]; pm.expect(tc.function.name).to.eql('get_weather'); const a = JSON.parse(tc.function.arguments); pm.expect(a.city).to.be.a('string'); pm.expect(['celsius', 'fahrenheit']).to.include(a.unit); });"] }),
+  req('Reply to a tool result is text', 'POST', '/llm/v1/chat/completions', { headers: jsonCt, body: json({ model: 'mock-chat-large', tools: [weatherTool], messages: [{ role: 'user', content: 'Weather in Boston?' }, { role: 'assistant', content: null, tool_calls: [{ id: 'call_1', type: 'function', function: { name: 'get_weather', arguments: '{"city":"Boston","unit":"celsius"}' } }] }, { role: 'tool', tool_call_id: 'call_1', content: '{"temp": 18}' }] }), tests: [status(200), "pm.test('text answer', () => { const c = pm.response.json().choices[0]; pm.expect(c.finish_reason).to.eql('stop'); pm.expect(c.message.content).to.be.a('string'); });"] }),
+  req('JSON output', 'POST', '/llm/v1/chat/completions', { headers: jsonCt, body: json({ model: 'mock-chat-large', response_format: { type: 'json_object' }, messages: [{ role: 'user', content: 'Risk summary as JSON' }] }), tests: [status(200), "pm.test('content is a JSON object', () => pm.expect(JSON.parse(pm.response.json().choices[0].message.content)).to.be.an('object'));"] }),
+  req('Streamed, with usage chunk', 'POST', '/llm/v1/chat/completions', { headers: jsonCt, body: json({ model: 'mock-chat-large', stream: true, stream_options: { include_usage: true }, max_tokens: 12, messages: [{ role: 'user', content: 'Hi' }] }), tests: [status(200), ctype('text/event-stream'), has('chunk objects', 'chat.completion.chunk'), has('usage chunk', '"choices":[],"usage":{'), has('terminator', 'data: [DONE]')] }),
+  req('Embeddings', 'POST', '/llm/v1/embeddings', { headers: jsonCt, body: json({ model: 'mock-embed-small', input: ['first text', 'second text'], dimensions: 8 }), tests: [status(200), "pm.test('two unit vectors of 8', () => { const b = pm.response.json(); pm.expect(b.data).to.have.length(2); pm.expect(b.data[0].embedding).to.have.length(8); const n = Math.sqrt(b.data[0].embedding.reduce((a, v) => a + v * v, 0)); pm.expect(Math.abs(n - 1)).to.be.below(0.001); pm.expect(b.usage.prompt_tokens).to.be.above(0); });"] }),
+  req('Missing messages → 400', 'POST', '/llm/v1/chat/completions', { headers: jsonCt, body: json({ model: 'mock-chat-large' }), tests: [...oaError(400), "pm.test('param names the field', () => pm.expect(pm.response.json().error.param).to.eql('messages'));"] }),
+  req('Unknown model → 404', 'GET', '/llm/v1/models/no-such-model', { tests: oaError(404, 'model_not_found') }),
+  req('Injected 429 → OpenAI rate-limit error', 'GET', '/llm/v1/models', { headers: { 'X-Force-Error': '429' }, tests: [...oaError(429, 'rate_limit_exceeded'), "pm.test('Retry-After', () => pm.expect(pm.response.headers.get('Retry-After')).to.be.ok);"] }),
+], 'OpenAI-compatible mock LLM at /llm/v1. Uses the active auth mode; errors are OpenAI-shaped.');
+
 const graphqlFolder = folder('GraphQL', [
   req('SDL (always open)', 'GET', '/graphql/schema.graphql', { tests: [status(200), has('Query type', 'type Query {'), has('Subscription type', 'type Subscription {')] }),
   req('Query: offset page with nested department', 'POST', '/graphql', { headers: GQL_JSON, body: gql('query($n: Int) { employees(limit: $n, sort: "id") { total items { id fullName department { name } } } }', '{"n": 3}'), tests: [status(200), ctype('application/json'), gqlNoErrors, "const d = pm.response.json().data.employees; pm.test('three items', () => pm.expect(d.items.length).to.eql(3)); pm.test('nested', () => pm.expect(d.items[0].department.name).to.be.a('string'));"] }),
@@ -388,7 +410,7 @@ const collection = {
     { listen: 'test', script: { type: 'text/javascript', exec: collectionTest } },
   ],
   variable: [{ key: 'cachedToken', value: '' }, { key: 'cachedTokenExp', value: '0' }],
-  item: [platform, oauth, authFolder, crud, query, pagination, chaos, files, soapFolder, sseFolder, graphqlFolder, odataFolder, s3Folder, misc],
+  item: [platform, oauth, authFolder, crud, query, pagination, chaos, files, soapFolder, sseFolder, llmFolder, graphqlFolder, odataFolder, s3Folder, misc],
 };
 
 const environment = {

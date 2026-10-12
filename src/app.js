@@ -39,6 +39,7 @@ const sseRouter = require('./protocols/sse/router');
 const graphqlRouter = require('./protocols/graphql/router');
 const odataRouter = require('./protocols/odata/router');
 const s3Router = require('./protocols/s3/router');
+const llmRouter = require('./protocols/llm/router');
 
 const LEVELS = { debug: 10, info: 20, warn: 30, error: 40 };
 
@@ -166,6 +167,8 @@ async function createApp(opts = {}) {
   app.use('/graphql', graphqlRouter(ctx));
   // OData v4 (JSON) over the same data.
   app.use('/odata', odataRouter(ctx));
+  // OpenAI-compatible mock LLM (base URL /llm/v1): chat completions with random token usage, embeddings, models.
+  app.use('/llm', llmRouter(ctx));
 
   // Everything else: the inspector
   app.use(catchAll(ctx));

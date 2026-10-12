@@ -34,7 +34,7 @@ test('data spec covers /v1, SSE and OAuth only; admin and health live in the adm
     const dataPaths = Object.keys(data.paths);
     assert.ok(dataPaths.includes('/v1/employees'));
     assert.ok(dataPaths.includes('/oauth/token'));
-    const dataPath = (p) => p.startsWith('/v1/') || p.startsWith('/oauth/') || p.startsWith('/sse/');
+    const dataPath = (p) => p.startsWith('/v1/') || p.startsWith('/oauth/') || p.startsWith('/sse/') || p.startsWith('/llm/');
     assert.ok(dataPaths.every(dataPath), `unexpected data paths: ${dataPaths.filter((p) => !dataPath(p))}`);
     assert.ok(dataPaths.includes('/sse/changes'));
     assert.match(data.info.title, /Mock Data API/);

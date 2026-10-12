@@ -397,6 +397,48 @@ async function generateOpenApi(ctx, req) {
     };
   }
 
+  if (settings.get('llmEnabled')) {
+    const oaErr = (codes) => Object.fromEntries(codes.filter((c) => !(c === 401 && mode === 'none') && !(c === 403 && mode !== 'oauth2'))
+      .map((c) => [c, { description: { 400: 'Invalid request', 401: 'Missing or invalid credentials (invalid_api_key)', 403: 'Missing scope', 404: 'Unknown model (model_not_found) or URL', 429: 'Rate limit exceeded (Retry-After, x-ratelimit-* headers)', 500: 'Server error', 503: 'Service unavailable' }[c], content: { 'application/json': { schema: S('OpenAIError') } } }]));
+    const streamHdrs = [
+      { name: 'X-Force-Stream-Drop', in: 'header', required: false, description: 'stream: true only. Cut the connection after this many chunks.', schema: { type: 'integer', minimum: 1 } },
+      { name: 'X-Force-Stream-Error', in: 'header', required: false, description: 'stream: true only. After this many chunks, send an error object as the next chunk and end without [DONE].', schema: { type: 'integer', minimum: 1 } },
+    ];
+    paths['/llm/v1/models'] = {
+      get: {
+        tags: ['LLM'], operationId: 'llmListModels', summary: 'List models (OpenAI-compatible)', security: sec('get'), parameters: common,
+        responses: { 200: { description: 'Models (LLM_MODELS)', content: { 'application/json': { schema: S('LlmModelList') } } }, ...oaErr([401, 403, 429, 500]) },
+      },
+    };
+    paths['/llm/v1/models/{model}'] = {
+      get: {
+        tags: ['LLM'], operationId: 'llmGetModel', summary: 'Get a model', security: sec('get'),
+        parameters: [{ name: 'model', in: 'path', required: true, schema: { type: 'string' } }, ...common],
+        responses: { 200: { description: 'Model', content: { 'application/json': { schema: S('LlmModel') } } }, ...oaErr([401, 403, 404, 429, 500]) },
+      },
+    };
+    paths['/llm/v1/chat/completions'] = {
+      post: {
+        tags: ['LLM'], operationId: 'llmChatCompletion', summary: 'Create a chat completion (mock: vague answers, random token usage)',
+        description: 'OpenAI-compatible. Answers with vague prose, JSON (`response_format`) or tool calls (`tools`). `usage.prompt_tokens` is estimated from the request; `completion_tokens` is random between LLM_COMPLETION_TOKENS_MIN and LLM_COMPLETION_TOKENS_MAX, capped by `max_tokens` / `max_completion_tokens` (finish_reason `length`). The same `seed` gives the same answer. With `stream: true` the response is `text/event-stream`: `data: {chat.completion.chunk}` lines, an optional usage chunk (`stream_options.include_usage`) and `data: [DONE]`.',
+        security: sec('post'),
+        parameters: [...streamHdrs, ...common],
+        requestBody: { required: true, content: { 'application/json': { schema: S('LlmChatRequest'), example: { model: 'mock-chat-large', messages: [{ role: 'system', content: 'You are a helpful assistant.' }, { role: 'user', content: 'Summarize our Q3 plan.' }], max_tokens: 200 } } } },
+        responses: {
+          200: { description: 'A chat completion, or a stream of chunks when stream is true', content: { 'application/json': { schema: S('LlmChatCompletion') }, 'text/event-stream': { schema: { type: 'string', description: 'data: lines with chat.completion.chunk JSON, then data: [DONE]' } } } },
+          ...oaErr([400, 401, 403, 404, 429, 500]),
+        },
+      },
+    };
+    paths['/llm/v1/embeddings'] = {
+      post: {
+        tags: ['LLM'], operationId: 'llmEmbeddings', summary: 'Create embeddings (deterministic unit vectors)', security: sec('post'), parameters: common,
+        requestBody: { required: true, content: { 'application/json': { schema: S('LlmEmbeddingRequest'), example: { model: 'mock-embed-small', input: ['first text', 'second text'], dimensions: 8 } } } },
+        responses: { 200: { description: 'Embeddings', content: { 'application/json': { schema: S('LlmEmbeddingList') } } }, ...oaErr([400, 401, 403, 404, 429, 500]) },
+      },
+    };
+  }
+
   paths['/oauth/token'] = {
     post: {
       tags: ['OAuth'], operationId: 'oauthToken', summary: 'Token endpoint (client_credentials, authorization_code + PKCE, refresh_token)', security: [],
@@ -453,7 +495,7 @@ async function generateOpenApi(ctx, req) {
       summary: 'Realistic mock target for integration testing (pagination, errors, files, auth, headers).',
       description: [
         '**For integrations and API clients.** Import this into your integration platform, Postman or a code generator to call the mock',
-        'data API: employees, products, departments, categories, the seven pagination schemes, the file pool, the Server-Sent Events streams, the OAuth token endpoint and dynamic client registration.',
+        'data API: employees, products, departments, categories, the seven pagination schemes, the file pool, the Server-Sent Events streams, the OpenAI-compatible mock LLM (/llm/v1), the OAuth token endpoint and dynamic client registration.',
         `SOAP is described by WSDLs (\`${base}/soap/EmployeeService?wsdl\`), WebSockets by AsyncAPI (\`${base}/ws/asyncapi.json\`) GraphQL by its SDL (\`${base}/graphql/schema.graphql\`) and OData by its CSDL (\`${base}/odata/v4/$metadata\`). The file pool is also an S3-compatible bucket at \`${base}\` (path-style, AWS Signature V4).`,
         '',
         'Tool administration (settings, seeding, the inspector, the contract tester) and the health probes are not part of this document.',
@@ -475,6 +517,7 @@ async function generateOpenApi(ctx, req) {
       { name: 'Pagination', description: 'Seven pagination schemes, each on its own path' },
       { name: 'Files', description: 'Shared file pool with multiple transfer protocols' },
       { name: 'Streaming', description: 'Server-Sent Events: change feed, ticks and request/stream' },
+      ...(settings.get('llmEnabled') ? [{ name: 'LLM', description: 'OpenAI-compatible mock LLM: chat completions with random token usage, embeddings, models (base URL /llm/v1)' }] : []),
       { name: 'OAuth', description: 'Token endpoint for the oauth2 and jwt auth modes, and dynamic client registration' },
     ],
     paths,
@@ -504,6 +547,42 @@ async function generateOpenApi(ctx, req) {
           },
         },
         OAuthError: { type: 'object', required: ['error'], properties: { error: { type: 'string' }, error_description: { type: 'string' } } },
+        OpenAIError: { type: 'object', required: ['error'], properties: { error: { type: 'object', required: ['message', 'type'], properties: { message: { type: 'string' }, type: { type: 'string', examples: ['invalid_request_error'] }, param: { type: ['string', 'null'] }, code: { type: ['string', 'null'], examples: ['invalid_api_key', 'model_not_found', 'rate_limit_exceeded'] } } } } },
+        LlmModel: { type: 'object', required: ['id', 'object', 'created', 'owned_by'], properties: { id: { type: 'string' }, object: { const: 'model' }, created: { type: 'integer' }, owned_by: { type: 'string' } } },
+        LlmModelList: { type: 'object', required: ['object', 'data'], properties: { object: { const: 'list' }, data: { type: 'array', items: { $ref: '#/components/schemas/LlmModel' } } } },
+        LlmMessage: { type: 'object', required: ['role'], properties: { role: { type: 'string', enum: ['system', 'developer', 'user', 'assistant', 'tool', 'function'] }, content: { type: ['string', 'array', 'null'] }, name: { type: 'string' }, tool_call_id: { type: 'string' }, tool_calls: { type: 'array', items: { $ref: '#/components/schemas/LlmToolCall' } } } },
+        LlmToolCall: { type: 'object', required: ['id', 'type', 'function'], properties: { id: { type: 'string' }, type: { const: 'function' }, function: { type: 'object', required: ['name', 'arguments'], properties: { name: { type: 'string' }, arguments: { type: 'string', description: 'JSON text' } } } } },
+        LlmChatRequest: {
+          type: 'object', required: ['model', 'messages'],
+          properties: {
+            model: { type: 'string' }, messages: { type: 'array', minItems: 1, items: { $ref: '#/components/schemas/LlmMessage' } },
+            max_tokens: { type: 'integer', minimum: 1 }, max_completion_tokens: { type: 'integer', minimum: 1 }, n: { type: 'integer', minimum: 1, maximum: 8 }, seed: { type: 'integer' },
+            temperature: { type: 'number', minimum: 0, maximum: 2 }, top_p: { type: 'number', minimum: 0, maximum: 1 }, stop: { type: ['string', 'array'] },
+            stream: { type: 'boolean' }, stream_options: { type: 'object', properties: { include_usage: { type: 'boolean' } } },
+            tools: { type: 'array', items: { type: 'object', required: ['type', 'function'], properties: { type: { const: 'function' }, function: { type: 'object', required: ['name'], properties: { name: { type: 'string' }, description: { type: 'string' }, parameters: { type: 'object' } } } } } },
+            tool_choice: { oneOf: [{ type: 'string', enum: ['none', 'auto', 'required'] }, { type: 'object' }] }, parallel_tool_calls: { type: 'boolean' },
+            response_format: { type: 'object', properties: { type: { type: 'string', enum: ['text', 'json_object', 'json_schema'] }, json_schema: { type: 'object' } } },
+            reasoning_effort: { type: 'string', enum: ['minimal', 'low', 'medium', 'high'] }, logprobs: { type: 'boolean' }, top_logprobs: { type: 'integer', minimum: 0, maximum: 20 },
+          },
+        },
+        LlmUsage: {
+          type: 'object', required: ['prompt_tokens', 'completion_tokens', 'total_tokens'],
+          properties: {
+            prompt_tokens: { type: 'integer' }, completion_tokens: { type: 'integer' }, total_tokens: { type: 'integer' },
+            prompt_tokens_details: { type: 'object', properties: { cached_tokens: { type: 'integer' }, audio_tokens: { type: 'integer' } } },
+            completion_tokens_details: { type: 'object', properties: { reasoning_tokens: { type: 'integer' }, audio_tokens: { type: 'integer' }, accepted_prediction_tokens: { type: 'integer' }, rejected_prediction_tokens: { type: 'integer' } } },
+          },
+        },
+        LlmChatCompletion: {
+          type: 'object', required: ['id', 'object', 'created', 'model', 'choices', 'usage'],
+          properties: {
+            id: { type: 'string' }, object: { const: 'chat.completion' }, created: { type: 'integer' }, model: { type: 'string' }, service_tier: { type: 'string' }, system_fingerprint: { type: 'string' },
+            choices: { type: 'array', items: { type: 'object', required: ['index', 'message', 'finish_reason'], properties: { index: { type: 'integer' }, message: { type: 'object', required: ['role'], properties: { role: { const: 'assistant' }, content: { type: ['string', 'null'] }, tool_calls: { type: 'array', items: { $ref: '#/components/schemas/LlmToolCall' } }, refusal: { type: ['string', 'null'] }, annotations: { type: 'array' } } }, logprobs: { type: ['object', 'null'] }, finish_reason: { type: 'string', enum: ['stop', 'length', 'tool_calls'] } } } },
+            usage: { $ref: '#/components/schemas/LlmUsage' },
+          },
+        },
+        LlmEmbeddingRequest: { type: 'object', required: ['model', 'input'], properties: { model: { type: 'string' }, input: { oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }, { type: 'array', items: { type: 'integer' } }, { type: 'array', items: { type: 'array', items: { type: 'integer' } } }] }, dimensions: { type: 'integer', minimum: 1, maximum: 4096, default: 1536 }, encoding_format: { type: 'string', enum: ['float', 'base64'], default: 'float' } } },
+        LlmEmbeddingList: { type: 'object', required: ['object', 'data', 'model', 'usage'], properties: { object: { const: 'list' }, data: { type: 'array', items: { type: 'object', required: ['object', 'index', 'embedding'], properties: { object: { const: 'embedding' }, index: { type: 'integer' }, embedding: { oneOf: [{ type: 'array', items: { type: 'number' } }, { type: 'string', description: 'base64 of little-endian float32' }] } } } }, model: { type: 'string' }, usage: { type: 'object', properties: { prompt_tokens: { type: 'integer' }, total_tokens: { type: 'integer' } } } } },
         ClientMetadata: {
           type: 'object', description: 'RFC 7591 client metadata',
           properties: {

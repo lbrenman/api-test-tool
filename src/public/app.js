@@ -237,13 +237,13 @@
     overview: { purpose: 'Your starting point: the URLs to give integrations, current auth mode, health, data counts and copy-ready curl commands.' },
     settings: { purpose: 'Every setting in one place. Environment variables set defaults; changes here override them and survive restarts. Badges show where each value comes from.' },
     data: { purpose: 'The seeded mock data (employees, products, departments, categories): counts, a preview, re-seed with different sizes, or clear it.' },
-    inspector: { purpose: 'Every call made to this server shows up here live, with headers, auth, body and the response that was returned: webhooks and other calls to unreserved paths, plus calls to every API the tool serves (/v1, SOAP, WebSocket upgrades, SSE, GraphQL, OData, the S3 API and OAuth). Filter by source, or switch API recording off with the checkbox at the top of the page.' },
+    inspector: { purpose: 'Every call made to this server shows up here live, with headers, auth, body and the response that was returned: webhooks and other calls to unreserved paths, plus calls to every API the tool serves (/v1, SOAP, WebSocket upgrades, SSE, GraphQL, OData, the LLM mock, the S3 API and OAuth). Filter by source, or switch API recording off with the checkbox at the top of the page.' },
     webhooks: { purpose: 'Outgoing webhooks: when an employee, product, department or category is created, updated or deleted, or a file is uploaded, downloaded or deleted (through any protocol), POST its type and id to URLs you choose. Stored in the database, so they survive restarts; every delivery is logged with the response.' },
     files: { purpose: 'The shared file pool used by every file protocol (multipart, raw/octet-stream, base64, tus, presigned, range, chunked) and by the S3-compatible API, where it is a bucket. The Upload card\'s ? guides have curl examples for testing each upload protocol, including error cases (413, 400, 415); upload, download, delete or regenerate samples.' },
-    auth: { purpose: 'Choose how API calls must authenticate (none, API key, Basic, Bearer, JWT, OAuth2, HMAC) on /v1, SOAP, WebSocket, SSE, GraphQL and OData; see the credentials, manage OAuth clients (added here, from OAUTH_CLIENTS, or registered dynamically), control dynamic client registration and get test tokens. The S3 API signs with its own keys (Protocols page).' },
+    auth: { purpose: 'Choose how API calls must authenticate (none, API key, Basic, Bearer, JWT, OAuth2, HMAC) on /v1, SOAP, WebSocket, SSE, GraphQL, OData and the LLM mock; see the credentials, manage OAuth clients (added here, from OAUTH_CLIENTS, or registered dynamically), control dynamic client registration and get test tokens. The S3 API signs with its own keys (Protocols page).' },
     chaos: { purpose: 'Make the mock API misbehave on purpose: random errors, latency, timeouts, broken JSON and rate limits, globally or per route, so you can test client error handling.' },
     headers: { purpose: 'Headers added to every response, and headers every API request must carry on every protocol (missing ones are rejected with 400 in that protocol\'s error format).' },
-    protocols: { purpose: 'The same mock data over other protocols: SOAP 1.1/1.2 services with live WSDLs, WebSocket channels (echo, JSON-RPC, live change feed) with an AsyncAPI document and a live console, Server-Sent Events streams (change feed with replay, ticks, LLM-style streaming) with a live viewer, GraphQL (queries, mutations, subscriptions), OData v4, and the file pool as an S3-compatible bucket (AWS Signature V4), each with a console. Auth (the S3 API uses its own keys), chaos, rate limits and required headers apply as on /v1.' },
+    protocols: { purpose: 'The same mock data over other protocols: SOAP 1.1/1.2 services with live WSDLs, WebSocket channels (echo, JSON-RPC, live change feed) with an AsyncAPI document and a live console, Server-Sent Events streams (change feed with replay, ticks, LLM-style streaming) with a live viewer, GraphQL (queries, mutations, subscriptions), OData v4, an OpenAI-compatible mock LLM (chat completions with random token usage, tool calls, streaming, embeddings), and the file pool as an S3-compatible bucket (AWS Signature V4), each with a console. Auth (the S3 API uses its own keys), chaos, rate limits and required headers apply as on /v1.' },
     openapi: { purpose: 'Two live OpenAPI 3.1 specs: the Mock Data API (/openapi.json) for integrations to import, and the Admin API (/admin/api/openapi.json) for scripting the tool itself.' },
     tester: { purpose: 'Test an API you built: load its OpenAPI spec (REST), WSDL (SOAP) or AsyncAPI document (WebSocket), call your implementation, and check every response or message against the contract.' },
     help: { purpose: 'What this tool does and how to use each page.' },
@@ -454,7 +454,7 @@
     const filterText = h('input', { type: 'text', placeholder: 'Filter path, header, body…', 'aria-label': 'Filter' });
     const filterMethod = h('select', { 'aria-label': 'Method' }, ['', 'GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'].map((m) => h('option', { value: m }, m || 'All methods')));
     const filterSource = h('select', { 'aria-label': 'Source' },
-      [['', 'All sources'], ['catch-all', 'Webhooks / other paths'], ['v1', 'Mock API (/v1)'], ['soap', 'SOAP (/soap)'], ['ws', 'WebSocket (/ws)'], ['sse', 'SSE (/sse)'], ['graphql', 'GraphQL (/graphql)'], ['odata', 'OData (/odata)'], ['s3', 'S3 API (/<bucket>)'], ['oauth', 'OAuth (/oauth)']].map(([v, l]) => h('option', { value: v }, l)));
+      [['', 'All sources'], ['catch-all', 'Webhooks / other paths'], ['v1', 'Mock API (/v1)'], ['soap', 'SOAP (/soap)'], ['ws', 'WebSocket (/ws)'], ['sse', 'SSE (/sse)'], ['graphql', 'GraphQL (/graphql)'], ['odata', 'OData (/odata)'], ['llm', 'LLM (/llm)'], ['s3', 'S3 API (/<bucket>)'], ['oauth', 'OAuth (/oauth)']].map(([v, l]) => h('option', { value: v }, l)));
     const live = h('span', { class: 'live-dot' });
     const count = h('span', { class: 'muted small' });
     const logAll = h('input', { type: 'checkbox', checked: !!sval('inspectorLogAll') });
@@ -571,7 +571,7 @@
     const fwdEnabled = h('input', { type: 'checkbox', checked: sval('inspectorForwardEnabled') });
     const fwdUrl = h('input', { type: 'url', value: sval('inspectorForwardUrl') || '', placeholder: 'https://example.com/webhooks' });
 
-    el.append(header('Inspector', 'Every call to this server, live: webhooks to any unreserved path, plus calls to every API the tool serves (/v1, SOAP, WebSocket, SSE, GraphQL, OData, S3, OAuth).',
+    el.append(header('Inspector', 'Every call to this server, live: webhooks to any unreserved path, plus calls to every API the tool serves (/v1, SOAP, WebSocket, SSE, GraphQL, OData, LLM, S3, OAuth).',
       live, count,
       h('label', { class: 'check', title: 'INSPECTOR_LOG_ALL' }, logAll, 'Record API calls'),
       h('a', { class: 'btn', href: '/admin/api/inspector/export' }, 'Export JSON'),
@@ -636,7 +636,7 @@
     const hmacBody = h('textarea', { rows: 3, placeholder: 'JSON body (exact bytes you will send)' });
     const hmacOut = h('div');
 
-    el.append(header('Auth', `Active mode: ${a.mode}. Applies to /v1, SOAP, WebSocket, SSE, GraphQL and OData (the S3 API signs with its own keys).`));
+    el.append(header('Auth', `Active mode: ${a.mode}. Applies to /v1, SOAP, WebSocket, SSE, GraphQL, OData and the LLM mock (the S3 API signs with its own keys).`));
     el.append(h('div', { class: 'grid cols-2' },
       h('div', { class: 'card stack' }, titled('Mode & credentials', 'auth.mode'), settingsForm(['authMode', 'apiKey', 'apiKeyName', 'apiKeyIn', 'basicUser', 'basicPass', 'bearerToken', 'jwtAlg', 'jwtIssuer', 'jwtAudience', 'hmacKeyId', 'hmacSecret', 'hmacMaxSkewSeconds'], { onSaved: route })),
       h('div', null,
@@ -970,9 +970,120 @@
     const sseCleanup = await sseSection(el);
     graphqlSection(el);
     odataSection(el);
+    await llmSection(el);
     await s3Section(el);
     return () => { wsCleanup?.(); sseCleanup?.(); }; // close the live consoles when leaving the page
   };
+
+  // ---- OpenAI-compatible mock LLM: base URL, models, settings and a chat console (plain or streamed).
+  async function llmSection(el) {
+    const on = !!sval('llmEnabled');
+    const info = on ? await fetch('/llm', { headers: { Accept: 'application/json' } }).then((r) => (r.ok ? r.json() : null)).catch(() => null) : null;
+    const base = `${location.origin}/llm/v1`;
+    el.append(h('div', { class: 'grid cols-2' },
+      h('div', { class: 'card' }, titled('Mock LLM (OpenAI-compatible)', 'protocols.llm'),
+        !on ? h('p', { class: 'muted' }, 'The LLM mock is off. Turn on llmEnabled in the settings next to this card.')
+          : h('div', { class: 'stack' },
+            h('div', { class: 'kv' },
+              h('div', null, 'Base URL'), h('div', null, h('code', null, base), ' ', h('button', { class: 'small', onclick: () => copy(base) }, 'copy')),
+              h('div', null, 'Chat'), h('div', null, method('POST'), ' ', h('code', null, '/chat/completions')),
+              h('div', null, 'Embeddings'), h('div', null, method('POST'), ' ', h('code', null, '/embeddings')),
+              h('div', null, 'Models'), h('div', null, (info?.models || []).map((m) => h('code', { style: { marginRight: '6px' } }, m)))),
+            h('div', { class: 'small muted' }, `Answers are vague prose (JSON with response_format, tool calls when tools are given). usage counts prompt tokens from the request and ${info ? `${info.completionTokens[0]}–${info.completionTokens[1]}` : 'a random number of'} completion tokens. API key = the active auth mode's credential (${CURL?.mode || 'none'}); errors are OpenAI-shaped.`))),
+      h('div', { class: 'card' }, titled('LLM settings', 'protocols.llm-settings'),
+        settingsForm(['llmEnabled', 'llmModels', 'llmRequireKnownModel', 'llmCompletionTokensMin', 'llmCompletionTokensMax', 'llmStreamDelayMs', 'llmToolCallRate'], { onSaved: () => route() }))));
+    if (!on) return;
+
+    const model = h('select', { 'aria-label': 'Model' }, (info?.models?.length ? info.models : ['mock-chat-large']).map((m) => h('option', { value: m }, m)));
+    const system = h('input', { type: 'text', value: 'You are a helpful assistant.', style: { minWidth: '280px' } });
+    const userIn = h('textarea', { rows: 3, 'aria-label': 'User message' }, 'What should we prioritize next quarter?');
+    const stream = h('input', { type: 'checkbox' });
+    const json = h('input', { type: 'checkbox' });
+    const tool = h('input', { type: 'checkbox' });
+    const maxTok = h('input', { type: 'number', min: '1', placeholder: 'none', style: { maxWidth: '110px' } });
+    const seed = h('input', { type: 'number', placeholder: 'random', style: { maxWidth: '110px' } });
+    const forceErr = h('input', { type: 'text', placeholder: 'e.g. 429', style: { maxWidth: '110px' } });
+    const out = h('div', { class: 'stack' });
+    const TOOL = { type: 'function', function: { name: 'get_weather', description: 'Current weather for a city', parameters: { type: 'object', properties: { city: { type: 'string' }, unit: { type: 'string', enum: ['celsius', 'fahrenheit'] } }, required: ['city'] } } };
+
+    const usageTable = (u) => (u ? kv({ prompt_tokens: u.prompt_tokens, completion_tokens: u.completion_tokens, total_tokens: u.total_tokens, cached_tokens: u.prompt_tokens_details?.cached_tokens ?? 0, reasoning_tokens: u.completion_tokens_details?.reasoning_tokens ?? 0 }) : h('span', { class: 'small muted' }, 'no usage reported'));
+    const send = guard(async () => {
+      const body = { model: model.value, messages: [...(system.value.trim() ? [{ role: 'system', content: system.value }] : []), { role: 'user', content: userIn.value }] };
+      if (stream.checked) Object.assign(body, { stream: true, stream_options: { include_usage: true } });
+      if (json.checked) body.response_format = { type: 'json_object' };
+      if (tool.checked) Object.assign(body, { tools: [TOOL], tool_choice: 'required' });
+      if (maxTok.value) body.max_tokens = Number(maxTok.value);
+      if (seed.value) body.seed = Number(seed.value);
+      const text = JSON.stringify(body);
+      const hdrs = { 'Content-Type': 'application/json', ...(await protocolAuthHeaders('POST', '/llm/v1/chat/completions', text)) };
+      if (forceErr.value.trim()) hdrs['X-Force-Error'] = forceErr.value.trim();
+      const url = CURL?.ctx?.mode === 'apikey' && CURL.ctx.apiKey.in === 'query' ? `/llm/v1/chat/completions?${encodeURIComponent(CURL.ctx.apiKey.name)}=${encodeURIComponent(CURL.ctx.apiKey.value)}` : '/llm/v1/chat/completions';
+      const started = performance.now();
+      const res = await fetch(url, { method: 'POST', headers: hdrs, body: text, credentials: 'omit' });
+      const head = h('div', { class: 'row' }, h('span', { class: statusClass(res.status) }, String(res.status)));
+      const shown = ['content-type', 'x-chaos-injected', 'retry-after', 'x-ratelimit-remaining-requests', 'x-request-id'];
+      const content = h('pre', { style: { maxHeight: '360px', whiteSpace: 'pre-wrap' } });
+      const usageBox = h('div');
+      clear(out).append(head, kv(Object.fromEntries(shown.filter((k) => res.headers.get(k)).map((k) => [k, res.headers.get(k)]))),
+        h('div', { class: 'small muted' }, 'Answer'), content, h('div', { class: 'small muted' }, 'Usage'), usageBox);
+      if (!(res.headers.get('content-type') || '').includes('text/event-stream')) {
+        const raw = await res.text();
+        let j = null;
+        try { j = JSON.parse(raw); } catch { /* chaos may break the body */ }
+        head.append(h('span', { class: 'muted small' }, `${Math.round(performance.now() - started)} ms`));
+        const msg = j?.choices?.[0]?.message;
+        content.textContent = j?.error ? JSON.stringify(j, null, 2) : msg?.tool_calls ? JSON.stringify(msg.tool_calls, null, 2) : (msg?.content ?? raw);
+        if (j?.choices?.[0]?.finish_reason) head.append(h('span', { class: 'badge' }, `finish_reason: ${j.choices[0].finish_reason}`));
+        clear(usageBox).append(usageTable(j?.usage));
+        return;
+      }
+      // Streamed: print deltas as they arrive.
+      const reader = res.body.getReader();
+      const dec = new TextDecoder();
+      let buf = '';
+      let chunks = 0;
+      let finish = null;
+      let args = '';
+      for (;;) {
+        const { value, done } = await reader.read().catch(() => ({ done: true }));
+        if (done) break;
+        buf += dec.decode(value, { stream: true });
+        let i;
+        while ((i = buf.indexOf('\n\n')) >= 0) {
+          const block = buf.slice(0, i);
+          buf = buf.slice(i + 2);
+          const data = block.split('\n').filter((l) => l.startsWith('data:')).map((l) => l.slice(5).trim()).join('\n');
+          if (!data) continue;
+          if (data === '[DONE]') { head.append(h('span', { class: 'badge pass' }, '[DONE]')); continue; }
+          let j;
+          try { j = JSON.parse(data); } catch { content.textContent += `\n[unparseable chunk] ${data}`; continue; }
+          chunks += 1;
+          if (j.error) { content.textContent += `\n[error chunk] ${JSON.stringify(j.error)}`; continue; }
+          const ch = j.choices?.[0];
+          if (ch?.delta?.content) content.textContent += ch.delta.content;
+          for (const tc of ch?.delta?.tool_calls || []) { if (tc.function?.name) content.textContent += `${tc.function.name}(`; if (tc.function?.arguments) { args += tc.function.arguments; content.textContent += tc.function.arguments; } }
+          if (ch?.finish_reason) finish = ch.finish_reason;
+          if (j.usage) clear(usageBox).append(usageTable(j.usage));
+        }
+      }
+      if (args) content.textContent += ')';
+      head.append(h('span', { class: 'muted small' }, `${chunks} chunks · ${Math.round(performance.now() - started)} ms`));
+      if (finish) head.append(h('span', { class: 'badge' }, `finish_reason: ${finish}`));
+      if (!usageBox.childNodes.length) usageBox.append(usageTable(null));
+    });
+
+    el.append(h('div', { class: 'card stack' }, titled('Try a chat completion', 'protocols.llm-try'),
+      h('div', { class: 'row' }, field('Model', model), field('System prompt', system)),
+      field('User message', userIn),
+      h('div', { class: 'row' },
+        h('label', { class: 'check' }, stream, h('span', null, 'Stream')),
+        h('label', { class: 'check' }, json, h('span', null, 'JSON output')),
+        h('label', { class: 'check' }, tool, h('span', null, 'Force a get_weather tool call')),
+        field('max_tokens', maxTok), field('seed', seed), field('X-Force-Error', forceErr)),
+      h('div', { class: 'row' }, h('button', { class: 'primary', onclick: send }, 'Send'),
+        h('span', { class: 'small muted' }, `Sent from your browser with the active auth mode (${CURL?.mode || 'none'}). The call also appears on the Inspector page.`)),
+      out));
+  }
 
   // ---- S3-compatible API: connection details, settings and a console that signs requests in the browser.
   const textEnc = new TextEncoder();
@@ -1845,6 +1956,7 @@
             h('li', null, 'Seven auth modes and a built-in OAuth 2.0 server with dynamic client registration (for MCP clients and other self-registering apps).'),
             h('li', null, 'Files over every common HTTP protocol, and the same file pool as an S3-compatible bucket.'),
             h('li', null, 'The same data over SOAP, WebSocket, Server-Sent Events, GraphQL and OData (Protocols page).'),
+            h('li', null, 'An OpenAI-compatible mock LLM (/llm/v1) that answers with vague text, tool calls or JSON and reports random token usage.'),
             h('li', null, 'Outgoing webhooks to your endpoints when data or files change.'),
             h('li', null, 'Errors and slowness on demand (Chaos), on every protocol.'),
             h('li', null, 'An Inspector that catches webhooks and any other call your integration makes.'),
@@ -1866,7 +1978,7 @@
         h('span', null, 'Send webhooks or any unknown call to ', code(`${B}/<any-path>`), ' and watch them arrive on the ', link('#/inspector', 'Inspector'), ' page.'),
         h('span', null, 'Test error handling: add ', code('X-Force-Error: 503'), ' to one request, or set a random error rate on the ', link('#/chaos', 'Chaos'), ' page.'),
         h('span', null, 'Import the live spec from ', link('#/openapi', 'OpenAPI'), ' (', code(`${B}/openapi.json`), ') into your API platform or Postman to get every endpoint pre-defined.'),
-        h('span', null, 'Calling SOAP, GraphQL, OData, SSE or S3 instead? The ', link('#/protocols', 'Protocols'), ' page has each endpoint, its contract (WSDL, SDL, CSDL) or connection details, and a console. To receive events, add a webhook on the ', link('#/webhooks', 'Webhooks'), ' page.'))));
+        h('span', null, 'Calling SOAP, GraphQL, OData, SSE, an LLM or S3 instead? The ', link('#/protocols', 'Protocols'), ' page has each endpoint, its contract (WSDL, SDL, CSDL) or connection details, and a console. To receive events, add a webhook on the ', link('#/webhooks', 'Webhooks'), ' page.'))));
 
     el.append(section('quick-incoming', 'Quick start: incoming testing',
       steps(
@@ -1878,7 +1990,7 @@
         h('span', null, 'No implementation yet? "Install mock & use as target" serves the spec\'s own examples from this server so you can rehearse the run.'))));
 
     el.append(section('urls', 'URLs and reserved paths',
-      h('p', null, 'These paths belong to the tool. ', h('b', null, 'Every other path is captured by the Inspector'), ' and answered with its default response or a matching rule. Calls to the APIs (/v1, SOAP, WebSocket upgrades, SSE, GraphQL, OData, the S3 API and OAuth) are recorded on the Inspector too, with their real responses, unless "Record API calls" is switched off; the dashboard, docs and health checks are never recorded.'),
+      h('p', null, 'These paths belong to the tool. ', h('b', null, 'Every other path is captured by the Inspector'), ' and answered with its default response or a matching rule. Calls to the APIs (/v1, SOAP, WebSocket upgrades, SSE, GraphQL, OData, the LLM mock, the S3 API and OAuth) are recorded on the Inspector too, with their real responses, unless "Record API calls" is switched off; the dashboard, docs and health checks are never recorded.'),
       h('div', { class: 'table-wrap' }, h('table', null, h('tbody', null,
         [
           ['/v1/employees, /v1/products, /v1/departments, /v1/categories', 'Mock API with full CRUD (list, create, get, replace, patch, delete). Lists use offset pagination.'],
@@ -1890,6 +2002,7 @@
           ['/sse, /sse/changes, /sse/ticks, POST /sse/stream', 'Server-Sent Events: change feed with Last-Event-ID replay, numbered ticks, and LLM-style request/stream (described in /openapi.json).'],
           ['/odata/v4, /odata/v4/$metadata', 'OData v4 (JSON) over the same data: query options, paging with @odata.nextLink, navigation and CRUD. $metadata is always open.'],
           ['/graphql, /graphql/schema.graphql', 'GraphQL over the same data: queries (offset pages and Relay connections), mutations, and a changes subscription over WebSocket (graphql-transport-ws). GraphiQL in a browser; the SDL is always open.'],
+          ['/llm, /llm/v1/{chat/completions|embeddings|models}', 'OpenAI-compatible mock LLM: vague answers, tool calls and JSON output, streaming, and random token usage. Point an OpenAI client at base URL /llm/v1 with the active auth mode\'s credentials.'],
           ['/files, /files/{key} (the S3 bucket name)', 'S3-compatible API over the file pool: path-style, signed with AWS Signature V4 using the S3 API keys (a signed GET / is ListBuckets). The bucket name is a setting.'],
           ['/oauth/token, /oauth/authorize, /oauth/introspect, /oauth/revoke, /oauth/register', 'Built-in OAuth 2.0 server, with dynamic client registration (RFC 7591) at /oauth/register.'],
           ['/.well-known/jwks.json, /.well-known/oauth-authorization-server', 'Signing keys and OAuth discovery.'],
@@ -1917,6 +2030,7 @@
           ['Idempotency-Key: <uuid>', 'On POST: repeating the request returns the original response; reusing the key with a different body returns 409.'],
           ['If-Match: <etag>', 'On PUT/PATCH/DELETE: 412 if the resource changed since you read it.'],
           ['If-None-Match: <etag>', 'On GET: 304 if nothing changed.'],
+          ['X-Force-Stream-Drop: 3 / X-Force-Stream-Error: 3', 'On a streamed LLM chat completion: cut the connection, or send an error chunk, after that many chunks.'],
           ['X-Request-Id / X-Correlation-Id', 'Echoed back (generated if missing) for tracing.'],
         ].map(([hd, d]) => h('tr', null, h('td', null, code(hd)), h('td', null, d))))))));
 

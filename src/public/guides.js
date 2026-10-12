@@ -14,7 +14,7 @@
   const q = (s) => `'${String(s).replace(/'/g, "'\\''")}'`;
   // Paths that take API credentials: the /v1 mock API and SOAP requests (the WSDL and /soap listing are open).
   const isApiPath = (p) => p === '/v1' || p.startsWith('/v1/') || p.startsWith('/v1?') || (p.startsWith('/soap/') && !/[?.]wsdl$/i.test(p))
-    || p.startsWith('/sse/') || p === '/graphql' || p.startsWith('/graphql?')
+    || p.startsWith('/sse/') || p === '/graphql' || p.startsWith('/graphql?') || p.startsWith('/llm/v1/')
     || (p.startsWith('/odata/v4/') && !/^\/odata\/v4\/(\$metadata)?([?#]|$)/.test(p));
 
   /**
@@ -222,7 +222,7 @@
           `Configure credentials to match the active auth mode: ${C.authLabel}.`,
           `Point webhooks at any path that is not reserved, e.g. \`${B}/hooks/orders\`, and watch them on the Inspector page.`,
           `Import \`${B}/openapi.json\` into your client tool to get every endpoint pre-defined.`,
-          'The other entries are the same data over SOAP, WebSocket, SSE, GraphQL and OData, and the file pool as an S3 bucket (endpoint = the base URL); the Protocols page has the details for each.',
+          'The other entries are the same data over SOAP, WebSocket, SSE, GraphQL and OData, an OpenAI-compatible mock LLM, and the file pool as an S3 bucket (endpoint = the base URL); the Protocols page has the details for each.',
         ],
         curls: [
           ['List two employees', curl('GET', '/v1/employees?limit=2')],
@@ -314,7 +314,7 @@
       // ------------------------------------------------------------ inspector
       'inspector.capture': {
         title: 'Inspector',
-        purpose: 'A webhook catcher. Any call to a path the tool does not reserve is recorded with its headers, detected auth, body and the response sent back. Calls to the APIs (/v1, SOAP, WebSocket upgrades, SSE, GraphQL, OData, the S3 API and OAuth) are recorded too while "Record API calls" is on.',
+        purpose: 'A webhook catcher. Any call to a path the tool does not reserve is recorded with its headers, detected auth, body and the response sent back. Calls to the APIs (/v1, SOAP, WebSocket upgrades, SSE, GraphQL, OData, the LLM mock, the S3 API and OAuth) are recorded too while "Record API calls" is on.',
         steps: [
           `Configure the system under test to send its webhook or callback to \`${B}/<any-path>\`, for example \`${B}/hooks/orders\`.`,
           'Trigger the event. The request appears here live — click it to see Request, Auth, Response and a ready-made curl.',
@@ -511,7 +511,7 @@
       // ------------------------------------------------------------ auth
       'auth.mode': {
         title: 'Mode & credentials',
-        purpose: 'How every API call must authenticate: /v1, SOAP, WebSocket upgrades, SSE, GraphQL and OData all use this mode (the S3 API signs with its own keys instead). The mode comes from AUTH_MODE in the environment unless it is overridden here. The examples in these guides always follow the active mode.',
+        purpose: 'How every API call must authenticate: /v1, SOAP, WebSocket upgrades, SSE, GraphQL, OData and the LLM mock all use this mode (the S3 API signs with its own keys instead). The mode comes from AUTH_MODE in the environment unless it is overridden here. The examples in these guides always follow the active mode.',
         steps: [
           `The active mode is \`${C.mode}\`: ${C.authLabel}.`,
           'Configure your integration with the credentials shown in the form (API key name and location, Basic user and password, Bearer token, JWT settings or the HMAC key).',
@@ -625,7 +625,7 @@
       // ------------------------------------------------------------ chaos
       'chaos.rates': {
         title: 'Rates & latency',
-        purpose: 'Random failures and slowness on every API protocol (/v1, SOAP, WebSocket, SSE, GraphQL, OData, S3), so you can test retries, timeouts and error handling under realistic conditions.',
+        purpose: 'Random failures and slowness on every API protocol (/v1, SOAP, WebSocket, SSE, GraphQL, OData, LLM, S3), so you can test retries, timeouts and error handling under realistic conditions.',
         steps: [
           'Set an error rate (0–100 %) and the error types to draw from: any status, `timeout`, `reset`, `malformed-json`, `truncated-body`, `empty-body`, `wrong-content-type`, `slow-drip`.',
           'Add a latency range to slow every call, and a requests-per-minute limit to trigger 429 with `Retry-After`.',
@@ -686,7 +686,7 @@
       },
       'headers.required': {
         title: 'Required request headers',
-        purpose: 'Headers every API request must carry on every protocol (/v1, SOAP, WebSocket, SSE, GraphQL, OData, S3), optionally with an exact value. Missing or wrong ones return 400 in that protocol\'s error format (problem+json on /v1).',
+        purpose: 'Headers every API request must carry on every protocol (/v1, SOAP, WebSocket, SSE, GraphQL, OData, LLM, S3), optionally with an exact value. Missing or wrong ones return 400 in that protocol\'s error format (problem+json on /v1).',
         steps: [
           'Enter a JSON list such as `[{"name":"X-Tenant"},{"name":"X-Env","value":"demo"}]` and Save.',
           'Configure the same headers in your integration.',
@@ -867,6 +867,58 @@
         ],
         curls: [
           ['The same stream from a terminal', curl('GET', '/sse/ticks?interval=500&count=5', { extra: ['-N'] })],
+        ],
+      },
+
+      // ------------------------------------------------------------ protocols: LLM
+      'protocols.llm': {
+        title: 'Mock LLM (OpenAI-compatible)',
+        purpose: 'An OpenAI-compatible chat completions API that answers with vague, plausible text and reports token usage the way a real model does, so you can test an LLM connector, a proxy in front of one, or cost tracking without paying for tokens. It uses the active auth mode, rate limit, required headers and chaos like /v1.',
+        steps: [
+          `Give your OpenAI client or connector the base URL \`${B}/llm/v1\`. It appends \`/chat/completions\`, \`/embeddings\` and \`/models\`. Any model name works unless llmRequireKnownModel is on.`,
+          `The API key is the active auth mode's credential: ${C.authLabel}. In bearer mode, use the bearer token as the API key (OpenAI SDKs send it as \`Authorization: Bearer\`).`,
+          '`usage.prompt_tokens` is estimated from the request (about 4 characters per token plus per-message overhead); `completion_tokens` is random between llmCompletionTokensMin and llmCompletionTokensMax. `max_tokens` or `max_completion_tokens` cuts the answer with finish_reason "length"; `reasoning_effort` adds reasoning_tokens; the same `seed` gives the same answer and counts.',
+          'Send `tools` to get tool calls (finish_reason "tool_calls", arguments generated from each tool\'s JSON Schema): `tool_choice: "required"` or a named tool always calls, "auto" calls llmToolCallRate % of the time, and a reply to a tool result is always text. `response_format` json_object or json_schema returns JSON.',
+          '`stream: true` sends chat.completion.chunk events ending with `data: [DONE]`; add `stream_options: {"include_usage": true}` for a final usage chunk. `X-Force-Stream-Drop: N` cuts the stream and `X-Force-Stream-Error: N` sends an error chunk after N chunks.',
+          'Errors are OpenAI-shaped: `{"error": {"message", "type", "param", "code"}}` with codes such as invalid_api_key (401), model_not_found (404) and rate_limit_exceeded (429, with Retry-After and x-ratelimit-* headers).',
+        ],
+        curls: [
+          ['A chat completion', curl('POST', '/llm/v1/chat/completions', { json: { model: 'mock-chat-large', messages: [{ role: 'system', content: 'You are a helpful assistant.' }, { role: 'user', content: 'Summarize our Q3 plan.' }] } })],
+          ['Repeatable answer, capped at 20 tokens', curl('POST', '/llm/v1/chat/completions', { json: { model: 'mock-chat-small', seed: 7, max_tokens: 20, messages: [{ role: 'user', content: 'Hello' }] } })],
+          ['A tool call', curl('POST', '/llm/v1/chat/completions', { json: { model: 'mock-chat-large', tool_choice: 'required', tools: [{ type: 'function', function: { name: 'get_weather', parameters: { type: 'object', properties: { city: { type: 'string' } }, required: ['city'] } } }], messages: [{ role: 'user', content: 'Weather in Boston?' }] } })],
+          ['JSON output', curl('POST', '/llm/v1/chat/completions', { json: { model: 'mock-chat-large', response_format: { type: 'json_object' }, messages: [{ role: 'user', content: 'Give me a risk summary as JSON.' }] } })],
+          ['Streamed, with usage at the end', curl('POST', '/llm/v1/chat/completions', { json: { model: 'mock-chat-large', stream: true, stream_options: { include_usage: true }, messages: [{ role: 'user', content: 'Tell me something vague.' }] }, extra: ['-N'] })],
+          ['A stream cut after 5 chunks', curl('POST', '/llm/v1/chat/completions', { json: { model: 'mock-chat-large', stream: true, messages: [{ role: 'user', content: 'Hi' }] }, headers: { 'X-Force-Stream-Drop': '5' }, extra: ['-N'] })],
+          ['Embeddings', curl('POST', '/llm/v1/embeddings', { json: { model: 'mock-embed-small', input: ['first text', 'second text'], dimensions: 8 } })],
+          ['List models', curl('GET', '/llm/v1/models')],
+          ['A rate-limit error in OpenAI shape', curl('GET', '/llm/v1/models', { headers: { 'X-Force-Error': '429' }, include: true })],
+        ],
+      },
+      'protocols.llm-settings': {
+        title: 'LLM settings',
+        purpose: 'Turn the mock LLM on or off, choose the model list, the range of completion tokens, the streaming speed and how often tools are called.',
+        steps: [
+          '`llmModels`: the ids /llm/v1/models returns. With `llmRequireKnownModel` on, other model names get 404 model_not_found.',
+          '`llmCompletionTokensMin` / `llmCompletionTokensMax`: the range of completion tokens in a random answer (the text length follows it, about 0.75 words per token).',
+          '`llmStreamDelayMs`: the pause between streamed chunks. `llmToolCallRate`: percent of tool_choice "auto" requests answered with a tool call.',
+          ...pw,
+        ],
+        curls: [
+          ['Longer answers', admin('PUT', '/settings', { json: { llmCompletionTokensMin: 500, llmCompletionTokensMax: 1500 } })],
+          ['Only accept the listed models', admin('PUT', '/settings', { json: { llmRequireKnownModel: true } })],
+          ['Back to the defaults', admin('POST', '/settings/reset', { json: { section: 'llm' } })],
+        ],
+      },
+      'protocols.llm-try': {
+        title: 'Try a chat completion',
+        purpose: 'Send a chat completion from this page with the active auth mode and see the answer, the finish reason and the token usage, plain or streamed.',
+        steps: [
+          'Pick a model, write a message and press Send. Tick Stream to watch chunks arrive; the usage comes in the last chunk.',
+          'Tick JSON output for response_format json_object, or Force a get_weather tool call to see generated tool arguments.',
+          'Set max_tokens below the usual answer length to get finish_reason "length"; set a seed to get the same answer twice.',
+        ],
+        curls: [
+          ['The same request from a terminal', curl('POST', '/llm/v1/chat/completions', { json: { model: 'mock-chat-large', messages: [{ role: 'user', content: 'What should we prioritize next quarter?' }] } })],
         ],
       },
 
