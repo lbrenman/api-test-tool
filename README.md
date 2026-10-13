@@ -39,9 +39,23 @@ Use cases:
 
 ---
 
+## How it works
+
+### Outgoing testing: the tool as a mock target
+
+![Outgoing testing: your integration platform calls the tool. Every protocol runs through one shared pipeline (request ID, required headers, rate limit, auth, chaos) and serves one dataset; change events drive live feeds and webhooks, and the Inspector catches every other path.](images/outgoing-mock-target.svg)
+
+### Incoming testing: the tool as a contract tester
+
+![Incoming testing: load an OpenAPI, WSDL or AsyncAPI contract. An adapter builds sample requests, the shared core calls your platform's API through a server-side proxy, every response is validated against the contract, and runs are saved as JSON and HTML reports.](images/incoming-tester.svg)
+
+
 ## Contents
 
 - [API Test Tool](#api-test-tool)
+  - [How it works](#how-it-works)
+    - [Outgoing testing: the tool as a mock target](#outgoing-testing-the-tool-as-a-mock-target)
+    - [Incoming testing: the tool as a contract tester](#incoming-testing-the-tool-as-a-contract-tester)
   - [Contents](#contents)
   - [Quick start](#quick-start)
     - [GitHub Codespaces (fastest)](#github-codespaces-fastest)
