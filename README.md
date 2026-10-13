@@ -64,6 +64,7 @@ Use cases:
   - [Features](#features)
   - [Configuration](#configuration)
   - [Route map](#route-map)
+  - [Securing the dashboard and back office](#securing-the-dashboard-and-back-office)
   - [Authentication](#authentication)
   - [Mock API conventions](#mock-api-conventions)
   - [Pagination](#pagination)
@@ -107,7 +108,7 @@ Click the badge above. The devcontainer installs dependencies, starts the server
 https://<codespace-name>-3000.app.github.dev/dashboard
 ```
 
-Set an admin password before sharing the URL: put `ADMIN_PASSWORD=...` in `.env` (created from `.env.example` on first start) and restart with `pkill -f src/server.js; bash .devcontainer/start.sh`. Server logs are in `/tmp/api-test-tool.log`.
+Set an admin password before sharing the URL: put `ADMIN_PASSWORD=...` in `.env` (created from `.env.example` on first start) and restart with `pkill -f src/server.js; bash .devcontainer/start.sh`. See [Securing the dashboard and back office](#securing-the-dashboard-and-back-office). Server logs are in `/tmp/api-test-tool.log`.
 
 ### Local
 
@@ -313,6 +314,55 @@ These prefixes are reserved: `/v1`, `/soap`, `/ws`, `/sse`, `/graphql`, `/odata`
 | `/app/` | Back office app (business view of the mock data; dashboard password) |
 | `/admin/api/app/*` | Back office app backend: KPIs, lookups, record search and CRUD |
 | anything else | Inspector catch-all |
+
+---
+
+## Securing the dashboard and back office
+
+Out of the box `ADMIN_PASSWORD` is blank, so the dashboard and the back office app are open to anyone who can reach the URL (the server logs a warning at startup). Set one password to lock both.
+
+**What `ADMIN_PASSWORD` protects**
+
+| Path | With a password set |
+|---|---|
+| `/dashboard` | Redirects to `/dashboard/login` until you sign in |
+| `/app` (back office) | The page shell loads, but it shows its own sign-in screen; all of its data comes from `/admin/api/app/*`, which is protected |
+| `/admin/api/*` | 401 problem+json without a session cookie or Basic credentials |
+| `/docs?spec=admin` | Asks you to sign in to the dashboard first |
+
+**What it does not touch:** the mock APIs your platform calls (`/v1`, SOAP, WebSocket, SSE, GraphQL, OData, `/llm`, `/mcp`, `/a2a`) follow `AUTH_MODE` instead (see [Authentication](#authentication)), the S3 API uses its own keys, and `/health`, `/ready`, `/openapi.json`, `/docs`, OAuth and well-known endpoints stay open. The Inspector catch-all also keeps accepting calls, since that is its job; viewing what it captured goes through `/admin/api` and needs the password.
+
+Signing in sets a signed, HttpOnly `att_admin` session cookie valid for 7 days. Scripts can use HTTP Basic instead, with any username:
+
+```bash
+curl -s -u "admin:$ADMIN_PASSWORD" "$B/admin/api/settings"
+```
+
+**Setting it**
+
+`ADMIN_PASSWORD` is read from the environment at startup and needs a restart to change. It is env-only: the dashboard cannot show or override it, so a dashboard setting can never lock you out.
+
+- Codespaces and local: put it in `.env` (the start script creates `.env` from `.env.example` on first start), then restart.
+  ```bash
+  # .env
+  ADMIN_PASSWORD=something-long-and-random
+  ```
+  ```bash
+  pkill -f src/server.js; bash .devcontainer/start.sh     # Codespaces
+  npm start                                                # local
+  ```
+- Fly.io: `.env` is not part of the image, so use a secret. Setting it restarts the machine.
+  ```bash
+  fly secrets set ADMIN_PASSWORD='something-long-and-random'
+  ```
+- Docker: `-e ADMIN_PASSWORD=...` or `--env-file .env`.
+- Render and Northflank: add `ADMIN_PASSWORD` as a secret environment variable (Render's `render.yaml` generates one for you).
+
+Generate a strong value with `openssl rand -base64 24`.
+
+**Check it worked:** the startup warning `ADMIN_PASSWORD is not set` is gone, `/dashboard` redirects to the login page, and `curl -i "$B/admin/api/settings"` returns 401.
+
+To change the password, set the new value and restart. Existing session cookies stop working, because the cookie signature is derived from the password.
 
 ---
 
