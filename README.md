@@ -211,7 +211,10 @@ Settings marked **restart** can only be set through the environment.
 | `OAUTH_REGISTRATION` | `open` | Dynamic client registration at `/oauth/register`: `open`, `token` (needs `OAUTH_REGISTRATION_TOKEN`) or `off` |
 | `OAUTH_REGISTRATION_TOKEN` | | Initial access token clients send as `Authorization: Bearer …` when `OAUTH_REGISTRATION=token` |
 | `OAUTH_REGISTRATION_SCOPES` | `read write` | Scopes a registered client may ask for |
-| `OAUTH_REGISTRATION_MAX` | `500` | Registered clients kept; registration is refused beyond this |
+| `OAUTH_REGISTRATION_MAX` | `500` | Registered clients kept; at the limit the oldest never-used registration makes room, and registration is refused only when all have been used |
+| `OAUTH_REGISTRATION_GRANTS` | `authorization_code refresh_token` | Grants an **open** registration may ask for. `client_credentials` is left out so that open registration cannot mint tokens without a user signing in; `token` mode allows every grant |
+| `OAUTH_REGISTRATION_RATE` | `20` | Open registrations per client IP per hour (0 = no limit); 429 + `Retry-After` beyond it |
+| `OAUTH_REGISTRATION_TTL_DAYS` | `30` | Registered clients that obtain no token for this many days are deleted (0 = keep forever) |
 | `ERROR_RATE` | `0` | 0–100 % |
 | `ERROR_TYPES` | `500,503` | See [Chaos](#chaos-errors-and-latency) |
 | `LATENCY_MIN_MS` / `LATENCY_MAX_MS` | `0` / `0` | |
@@ -508,16 +511,25 @@ curl -s "$B/oauth/register" -H 'Content-Type: application/json' -d '{
 # -> 201 {"client_id":"dcr-…","token_endpoint_auth_method":"none","scope":"read write",
 #         "registration_access_token":"…","registration_client_uri":"$B/oauth/register/dcr-…", …}
 
-# a confidential machine client gets a secret and can use client_credentials
-curl -s "$B/oauth/register" -H 'Content-Type: application/json' \
+# a confidential machine client (client_credentials) needs the initial access token (OAUTH_REGISTRATION=token);
+# open registration refuses client_credentials, see below
+curl -s "$B/oauth/register" -H "Authorization: Bearer $OAUTH_REGISTRATION_TOKEN" -H 'Content-Type: application/json' \
   -d '{"client_name":"Integration","grant_types":["client_credentials"],"scope":"read"}'
 ```
 
 - **Metadata:** `redirect_uris` (required for authorization_code; loopback `http://127.0.0.1|localhost|[::1]` redirects match on any port as RFC 8252 asks; custom schemes like `myapp://cb` are allowed), `grant_types` (`authorization_code`, `refresh_token`, `client_credentials`; default `authorization_code`), `token_endpoint_auth_method` (`client_secret_basic` default, `client_secret_post`, or `none`), `scope` (within `OAUTH_REGISTRATION_SCOPES`; default all of them), plus `client_name`, `client_uri`, `logo_uri`, `contacts`, `software_id`, `software_version`.
 - **Rules:** a public client (`none`) gets no secret, must use PKCE and cannot use client_credentials. A registered client may use only the grants it registered for (`unauthorized_client` otherwise) and gets refresh tokens only with the `refresh_token` grant. Secrets never expire (`client_secret_expires_at: 0`).
 - **Management (RFC 7592):** `GET` or `DELETE` the `registration_client_uri` with `Authorization: Bearer <registration_access_token>`. Updates (PUT) are not supported; register again instead.
-- **Errors:** RFC 7591 JSON, `invalid_client_metadata` or `invalid_redirect_uri` (400); `invalid_token` (401, `WWW-Authenticate: Bearer`) when an initial access token is needed and missing; `access_denied` (403) at the `OAUTH_REGISTRATION_MAX` limit.
-- **Control:** `OAUTH_REGISTRATION=open` (default; anyone may register, as MCP clients expect), `token` (requires `Authorization: Bearer $OAUTH_REGISTRATION_TOKEN`), or `off` (no endpoint, not advertised). Registered clients are stored in the database (they survive restarts and redeploys) and appear on the Auth page with source `registered`, where they can be deleted.
+- **Open registration is limited.** Anyone who finds `/oauth/register` can use it, so without an initial access token:
+  - only the grants in `OAUTH_REGISTRATION_GRANTS` are accepted (default `authorization_code refresh_token`): every token a self-registered client gets needs a user to sign in on the login page. A `client_credentials` registration is refused with `invalid_client_metadata`; register machine clients in `token` mode or add them on the Auth page;
+  - redirect URIs must be https, loopback `http://127.0.0.1|localhost|[::1]`, or a custom scheme (`cursor://…`); plain http to other hosts is `invalid_redirect_uri`. At most 10 redirect URIs of up to 2000 characters;
+  - each client IP may register `OAUTH_REGISTRATION_RATE` clients per hour (429 `rate_limited` with `Retry-After`). On Fly.io the IP comes from `Fly-Client-IP`; elsewhere from the left-most `X-Forwarded-For` entry, which a client can set, so the limit is best effort there and the two rules below still bound what is stored;
+  - clients that obtain no token for `OAUTH_REGISTRATION_TTL_DAYS` are deleted (hourly and at startup; clients registered before this rule existed start their 30 days at the first startup with it);
+  - at `OAUTH_REGISTRATION_MAX` the oldest never-used registration is evicted to make room, so junk registrations cannot lock out real clients. Clients that have obtained a token are never evicted.
+
+  `token` mode lifts the grant and redirect restrictions and the per-IP limit (the caller holds the initial access token). Clients registered earlier with client_credentials keep working.
+- **Errors:** RFC 7591 JSON, `invalid_client_metadata` or `invalid_redirect_uri` (400); `invalid_token` (401, `WWW-Authenticate: Bearer`) when an initial access token is needed and missing; `rate_limited` (429); `access_denied` (403) at the `OAUTH_REGISTRATION_MAX` limit when every registered client has been used.
+- **Control:** `OAUTH_REGISTRATION=open` (default; anyone may register, as MCP clients expect), `token` (requires `Authorization: Bearer $OAUTH_REGISTRATION_TOKEN`), or `off` (no endpoint, not advertised). Registered clients are stored in the database (they survive restarts and redeploys) and appear on the Auth page with source `registered` and when they last obtained a token. Delete them one by one, or with **Delete unused** / **Delete all registered** (`DELETE /admin/api/oauth/registered[?unused=true]`).
 
 The dashboard's **Auth** page has a "Get a test token" button (for a client, or as a chosen user), an OAuth client manager, an OAuth user manager (roles and attributes), the registration settings, and an HMAC signer that produces a ready-to-run curl.
 

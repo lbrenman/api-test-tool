@@ -125,6 +125,10 @@ async function generateAdminOpenApi(ctx, req) {
     parameters: [pathParam('id', 'Client id')],
     responses: { ...noContent('Deleted'), ...AUTHED, ...NF },
   }));
+  add(`${A}/oauth/registered`, 'delete', op('Auth', 'deleteRegisteredClients', 'Delete the clients that registered themselves through /oauth/register (all of them, or with unused=true only those that never obtained a token)', {
+    parameters: [{ name: 'unused', in: 'query', schema: { type: 'boolean' }, description: 'Only delete registrations that never obtained a token' }],
+    responses: { ...ok('How many were deleted', obj({ deleted: { type: 'integer' } })), ...AUTHED },
+  }));
   const userBody = { password: { type: 'string', description: 'Blank or omitted = generate one' }, roles: { description: 'Array, or a space/comma-separated string', anyOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }] }, attributes: { type: 'object', additionalProperties: true, description: 'Claim name → JSON value, added to the user\'s tokens. Reserved claims (iss, sub, aud, exp, scope, client_id, preferred_username, the roles claim\'s top level, …) are refused.' } };
   add(`${A}/oauth/users`, 'get', op('Auth', 'listOAuthUsers', 'Users for the authorization_code login page (OAUTH_USERS and dashboard-added), with roles and attributes', {
     responses: { ...ok('Users', obj({ items: { type: 'array', items: S('OAuthUser') }, rolesClaim: { type: 'string' } })), ...AUTHED },

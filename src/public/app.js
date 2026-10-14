@@ -677,19 +677,34 @@
     }
 
     const regUrl = a.oauth.registration;
+    const registered = a.clients.filter((c) => c.source === 'registered');
+    const regCount = registered.length;
+    const regUnused = registered.filter((c) => !c.lastUsedAt).length;
     el.append(h('div', { class: 'grid cols-2' },
       h('div', { class: 'card stack' }, titled('Dynamic client registration', 'auth.registration'),
         regUrl ? h('div', { class: 'kv' }, h('div', null, 'Endpoint'), h('div', null, h('code', null, regUrl), ' ', h('button', { class: 'small', onclick: () => copy(regUrl) }, 'copy')),
           h('div', null, 'Mode'), h('div', null, a.oauth.registrationMode === 'token' ? 'needs the initial access token' : 'open (anyone may register)'))
           : h('p', { class: 'muted' }, 'Registration is off: clients can only be added below or with OAUTH_CLIENTS.'),
-        h('div', { class: 'small muted' }, 'RFC 7591: a client POSTs its metadata (redirect URIs, grant types, auth method) and gets a client_id, a secret unless it is public, and a token to read or delete its registration. MCP clients register this way. Registered clients appear in the table below.')),
+        h('div', { class: 'small muted' }, 'RFC 7591: a client POSTs its metadata (redirect URIs, grant types, auth method) and gets a client_id, a secret unless it is public, and a token to read or delete its registration. MCP clients register this way. Registered clients appear in the table below.'),
+        h('div', { class: 'small muted' }, 'Open registration is limited: only the grants in oauthRegistrationGrants (no client_credentials by default), https, loopback or custom-scheme redirect URIs, a per-address hourly limit, and unused clients expire. Token mode lifts the grant and redirect limits.'),
+        regCount ? h('div', { class: 'row' },
+          h('span', { class: 'small' }, `${regCount} registered client${regCount === 1 ? '' : 's'} (${regUnused} never used)`),
+          regUnused ? h('button', { class: 'small', onclick: guard(async () => {
+            if (!confirm(`Delete the ${regUnused} registered client(s) that never obtained a token?`)) return;
+            const r = await api('DELETE', '/oauth/registered?unused=true'); toast(`Deleted ${r.deleted} unused registered client(s)`, 'ok'); route();
+          }) }, 'Delete unused') : null,
+          h('button', { class: 'small danger', onclick: guard(async () => {
+            if (!confirm(`Delete all ${regCount} registered client(s)? Clients that use them will have to register again.`)) return;
+            const r = await api('DELETE', '/oauth/registered'); toast(`Deleted ${r.deleted} registered client(s)`, 'ok'); route();
+          }) }, 'Delete all registered')) : null),
       h('div', { class: 'card' }, titled('Registration settings', 'auth.registration-settings'),
-        settingsForm(['oauthRegistration', 'oauthRegistrationToken', 'oauthRegistrationScopes', 'oauthRegistrationMax'], { onSaved: () => { loadCurlCtx().catch(() => {}); route(); } }))));
+        settingsForm(['oauthRegistration', 'oauthRegistrationToken', 'oauthRegistrationScopes', 'oauthRegistrationGrants', 'oauthRegistrationRate', 'oauthRegistrationTtlDays', 'oauthRegistrationMax'], { onSaved: () => { loadCurlCtx().catch(() => {}); route(); } }))));
     el.append(h('div', { class: 'card' }, titled('OAuth clients', 'auth.clients'),
       h('div', { class: 'table-wrap' }, h('table', null, h('thead', null, h('tr', null, ['Client id', 'Secret', 'Scopes', 'Grants', 'Redirect URIs', 'Source', ''].map((x) => h('th', null, x)))),
         h('tbody', null, a.clients.map((c) => h('tr', null, h('td', { class: 'mono' }, c.clientId, c.clientName ? h('div', { class: 'small muted' }, c.clientName) : null), h('td', { class: 'mono' }, c.secret || '(public)'), h('td', null, c.scopes.join(' ')),
           h('td', { class: 'small' }, (c.grantTypes || ['any']).join(' ')), h('td', { class: 'small' }, (c.redirectUris || []).join(' ') || 'any http(s)'),
-          h('td', null, h('span', { class: 'badge' }, c.source), c.overridesEnv ? h('div', { class: 'small muted' }, 'edited (overrides env)') : null),
+          h('td', null, h('span', { class: 'badge' }, c.source), c.overridesEnv ? h('div', { class: 'small muted' }, 'edited (overrides env)') : null,
+            c.source === 'registered' ? h('div', { class: 'small muted' }, c.lastUsedAt ? `last token ${new Date(c.lastUsedAt).toLocaleDateString()}` : 'never used') : null),
           h('td', null, h('div', { class: 'row', style: { flexWrap: 'nowrap' } },
             h('button', { class: 'small', onclick: () => editClient(c) }, 'Edit'),
             c.source !== 'env' ? h('button', { class: 'small danger', onclick: guard(async () => {

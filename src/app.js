@@ -206,7 +206,7 @@ async function createApp(opts = {}) {
   app.handleUpgrade = handleUpgrade;
 
   ctx.ready = true;
-  return { app, ctx, close: async () => { await ctx.webhooks.drain(); await ctx.repo.close(); } };
+  return { app, ctx, close: async () => { ctx.oauth.close(); await ctx.webhooks.drain(); await ctx.repo.close(); } };
 }
 
 module.exports = { createApp, createContext, seedOnStart };

@@ -3,7 +3,7 @@
 // authorize (login/consent page), introspect (RFC 7662), revoke (RFC 7009), metadata (RFC 8414), JWKS, and
 // dynamic client registration (RFC 7591, with read/delete from RFC 7592) at /oauth/register.
 const express = require('express');
-const { OAuthError, OAuthService } = require('../services/oauth');
+const { OAuthError, OAuthService, clientIp } = require('../services/oauth');
 const { verify } = require('../middleware/body');
 
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -11,6 +11,7 @@ const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '
 function oauthError(res, e) {
   if (!(e instanceof OAuthError)) throw e;
   res.setHeader('Cache-Control', 'no-store');
+  for (const [k, v] of Object.entries(e.headers || {})) res.setHeader(k, v);
   if (e.status === 401) res.setHeader('WWW-Authenticate', e.error === 'invalid_token' ? `Bearer error="invalid_token", error_description="${String(e.description).replace(/"/g, "'").replace(/[^\x20-\x7e]/g, '')}"` : 'Basic realm="oauth"');
   return res.status(e.status).json({ error: e.error, error_description: e.description });
 }
@@ -181,7 +182,9 @@ module.exports = function oauthRouter(ctx) {
   }, json, async (req, res) => {
     try {
       res.setHeader('Cache-Control', 'no-store');
-      const { client, registrationAccessToken } = await oauth.registerClient(req.body);
+      // The initial access token was checked above, so in token mode the caller is trusted.
+      const trusted = settings.get('oauthRegistration') === 'token';
+      const { client, registrationAccessToken } = await oauth.registerClient(req.body, { trusted, ip: clientIp(req) });
       const base = baseUrl(req);
       res.setHeader('Location', `${base}/oauth/register/${encodeURIComponent(client.clientId)}`);
       return res.status(201).json(oauth.registrationResponse(client, base, registrationAccessToken));

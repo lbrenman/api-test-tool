@@ -65,7 +65,10 @@ const DEFS = [
   { key: 'oauthRegistration', env: 'OAUTH_REGISTRATION', def: 'open', type: 'enum', options: ['off', 'open', 'token'], section: 'oauth', desc: 'Dynamic client registration (RFC 7591) at /oauth/register: open = anyone may register (MCP clients expect this), token = needs the initial access token below, off = no registration endpoint' },
   { key: 'oauthRegistrationToken', env: 'OAUTH_REGISTRATION_TOKEN', def: '', type: 'string', section: 'oauth', secret: true, desc: 'Initial access token for registration when OAUTH_REGISTRATION=token (sent as Authorization: Bearer …)' },
   { key: 'oauthRegistrationScopes', env: 'OAUTH_REGISTRATION_SCOPES', def: 'read write', type: 'string', section: 'oauth', desc: 'Scopes a registered client may ask for (space separated); a client that asks for none gets all of them' },
-  { key: 'oauthRegistrationMax', env: 'OAUTH_REGISTRATION_MAX', def: 500, type: 'int', section: 'oauth', min: 1, max: 100000, desc: 'Most registered clients kept; registration is refused beyond this (delete some on the Auth page)' },
+  { key: 'oauthRegistrationMax', env: 'OAUTH_REGISTRATION_MAX', def: 500, type: 'int', section: 'oauth', min: 1, max: 100000, desc: 'Most registered clients kept. At the limit the oldest never-used registration makes room; if every one has been used, registration is refused (delete some on the Auth page)' },
+  { key: 'oauthRegistrationGrants', env: 'OAUTH_REGISTRATION_GRANTS', def: 'authorization_code refresh_token', type: 'string', section: 'oauth', desc: 'Grant types an open registration may ask for (space separated). client_credentials is left out by default: it would let anyone mint tokens without a user signing in. With OAUTH_REGISTRATION=token every grant is allowed' },
+  { key: 'oauthRegistrationRate', env: 'OAUTH_REGISTRATION_RATE', def: 20, type: 'int', section: 'oauth', min: 0, max: 100000, desc: 'Open registrations allowed per client IP per hour (0 = no limit); beyond it 429 with Retry-After' },
+  { key: 'oauthRegistrationTtlDays', env: 'OAUTH_REGISTRATION_TTL_DAYS', def: 30, type: 'int', section: 'oauth', min: 0, max: 3650, desc: 'Registered clients that have not obtained a token for this many days are deleted (0 = keep forever)' },
 
   // ---- chaos ----
   { key: 'errorRate', env: 'ERROR_RATE', def: 0, type: 'number', section: 'chaos', min: 0, max: 100 },

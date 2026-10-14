@@ -301,12 +301,13 @@ test('auth: security schemes on the card, scopes, extended card, task visibility
     const ext = (await rpc('GetExtendedAgentCard', {}, { headers: read }).expect(200)).body.result;
     assert.ok(ext.skills.some((s) => s.id === 'direct-operations'));
 
-    // Another client cannot see this client's task.
+    // Another client cannot see this client's task (open registration allows client_credentials only when told to).
+    await set('oauthRegistrationGrants', 'authorization_code refresh_token client_credentials');
     const reg = (await api().post('/oauth/register').send({ client_name: 'other', grant_types: ['client_credentials'], token_endpoint_auth_method: 'client_secret_basic', scope: 'read write' }).expect(201)).body;
     const other = { Authorization: `Bearer ${await token('read', [reg.client_id, reg.client_secret])}` };
     assert.equal((await rpc('GetTask', { id: mine.id }, { headers: other }).expect(200)).body.error.code, -32001);
   } finally {
-    await reset(['authMode']);
+    await reset(['authMode', 'oauthRegistrationGrants']);
   }
   assert.equal((await rpc('GetExtendedAgentCard', {}).expect(200)).body.error.code, -32007);
 });
