@@ -162,6 +162,8 @@ module.exports = function adminRouter(ctx, { adminAuth, filesApi }) {
     const { registrationTokenHash, ...c } = doc; // eslint-disable-line no-unused-vars
     res.json(c);
   });
+  // Bulk delete of dynamically registered clients (?unused=true: only those that never obtained a token).
+  r.delete('/oauth/registered', async (req, res) => res.json({ deleted: await oauth.removeRegisteredClients({ unusedOnly: req.query.unused === 'true' }) }));
   r.delete('/oauth/clients/:id', async (req, res) => {
     if (!(await oauth.removeClient(req.params.id))) throw new HttpError(404, 'Only dashboard-added, edited or registered clients can be deleted (env clients come from OAUTH_CLIENTS)');
     res.status(204).end();

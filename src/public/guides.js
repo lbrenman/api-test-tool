@@ -606,8 +606,10 @@
           `The endpoint is \`${B}/oauth/register\` and is advertised as \`registration_endpoint\` in \`${B}/.well-known/oauth-authorization-server\`.`,
           'Send JSON metadata: `redirect_uris` (needed for authorization_code; loopback http URIs match on any port, custom schemes such as `myapp://cb` are allowed), `grant_types` (authorization_code, refresh_token, client_credentials), `token_endpoint_auth_method` (client_secret_basic, client_secret_post, or none for a public client), optional `scope`, `client_name`.',
           'A public client (`none`) has no secret, must use PKCE, and cannot use client_credentials. Each client can use only the grants it registered for; refresh tokens are issued only to clients with the refresh_token grant.',
+          'Open registration is limited, because anyone who finds the endpoint can use it: only the grants in `oauthRegistrationGrants` (by default authorization_code, refresh_token and client_credentials; remove client_credentials so that every token needs a user to sign in), redirect URIs that are https, loopback http or a custom scheme, and `oauthRegistrationRate` registrations per address per hour. Without client_credentials in `oauthRegistrationGrants`, a machine client needs the initial access token (`token` mode) or the Auth page.',
+          'Registered clients that obtain no token for `oauthRegistrationTtlDays` are deleted. At `oauthRegistrationMax` the oldest never-used registration makes room.',
           'Keep the `registration_access_token` from the response: with it, GET or DELETE the `registration_client_uri`. Registered clients also show in the clients table, where you can delete them.',
-          'Errors are RFC 7591 JSON: `invalid_client_metadata`, `invalid_redirect_uri`; 401 `invalid_token` when the mode needs an initial access token.',
+          'Errors are RFC 7591 JSON: `invalid_client_metadata`, `invalid_redirect_uri`; 401 `invalid_token` when the mode needs an initial access token; 429 `rate_limited` with `Retry-After` past the hourly limit.',
         ],
         curls: [
           ['Register a public client with PKCE (as an MCP client does)', plain('POST', '/oauth/register', { json: { client_name: 'My MCP client', redirect_uris: ['http://127.0.0.1:33418/callback'], grant_types: ['authorization_code', 'refresh_token'], response_types: ['code'], token_endpoint_auth_method: 'none' } })],
@@ -623,7 +625,10 @@
         steps: [
           '`oauthRegistration`: `open` (anyone, what MCP clients expect), `token` (the client must send `Authorization: Bearer <oauthRegistrationToken>`), or `off` (no endpoint, not advertised).',
           '`oauthRegistrationScopes`: the scopes a registered client may ask for; a client that asks for none gets all of them.',
-          '`oauthRegistrationMax`: registration is refused beyond this many registered clients. Delete old ones in the clients table.',
+          '`oauthRegistrationGrants`: the grants an open registration may ask for (default authorization_code refresh_token client_credentials). With client_credentials, anyone who finds the endpoint can mint tokens without a user signing in; set authorization_code refresh_token to lock that down. `token` mode allows every grant and any http(s) redirect URI.',
+          '`oauthRegistrationRate`: open registrations per client address per hour (0 = no limit); beyond it 429 with `Retry-After`.',
+          '`oauthRegistrationTtlDays`: registered clients that have not obtained a token for this many days are deleted (0 = keep forever).',
+          '`oauthRegistrationMax`: the most registered clients kept. At the limit the oldest never-used registration makes room; if all have been used, registration is refused. **Delete unused** and **Delete all registered** on the Dynamic client registration card clean up by hand.',
           'With `AUTH_MODE=oauth2` or `jwt`, tokens issued to registered clients are accepted on every protocol, like any other client\'s.',
           ...pw,
         ],

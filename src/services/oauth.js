@@ -3,12 +3,27 @@
 const crypto = require('node:crypto');
 
 class OAuthError extends Error {
-  constructor(error, description, status = 400) {
+  constructor(error, description, status = 400, headers = undefined) {
     super(description);
     this.error = error;
     this.description = description;
     this.status = status;
+    this.headers = headers;
   }
+}
+
+const GRANTS = ['authorization_code', 'refresh_token', 'client_credentials'];
+const DAY_MS = 86400000;
+const HOUR_MS = 3600000;
+const LOOPBACK_HOSTS = ['127.0.0.1', 'localhost', '[::1]'];
+
+/**
+ * The caller's IP for per-client limits. On Fly.io the edge sets Fly-Client-IP (a client cannot forge it there);
+ * elsewhere req.ip, which with `trust proxy` is the left-most X-Forwarded-For entry.
+ */
+function clientIp(req) {
+  if (process.env.FLY_APP_NAME && req.get('fly-client-ip')) return req.get('fly-client-ip');
+  return req.ip || req.socket?.remoteAddress || 'unknown';
 }
 
 // Claims set by the server itself; a user attribute may not use these names.
@@ -25,11 +40,30 @@ class OAuthService {
     this.ctx = ctx;
     this.codes = new Map();
     this.revoked = new Set();
+    this.registrations = new Map(); // client IP -> timestamps of its open registrations in the last hour
   }
 
   async init() {
     for (const d of await this.ctx.repo.list('oauth_revoked')) this.revoked.add(d.jti);
+    // Clients registered before last-use tracking existed have no lastUsedAt: give them a fresh start rather than
+    // pruning them by their creation date (they may be MCP clients in daily use).
+    const now = new Date().toISOString();
+    for (const c of await this.ctx.repo.list('oauth_clients')) {
+      if (c.source === 'registered' && c.lastUsedAt === undefined) await this.ctx.repo.put('oauth_clients', c.clientId, { ...c, lastUsedAt: now });
+    }
+    await this.pruneRegisteredClients();
+    this.pruneTimer = setInterval(() => {
+      this.pruneRegisteredClients().catch(() => {});
+      const cutoff = Date.now() - HOUR_MS;
+      for (const [ip, times] of this.registrations) {
+        const recent = times.filter((t) => t > cutoff);
+        if (recent.length) this.registrations.set(ip, recent); else this.registrations.delete(ip);
+      }
+    }, HOUR_MS);
+    this.pruneTimer.unref();
   }
+
+  close() { clearInterval(this.pruneTimer); }
 
   issuer(req) { return this.ctx.settings.get('jwtIssuer') || this.ctx.baseUrl(req); }
 
@@ -134,26 +168,97 @@ class OAuthService {
     if (!m || !safeEq(m[1].trim(), expected)) throw new OAuthError('invalid_token', 'A valid initial access token is required (Authorization: Bearer …)', 401);
   }
 
-  /** Validate RFC 7591 client metadata and store the client. Returns the stored client. */
-  async registerClient(meta) {
+  /** Grant types an open registration may ask for (OAUTH_REGISTRATION_GRANTS, limited to the supported ones). */
+  openRegistrationGrants() {
+    return String(this.ctx.settings.get('oauthRegistrationGrants') || '').split(/[\s,]+/).filter((g) => GRANTS.includes(g));
+  }
+
+  /** Per-IP limit for open registration. Throws a 429 OAuthError with Retry-After. */
+  checkRegistrationRate(ip) {
+    const limit = this.ctx.settings.get('oauthRegistrationRate');
+    if (!limit) return;
+    const now = Date.now();
+    const recent = (this.registrations.get(ip) || []).filter((t) => t > now - HOUR_MS);
+    this.registrations.set(ip, recent);
+    if (recent.length >= limit) {
+      const retry = Math.max(1, Math.ceil((recent[0] + HOUR_MS - now) / 1000));
+      throw new OAuthError('rate_limited', `At most ${limit} registrations per hour from one address (OAUTH_REGISTRATION_RATE); retry in ${retry} s`, 429, { 'Retry-After': String(retry) });
+    }
+  }
+
+  /** Delete registered clients that have not obtained a token for OAUTH_REGISTRATION_TTL_DAYS. Returns how many. */
+  async pruneRegisteredClients() {
+    const days = this.ctx.settings.get('oauthRegistrationTtlDays');
+    if (!days) return 0;
+    const cutoff = Date.now() - days * DAY_MS;
+    let n = 0;
+    for (const c of await this.ctx.repo.list('oauth_clients')) {
+      if (c.source !== 'registered') continue;
+      if (new Date(c.lastUsedAt || c.createdAt).getTime() < cutoff) { await this.ctx.repo.del('oauth_clients', c.clientId); n += 1; }
+    }
+    return n;
+  }
+
+  /** Delete registered clients (all of them, or only the never-used ones). Returns how many. */
+  async removeRegisteredClients({ unusedOnly = false } = {}) {
+    let n = 0;
+    for (const c of await this.ctx.repo.list('oauth_clients')) {
+      if (c.source !== 'registered' || (unusedOnly && c.lastUsedAt)) continue;
+      await this.ctx.repo.del('oauth_clients', c.clientId);
+      n += 1;
+    }
+    return n;
+  }
+
+  /** Record that a registered client obtained a token (at most one write per client per hour). */
+  async markUsed(client) {
+    if (client?.source !== 'registered') return;
+    if (client.lastUsedAt && Date.now() - new Date(client.lastUsedAt).getTime() < HOUR_MS) return;
+    const doc = await this.ctx.repo.get('oauth_clients', client.clientId);
+    if (doc) await this.ctx.repo.put('oauth_clients', doc.clientId, { ...doc, lastUsedAt: new Date().toISOString() });
+  }
+
+  /**
+   * Validate RFC 7591 client metadata and store the client. Returns the stored client.
+   * Open registration (no initial access token) is restricted: only OAUTH_REGISTRATION_GRANTS, redirect URIs that
+   * are https, loopback http or a custom scheme, and OAUTH_REGISTRATION_RATE per IP. Pass { trusted: true } when the
+   * caller presented the initial access token.
+   */
+  async registerClient(meta, { trusted = false, ip = 'unknown' } = {}) {
     if (!meta || typeof meta !== 'object' || Array.isArray(meta)) throw new OAuthError('invalid_client_metadata', 'The request body must be a JSON object of client metadata');
     const bad = (d) => new OAuthError('invalid_client_metadata', d);
-    const list = (v, name) => {
+    const list = (v, name, max = 20) => {
       if (v === undefined || v === null) return undefined;
       if (!Array.isArray(v) || v.some((x) => typeof x !== 'string')) throw bad(`${name} must be an array of strings`);
+      if (v.length > max) throw bad(`${name} may have at most ${max} entries`);
       return v;
     };
     const authMethod = meta.token_endpoint_auth_method ?? 'client_secret_basic';
     if (!['client_secret_basic', 'client_secret_post', 'none'].includes(authMethod)) throw bad('token_endpoint_auth_method must be client_secret_basic, client_secret_post or none');
     const grantTypes = list(meta.grant_types, 'grant_types') || ['authorization_code'];
-    const unknownGrant = grantTypes.find((g) => !['authorization_code', 'refresh_token', 'client_credentials'].includes(g));
-    if (unknownGrant) throw bad(`Unsupported grant type "${unknownGrant}" (supported: authorization_code, refresh_token, client_credentials)`);
+    const unknownGrant = grantTypes.find((g) => !GRANTS.includes(g));
+    if (unknownGrant) throw bad(`Unsupported grant type "${unknownGrant}" (supported: ${GRANTS.join(', ')})`);
+    if (!trusted) {
+      const allowedGrants = this.openRegistrationGrants();
+      const refused = grantTypes.filter((g) => !allowedGrants.includes(g));
+      if (refused.length) {
+        throw bad(`Grant type ${refused.join(', ')} is not allowed for open registration (allowed: ${allowedGrants.join(' ') || 'none'}). `
+          + 'Ask the administrator for an initial access token (OAUTH_REGISTRATION=token) or a client added on the Auth page');
+      }
+    }
     const responseTypes = list(meta.response_types, 'response_types') || (grantTypes.includes('authorization_code') ? ['code'] : []);
     if (responseTypes.some((r) => r !== 'code')) throw bad('Only the "code" response type is supported');
     if (authMethod === 'none' && grantTypes.includes('client_credentials')) throw bad('A public client (token_endpoint_auth_method "none") cannot use client_credentials');
-    const redirectUris = list(meta.redirect_uris, 'redirect_uris') || [];
+    const redirectUris = list(meta.redirect_uris, 'redirect_uris', 10) || [];
     if (grantTypes.includes('authorization_code') && !redirectUris.length) throw new OAuthError('invalid_redirect_uri', 'redirect_uris is required for the authorization_code grant');
+    const longUri = redirectUris.find((u) => u.length > 2000);
+    if (longUri) throw new OAuthError('invalid_redirect_uri', 'A redirect URI may be at most 2000 characters');
     OAuthService.checkRedirectUris(redirectUris, 'invalid_redirect_uri');
+    if (!trusted) {
+      // Plain http only to loopback (RFC 8252 native apps); https and private-use schemes (myapp://) are fine.
+      const insecure = redirectUris.find((u) => { const url = new URL(u); return url.protocol === 'http:' && !LOOPBACK_HOSTS.includes(url.hostname); });
+      if (insecure) throw new OAuthError('invalid_redirect_uri', `"${insecure}" must use https; plain http is only allowed for loopback addresses (127.0.0.1, localhost, [::1])`);
+    }
     const allowed = this.registrationScopes();
     let scopes = allowed;
     if (meta.scope !== undefined && meta.scope !== null && String(meta.scope).trim()) {
@@ -166,8 +271,19 @@ class OAuthService {
       if (typeof meta[k] !== 'string' || meta[k].length > max) throw bad(`${k} must be a string of at most ${max} characters`);
       return meta[k];
     };
-    const count = (await this.ctx.repo.list('oauth_clients')).filter((c) => c.source === 'registered').length;
-    if (count >= this.ctx.settings.get('oauthRegistrationMax')) throw new OAuthError('access_denied', 'The registered-client limit is reached; delete registered clients on the Auth page or raise OAUTH_REGISTRATION_MAX', 403);
+    const contacts = list(meta.contacts, 'contacts', 10);
+    if (!trusted) this.checkRegistrationRate(ip);
+    await this.pruneRegisteredClients();
+    const registered = (await this.ctx.repo.list('oauth_clients')).filter((c) => c.source === 'registered');
+    const max = this.ctx.settings.get('oauthRegistrationMax');
+    if (registered.length >= max) {
+      // Make room by dropping the oldest registrations that never obtained a token, so a burst of junk
+      // registrations cannot lock out real clients; clients that have been used are never evicted.
+      const unused = registered.filter((c) => !c.lastUsedAt).sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)));
+      const excess = registered.length - max + 1;
+      if (unused.length < excess) throw new OAuthError('access_denied', 'The registered-client limit is reached; delete registered clients on the Auth page or raise OAUTH_REGISTRATION_MAX', 403);
+      for (const c of unused.slice(0, excess)) await this.ctx.repo.del('oauth_clients', c.clientId);
+    }
     const regToken = crypto.randomBytes(32).toString('base64url');
     const doc = {
       clientId: `dcr-${crypto.randomBytes(12).toString('base64url')}`,
@@ -184,11 +300,14 @@ class OAuthService {
       logoUri: str('logo_uri'),
       softwareId: str('software_id', 200),
       softwareVersion: str('software_version', 100),
-      contacts: list(meta.contacts, 'contacts'),
+      contacts,
       registrationTokenHash: crypto.createHash('sha256').update(regToken).digest('hex'),
+      registeredFrom: ip,
       createdAt: new Date().toISOString(),
+      lastUsedAt: null,
     };
     await this.ctx.repo.put('oauth_clients', doc.clientId, doc);
+    if (!trusted) this.registrations.set(ip, [...(this.registrations.get(ip) || []), Date.now()]);
     return { client: doc, registrationAccessToken: regToken };
   }
 
@@ -450,6 +569,7 @@ class OAuthService {
       { ...this.userClaims(user), client_id: client.clientId, scope: scopes.join(' '), token_use: 'access' },
       { ttl, issuer: this.issuer(req), audience: resource && resource !== this.audience() ? [this.audience(), resource] : this.audience(), subject: subject || client.clientId },
     );
+    await this.markUsed(client).catch(() => {}); // keeps a registered client from expiring (OAUTH_REGISTRATION_TTL_DAYS)
     const out = { access_token: token, token_type: 'Bearer', expires_in: ttl, scope: scopes.join(' ') };
     if (refresh) {
       const rt = crypto.randomBytes(32).toString('base64url');
@@ -526,4 +646,4 @@ class OAuthService {
   }
 }
 
-module.exports = { OAuthService, OAuthError, safeEq, RESERVED_CLAIMS };
+module.exports = { OAuthService, OAuthError, safeEq, clientIp, RESERVED_CLAIMS };
