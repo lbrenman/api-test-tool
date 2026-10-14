@@ -686,7 +686,7 @@
           h('div', null, 'Mode'), h('div', null, a.oauth.registrationMode === 'token' ? 'needs the initial access token' : 'open (anyone may register)'))
           : h('p', { class: 'muted' }, 'Registration is off: clients can only be added below or with OAUTH_CLIENTS.'),
         h('div', { class: 'small muted' }, 'RFC 7591: a client POSTs its metadata (redirect URIs, grant types, auth method) and gets a client_id, a secret unless it is public, and a token to read or delete its registration. MCP clients register this way. Registered clients appear in the table below.'),
-        h('div', { class: 'small muted' }, 'Open registration is limited: only the grants in oauthRegistrationGrants (no client_credentials by default), https, loopback or custom-scheme redirect URIs, a per-address hourly limit, and unused clients expire. Token mode lifts the grant and redirect limits.'),
+        h('div', { class: 'small muted' }, 'Open registration is limited: only the grants in oauthRegistrationGrants (client_credentials included by default; remove it so every token needs a user sign-in), https, loopback or custom-scheme redirect URIs, a per-address hourly limit, and unused clients expire. Token mode lifts the grant and redirect limits.'),
         regCount ? h('div', { class: 'row' },
           h('span', { class: 'small' }, `${regCount} registered client${regCount === 1 ? '' : 's'} (${regUnused} never used)`),
           regUnused ? h('button', { class: 'small', onclick: guard(async () => {

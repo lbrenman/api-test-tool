@@ -41,13 +41,16 @@ async function withSettings(values, fn) {
 }
 const PUBLIC = { redirect_uris: ['http://127.0.0.1:33418/callback'], grant_types: ['authorization_code', 'refresh_token'], token_endpoint_auth_method: 'none' };
 
-test('open registration refuses client_credentials: anyone could mint tokens without a user signing in', async () => {
-  const r = await register({ grant_types: ['client_credentials'] }).expect(400);
-  assert.equal(r.body.error, 'invalid_client_metadata');
-  assert.match(r.body.error_description, /client_credentials is not allowed for open registration/);
-  // Allowed again when the administrator adds it to OAUTH_REGISTRATION_GRANTS.
-  await withSettings({ oauthRegistrationGrants: 'authorization_code refresh_token client_credentials' }, async () => {
-    await register({ grant_types: ['client_credentials'] }).expect(201);
+test('open registration allows client_credentials by default; OAUTH_REGISTRATION_GRANTS can lock it down', async () => {
+  await confidentialClient();
+  await withSettings({ oauthRegistrationGrants: 'authorization_code refresh_token' }, async () => {
+    const r = await register({ grant_types: ['client_credentials'] }).expect(400);
+    assert.equal(r.body.error, 'invalid_client_metadata');
+    assert.match(r.body.error_description, /client_credentials is not allowed for open registration/);
+    // Token mode still allows it.
+    await withSettings({ oauthRegistration: 'token', oauthRegistrationToken: 'iat-locked' }, async () => {
+      await register({ grant_types: ['client_credentials'] }, 'iat-locked').expect(201);
+    });
   });
 });
 
