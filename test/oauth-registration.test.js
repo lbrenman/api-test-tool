@@ -246,10 +246,11 @@ test('a token marks the client used; unused registrations expire after OAUTH_REG
   await request(t.app).post('/oauth/token').type('form').send({ grant_type: 'authorization_code', code, redirect_uri: redirect, client_id: r.body.client_id, code_verifier: verifier }).expect(200);
   assert.ok((await t.ctx.repo.get('oauth_clients', r.body.client_id)).lastUsedAt, 'lastUsedAt is set by the token');
 
+  // Register both first: every registration also prunes, which would remove a client backdated earlier.
   const old = new Date(Date.now() - 40 * 86400000).toISOString();
   const stale = (await register(PUBLIC).expect(201)).body.client_id;
-  await t.ctx.repo.put('oauth_clients', stale, { ...(await t.ctx.repo.get('oauth_clients', stale)), createdAt: old });
   const usedLongAgo = (await register(PUBLIC).expect(201)).body.client_id;
+  await t.ctx.repo.put('oauth_clients', stale, { ...(await t.ctx.repo.get('oauth_clients', stale)), createdAt: old });
   await t.ctx.repo.put('oauth_clients', usedLongAgo, { ...(await t.ctx.repo.get('oauth_clients', usedLongAgo)), createdAt: old, lastUsedAt: old });
   assert.equal(await t.ctx.oauth.pruneRegisteredClients(), 2);
   assert.ok(await t.ctx.oauth.client(r.body.client_id), 'the recently used client stays');
