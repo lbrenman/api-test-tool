@@ -144,3 +144,90 @@ jobs:
           docker restart att && sleep 5
           for i in $(seq 1 30); do curl -fsS http://127.0.0.1:3000/ready && break; sleep 1; done
           curl -fsS http://127.0.0.1:3000/health | grep '"employees":250'
+
+  # Deploys master to the API Lab EC2 stack once every other job is green. Builds natively on arm64,
+  # smoke-tests the image, pushes it to ECR and rolls it out over SSM. Skips until the repo variable
+  # API_LAB_DEPLOY_ROLE_ARN is set, and never runs on PRs, forks or other branches.
+  deploy:
+    name: deploy to API Lab
+    needs: [unit, newman, storage, docker]
+    if: >-
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/master' &&
+      vars.API_LAB_DEPLOY_ROLE_ARN != ''
+    runs-on: ubuntu-24.04-arm
+    permissions:
+      id-token: write
+      contents: read
+    concurrency:
+      group: deploy-api-lab
+      cancel-in-progress: false
+    env:
+      AWS_REGION: ${{ vars.API_LAB_REGION || 'us-east-2' }}
+      STACK: ${{ vars.API_LAB_STACK || 'api-lab' }}
+      SHA: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Skip if master has moved on
+        id: head
+        run: |
+          # Tests for an older commit can finish after a newer one's; never let an older build overwrite :latest.
+          # The newer commit deploys itself once its own tests pass.
+          head=$(git ls-remote origin refs/heads/master | cut -f1)
+          if [ "$head" != "$SHA" ]; then
+            echo "master is now $head; skipping deploy of $SHA" >> "$GITHUB_STEP_SUMMARY"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build and smoke-test the arm64 image
+        if: steps.head.outputs.skip != 'true'
+        run: |
+          docker build -t att:candidate .
+          docker run -d --name att -p 3000:3000 -e ADMIN_PASSWORD=ci-secret att:candidate
+          for i in $(seq 1 60); do curl -fsS http://127.0.0.1:3000/ready && break; sleep 1; done
+          curl -fsS http://127.0.0.1:3000/health | grep '"status":"ok"'
+          docker rm -f att
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        if: steps.head.outputs.skip != 'true'
+        with:
+          role-to-assume: ${{ vars.API_LAB_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - id: ecr
+        if: steps.head.outputs.skip != 'true'
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Push image
+        if: steps.head.outputs.skip != 'true'
+        env:
+          REGISTRY: ${{ steps.ecr.outputs.registry }}
+        run: |
+          img="$REGISTRY/$STACK/api-test-tool"
+          docker tag att:candidate "$img:$SHA"
+          docker tag att:candidate "$img:latest"
+          docker push --all-tags "$img"
+          echo "Pushed $img:$SHA" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Roll out if API Lab is running
+        if: steps.head.outputs.skip != 'true'
+        run: |
+          id=$(aws ec2 describe-instances --filters "Name=tag:Name,Values=$STACK" "Name=instance-state-name,Values=running" \
+            --query 'Reservations[].Instances[].InstanceId' --output text)
+          if [ -z "$id" ]; then
+            echo "API Lab is stopped; it will run this build on its next start." >> "$GITHUB_STEP_SUMMARY"; exit 0
+          fi
+          cmd=$(aws ssm send-command --instance-ids "$id" --document-name "$STACK-deploy" \
+            --comment "deploy $SHA" --query Command.CommandId --output text)
+          for _ in $(seq 1 60); do
+            s=$(aws ssm get-command-invocation --command-id "$cmd" --instance-id "$id" --query Status --output text 2>/dev/null || echo Pending)
+            case "$s" in
+              Success) echo "Deployed $SHA to API Lab" >> "$GITHUB_STEP_SUMMARY"; exit 0 ;;
+              Failed|Cancelled|TimedOut)
+                aws ssm get-command-invocation --command-id "$cmd" --instance-id "$id" \
+                  --query '[StandardOutputContent,StandardErrorContent]' --output text; exit 1 ;;
+            esac
+            sleep 5
+          done
+          echo "::error::deploy still running after 5 minutes"; exit 1
