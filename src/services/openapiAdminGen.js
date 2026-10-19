@@ -367,12 +367,12 @@ async function generateAdminOpenApi(ctx, req) {
       schemas: {
         Problem: obj({ type: { type: 'string' }, title: { type: 'string' }, status: { type: 'integer' }, detail: { type: 'string' }, instance: { type: 'string' }, requestId: { type: 'string' }, timestamp: { type: 'string', format: 'date-time' }, code: { type: 'string' } }, ['title', 'status'], { additionalProperties: true }),
         Health: obj({
-          status: { type: 'string', enum: ['ok', 'degraded'] }, version: { type: 'string' }, uptimeSeconds: { type: 'integer' }, time: { type: 'string', format: 'date-time' },
+          status: { type: 'string', enum: ['ok', 'degraded'] }, version: { type: 'string' }, commit: { type: ['string', 'null'], description: 'Git commit the process runs (GIT_SHA build argument, else the checkout), or null' }, uptimeSeconds: { type: 'integer' }, time: { type: 'string', format: 'date-time' },
           baseUrl: { type: 'string' }, checks: anyObj('database and fileStore: driver, ok, latencyMs, error'), settings: anyObj('Active settings summary (no secrets)'), data: S('Counts'),
         }, ['status', 'version', 'checks']),
         Counts: obj({ employees: { type: 'integer' }, products: { type: 'integer' }, departments: { type: 'integer' }, categories: { type: 'integer' } }, undefined, { additionalProperties: { type: 'integer' } }),
         Overview: obj({
-          version: { type: 'string' }, baseUrl: { type: 'string' }, urls: { type: 'object', additionalProperties: { type: 'string' } }, authMode: { type: 'string' }, dateFormat: { type: 'string' },
+          version: { type: 'string' }, commit: { type: ['string', 'null'] }, baseUrl: { type: 'string' }, urls: { type: 'object', additionalProperties: { type: 'string' } }, authMode: { type: 'string' }, dateFormat: { type: 'string' },
           chaos: anyObj(), storage: obj({ db: { type: 'string' }, files: { type: 'string' } }), counts: S('Counts'), files: { type: 'integer' }, inspector: { type: 'integer' },
           lastSeed: { type: ['object', 'null'] }, curls: { type: 'array', items: { type: 'string' } }, warnings: { type: 'array', items: { type: 'string' } },
         }),

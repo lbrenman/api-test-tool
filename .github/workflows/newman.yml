@@ -132,12 +132,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: docker build -t api-test-tool .
+      - run: docker build --build-arg GIT_SHA=${{ github.sha }} -t api-test-tool .
       - name: Run container and smoke test
         run: |
           docker run -d --name att -p 3000:3000 -v att-data:/data -e ADMIN_PASSWORD=ci-secret api-test-tool
           for i in $(seq 1 60); do curl -fsS http://127.0.0.1:3000/ready && break; sleep 1; done
           curl -fsS http://127.0.0.1:3000/health | grep '"status":"ok"'
+          curl -fsS http://127.0.0.1:3000/health | grep '"commit":"${{ github.sha }}"'
           curl -fsS "http://127.0.0.1:3000/v1/p/cursor/employees?limit=2" | grep nextCursor
           curl -fsS -o /dev/null -r 0-99 -w '%{http_code}' http://127.0.0.1:3000/v1/files/sample-large-bin/download | grep 206
           test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:3000/admin/api/overview)" = "401"
@@ -183,10 +184,11 @@ jobs:
       - name: Build and smoke-test the arm64 image
         if: steps.head.outputs.skip != 'true'
         run: |
-          docker build -t att:candidate .
+          docker build --build-arg GIT_SHA="$SHA" -t att:candidate .
           docker run -d --name att -p 3000:3000 -e ADMIN_PASSWORD=ci-secret att:candidate
           for i in $(seq 1 60); do curl -fsS http://127.0.0.1:3000/ready && break; sleep 1; done
           curl -fsS http://127.0.0.1:3000/health | grep '"status":"ok"'
+          curl -fsS http://127.0.0.1:3000/health | grep "\"commit\":\"$SHA\""
           docker rm -f att
 
       - uses: aws-actions/configure-aws-credentials@v4
@@ -211,6 +213,7 @@ jobs:
           echo "Pushed $img:$SHA" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Roll out if API Lab is running
+        id: rollout
         if: steps.head.outputs.skip != 'true'
         run: |
           id=$(aws ec2 describe-instances --filters "Name=tag:Name,Values=$STACK" "Name=instance-state-name,Values=running" \
@@ -223,7 +226,7 @@ jobs:
           for _ in $(seq 1 60); do
             s=$(aws ssm get-command-invocation --command-id "$cmd" --instance-id "$id" --query Status --output text 2>/dev/null || echo Pending)
             case "$s" in
-              Success) echo "Deployed $SHA to API Lab" >> "$GITHUB_STEP_SUMMARY"; exit 0 ;;
+              Success) echo "Deployed $SHA to API Lab" >> "$GITHUB_STEP_SUMMARY"; echo "rolled=true" >> "$GITHUB_OUTPUT"; exit 0 ;;
               Failed|Cancelled|TimedOut)
                 aws ssm get-command-invocation --command-id "$cmd" --instance-id "$id" \
                   --query '[StandardOutputContent,StandardErrorContent]' --output text; exit 1 ;;
@@ -231,3 +234,15 @@ jobs:
             sleep 5
           done
           echo "::error::deploy still running after 5 minutes"; exit 1
+
+      - name: Check API Lab reports this commit
+        if: steps.rollout.outputs.rolled == 'true' && vars.API_LAB_URL != ''
+        env:
+          URL: ${{ vars.API_LAB_URL }}
+        run: |
+          for _ in $(seq 1 24); do
+            got=$(curl -fsS "${URL%/}/health" 2>/dev/null | sed -nE 's/.*"commit":"([0-9a-f]+)".*/\1/p')
+            if [ "$got" = "$SHA" ]; then echo "API Lab /health reports $SHA" >> "$GITHUB_STEP_SUMMARY"; exit 0; fi
+            sleep 5
+          done
+          echo "::error::API Lab /health reports commit '${got:-none}', expected $SHA"; exit 1

@@ -11,6 +11,7 @@ const testerRouter = require('./tester');
 const appApiRouter = require('./appApi');
 const { generateAdminOpenApi } = require('../services/openapiAdminGen');
 const pkg = require('../../package.json');
+const { commit } = require('../util/build');
 
 module.exports = function adminRouter(ctx, { adminAuth, filesApi }) {
   const r = express.Router();
@@ -60,6 +61,7 @@ module.exports = function adminRouter(ctx, { adminAuth, filesApi }) {
     }
     res.json({
       version: pkg.version,
+      commit,
       baseUrl: base,
       urls: { api: `${base}/v1`, docs: `${base}/docs`, openapi: `${base}/openapi.json`, adminOpenapi: `${base}/admin/api/openapi.json`, app: `${base}/app/`, health: `${base}/health`, inspector: `${base}/<any-other-path>`, token: `${base}/oauth/token`, ...(settings.get('soapEnabled') ? { soap: `${base}/soap`, soapWsdl: `${base}/soap/EmployeeService?wsdl` } : {}), ...(settings.get('wsEnabled') ? { websocket: `${base.replace(/^http/, 'ws')}/ws/rpc`, asyncapi: `${base}/ws/asyncapi.json` } : {}), ...(settings.get('sseEnabled') ? { sse: `${base}/sse/changes` } : {}), ...(settings.get('odataEnabled') ? { odata: `${base}/odata/v4`, odataMetadata: `${base}/odata/v4/$metadata` } : {}), ...(settings.get('graphqlEnabled') ? { graphql: `${base}/graphql`, graphqlSchema: `${base}/graphql/schema.graphql` } : {}), ...(settings.get('llmEnabled') ? { llm: `${base}/llm/v1` } : {}), ...(settings.get('mcpEnabled') ? { mcp: `${base}/mcp` } : {}), ...(settings.get('a2aEnabled') ? { a2a: `${base}/a2a`, agentCard: `${base}/.well-known/agent-card.json` } : {}), ...(settings.get('s3ApiEnabled') ? { s3Endpoint: base, s3Bucket: `${base}/${settings.get('s3ApiBucket')}` } : {}) },
       authMode: mode,

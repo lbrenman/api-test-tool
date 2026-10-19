@@ -2252,7 +2252,7 @@
       ['urls', 'URLs and reserved paths'], ['pages', 'Page guide'], ['headers-cheat', 'Useful request headers'], ['more', 'More information'],
     ];
 
-    el.append(header('About & Help', `API Test Tool ${o.version} · ${B}`));
+    el.append(header('About & Help', `API Test Tool ${o.version}${o.commit ? ` (${o.commit.slice(0, 7)})` : ''} · ${B}`));
     el.append(h('div', { class: 'card' }, h('div', { class: 'row' }, h('b', null, 'On this page:'),
       toc.map(([id, label]) => h('a', { class: 'btn small', href: `#/help/${id}` }, label)))));
 

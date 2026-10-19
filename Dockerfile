@@ -20,6 +20,10 @@ COPY --chown=node:node package.json ./
 COPY --chown=node:node src ./src
 COPY --chown=node:node scripts ./scripts
 COPY --chown=node:node samples ./samples
+# The commit /health reports: docker build --build-arg GIT_SHA=$(git rev-parse HEAD) .
+# Declared last so a new commit doesn't invalidate the layers above.
+ARG GIT_SHA=
+ENV GIT_SHA=${GIT_SHA}
 USER node
 VOLUME ["/data"]
 EXPOSE 3000

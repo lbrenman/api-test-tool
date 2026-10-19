@@ -6,6 +6,7 @@ const path = require('node:path');
 const yaml = require('js-yaml');
 const { generateOpenApi } = require('../services/openapiGen');
 const pkg = require('../../package.json');
+const { commit } = require('../util/build');
 
 const STARTED = Date.now();
 
@@ -30,6 +31,7 @@ module.exports = function platformRouter(ctx, { adminAuth } = {}) {
     res.status(ok ? 200 : 503).json({
       status: ok ? 'ok' : 'degraded',
       version: pkg.version,
+      commit,
       uptimeSeconds: Math.round((Date.now() - STARTED) / 1000),
       time: new Date().toISOString(),
       baseUrl: ctx.baseUrl(req),
