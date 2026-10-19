@@ -1244,6 +1244,10 @@ fly secrets set FILE_STORE=s3 S3_BUCKET=<bucket-name> S3_REGION=auto \
 
 The image is multi-stage, runs as the non-root `node` user, and declares `/data` as a volume. Mount a volume (or configure Postgres + S3), set `ADMIN_PASSWORD`, and set `PUBLIC_BASE_URL` when the host isn't auto-detected.
 
+### AWS (EC2 via CI)
+
+The `deploy` job in `.github/workflows/newman.yml` deploys every green push to `master` to an EC2 instance: it builds an arm64 image, pushes it to Amazon ECR and rolls it out over SSM. See [Postman and Newman](#postman-and-newman) for the repository variables that turn it on.
+
 ### Codespaces
 
 `.devcontainer/` uses Node 22, runs `npm install` on create, and on every start runs `.devcontainer/start.sh`. That script copies `.env.example` to `.env` if missing, makes port 3000 public with `gh codespace ports visibility 3000:public -c $CODESPACE_NAME`, and starts the server in the background.
