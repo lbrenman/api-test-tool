@@ -1,7 +1,8 @@
 'use strict';
-// Shared middleware stack for every mock protocol surface (/v1 REST today; SOAP, OData, GraphQL,
-// SSE and WebSocket upgrades later). One place defines the order, so all protocols get the same
-// required-headers, rate-limit, auth and chaos behaviour - only the error *shape* differs.
+// Shared middleware stack for every mock protocol surface: /v1 REST, SOAP, WebSocket upgrades, SSE,
+// GraphQL, OData, the mock LLM, MCP, A2A and the S3 API. One place defines the order, so all
+// protocols get the same required-headers, rate-limit, auth and chaos behaviour - only the error
+// *shape* differs.
 //
 //   errorFormat -> [protocol body parser] -> required headers -> rate limit -> auth -> chaos
 //
