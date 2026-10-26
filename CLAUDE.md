@@ -162,7 +162,8 @@ Leor also runs a Fly.io copy by hand (`fly deploy`), not from CI; see `docs/deci
 applies**, in the same PR. The help text once drifted for weeks because nothing listed these.
 
 - **Settings:** `DEFS` in `src/config/settings.js`, `.env.example`, and the README env table (enforced by docs-consistency).
-- **README:** features table, route map, the feature's own section, troubleshooting, Postman section (request count).
+- **README:** features table, route map, the feature's own section, troubleshooting, Postman section (the request
+  count is enforced by docs-consistency), and the Development tree when files or folders are added.
 - **Dashboard:** the feature's tab or card, `PAGE_HELP`, page subtitles, About & Help (what it is, quick starts,
   reserved paths, headers cheat sheet).
 - **`src/public/guides.js`:** every affected `?` guide.
