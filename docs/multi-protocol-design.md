@@ -1,6 +1,8 @@
 # Multi-protocol support — design
 
-Status: **all six steps merged to master** (2026-10-07). OData v2 not built yet.
+Status: **all six steps merged to master** (2026-10-07). OData v2 not built yet. The mock LLM, MCP server, A2A
+agent and S3 API came later and follow the same design; see the README and `CLAUDE.md`. Where this record and
+the code differ, the code and `CLAUDE.md` win (this document records the plan; the notes below say where it changed).
 Date: 2026-10-07
 
 ## Goal
@@ -83,7 +85,8 @@ resolved base URL) and `renderer.js`.
   `UpdateEmployee`, `DeleteEmployee`; same for products.
 - Version detection: `text/xml` + `SOAPAction` (1.1) vs `application/soap+xml; action=` (1.2).
   Mismatched or missing action → fault (a common integration bug).
-- Hand-rolled with `fast-xml-parser` (not `node-soap`) so chaos can emit broken XML deliberately.
+- Hand-rolled (not `node-soap`) on `saxes` with a tiny in-house DOM (`src/util/xml.js`), so chaos can emit broken
+  XML deliberately. (The plan said `fast-xml-parser`; see Implementation notes.)
 - Auth: the same 7 HTTP modes, plus `SOAP_WSSE=off|optional|required` for a WS-Security
   UsernameToken (PasswordText and PasswordDigest). Not an 8th auth mode, so the Newman matrix and
   guide tests stay at 7.
@@ -163,7 +166,8 @@ The existing OpenAPI code moves into `adapters/openapi` with no behaviour change
 - Sample envelopes from XSD (enumerations, patterns via the existing generator, `minOccurs`,
   `nillable`, `choice`).
 - Validate: status (1.1 faults = 500), content type per version, envelope structure, fault
-  detection, body against XSD via `xmllint-wasm` (libxml2 in WASM — no native build).
+  detection, body against XSD with an in-house XSD 1.0 subset validator
+  (`src/services/tester/adapters/wsdl/xsd.js`; the plan said `xmllint-wasm`).
 - Lint: unresolved imports, rpc vs document mismatch, missing `soapAction`, placeholder addresses,
   types referenced but undefined.
 - Negative tests: no auth → 401/fault, schema-invalid body → Client/Sender fault, unknown
@@ -173,7 +177,8 @@ The existing OpenAPI code moves into `adapters/openapi` with no behaviour change
 ### WebSocket adapter (WebSocket exposed by the platform)
 - Contract optional: AsyncAPI 2.x/3.0 (channels, messages, JSON Schema payloads → Ajv), or a
   hand-written **scripted** scenario.
-- Server-held connections (`ws` client — needed for custom upgrade headers); the dashboard sends via
+- Server-held connections (the in-house client in `src/util/websocket.js`, which can send custom upgrade
+  headers; the plan said the `ws` package); the dashboard sends via
   `POST /admin/api/tester/ws/<session>/send` and receives frames over SSE.
 - Auth profiles: upgrade header (reusing Bearer/API key/Basic/OAuth client-credentials), query
   token, token in `Sec-WebSocket-Protocol`, or first-message auth template.
@@ -191,7 +196,7 @@ The existing OpenAPI code moves into `adapters/openapi` with no behaviour change
   pane pretty-prints XML, shows `SOAPAction`/SOAP version, GraphQL `operationName`, OData system
   query options.
 - **Settings** (DEFS + `.env.example` + README env table): one `<PROTOCOL>_ENABLED` flag per protocol
-  (`SOAP_ENABLED`, …), `SOAP_WSSE`, `SOAP_ACTION_CHECK`, `SSE_TICK_INTERVAL_MS`, `SSE_HEARTBEAT_MS`, `SSE_REPLAY_BUFFER`,
+  (`SOAP_ENABLED`, …), `SOAP_WSSE`, `SOAP_ACTION_CHECK`, `SSE_TICK_INTERVAL_MS`, `SSE_HEARTBEAT_SECONDS`, `SSE_REPLAY_BUFFER`,
   `GRAPHQL_INTROSPECTION`, `GRAPHQL_MAX_DEPTH`, `ODATA_MAX_PAGE_SIZE`, `WS_MAX_MESSAGE_KB`.
 - **Contracts list:** `/health` and the Overview page list every live contract URL. The data and
   admin OpenAPI specs stay separate and non-overlapping.
@@ -199,7 +204,8 @@ The existing OpenAPI code moves into `adapters/openapi` with no behaviour change
   request, enable toggle), each with a `?` guide whose curls run in all 7 auth modes
   (`test/guides.test.js`). Tester gains the contract kind selector and a WebSocket session view.
 - **Postman:** a folder per protocol in `scripts/build-postman.js`.
-- **Dependencies** (pure JS / WASM): `fast-xml-parser`, `graphql`, `xmllint-wasm`, `ws`.
+- **Dependencies:** as built, only `saxes` (XML) and `graphql` were added. The planned `fast-xml-parser`,
+  `xmllint-wasm` and `ws` were replaced by in-house code (XML DOM, XSD validator, RFC 6455 WebSocket).
 - **Vendor neutrality:** no iPaaS product names in UI or docs.
 
 ## Delivery plan
@@ -227,7 +233,8 @@ Each step is its own branch, green CI before merge.
 ## Implementation notes
 
 - **XML parsing:** `saxes` (already in the lockfile via `exceljs`, now a direct dependency) behind a
-  tiny DOM in `src/protocols/soap/xml.js`. DOCTYPE is rejected, so no entity expansion or XXE.
+  tiny DOM in `src/util/xml.js` (shared by SOAP, OData `$metadata`, the WSDL tester and the S3 API). DOCTYPE is rejected, so no
+  entity expansion or XXE.
 - **One field table per entity** (`src/protocols/soap/model.js`) generates the XSD, the XML output and
   the XML input parsing, so the three cannot drift. The generated XSD was checked with libxml2: the
   WSDL schemas compile and sample responses validate.
