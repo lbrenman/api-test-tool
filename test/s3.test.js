@@ -12,7 +12,7 @@ const {
   GetBucketVersioningCommand,
 } = require('@aws-sdk/client-s3');
 const { getSignedUrl } = require('@aws-sdk/s3-request-presigner');
-const { listen } = require('./helpers');
+const { listen, waitFor } = require('./helpers');
 const { verifyRequest, S3BodyStream, presignUrl } = require('../src/protocols/s3/sigv4');
 
 const BUCKET = 'files';
@@ -315,9 +315,7 @@ test('shared stack: chaos and required headers answer in S3 XML; the inspector t
     await t.ctx.settings.set('requiredHeaders', []);
   }
   await s3.send(new HeadBucketCommand({ Bucket: BUCKET }));
-  await new Promise((r) => setTimeout(r, 50));
-  const recent = await t.ctx.inspector.list(20);
-  assert.ok(recent.some((e) => e.kind === 's3'), 'an inspector entry tagged s3');
+  assert.ok(await waitFor(async () => (await t.ctx.inspector.list(20)).some((e) => e.kind === 's3')), 'an inspector entry tagged s3');
 });
 
 test('the API can be renamed, re-keyed and switched off from the settings', async () => {
