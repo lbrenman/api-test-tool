@@ -110,7 +110,8 @@ Leor also runs a Fly.io copy by hand (`fly deploy`), not from CI; see `docs/deci
   (MCP tool errors with `isError`, A2A task states, GraphQL field errors) stay in the protocol's own result shape.
 - **Data:** `src/db/repo.js` is one generic document table on SQLite or Postgres. Protocols read and write through
   `ctx.resources`, which emits `ctx.events` `'change'` (feeds `/ws/changes`, `/sse/changes`, GraphQL subscriptions,
-  MCP resource updates and webhooks). The file routes and the S3 API emit `'file'`. No protocol owns data.
+  MCP resource updates and webhooks). The file service (`src/services/files.js`, used by every file protocol
+including the S3 API) emits `'file'`. No protocol owns data.
 - **Settings:** each setting is one row in `DEFS` in `src/config/settings.js`. Effective value = dashboard
   override (in the DB), else env var, else default. Settings needing a restart are read-only in the dashboard.
 - **Protocols:** `src/protocols/{soap,ws,sse,graphql,odata,s3,llm,mcp,a2a}/`, each with `router.js`, the error
