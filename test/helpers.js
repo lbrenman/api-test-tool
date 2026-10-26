@@ -74,4 +74,15 @@ async function listen(env = {}, opts = {}) {
   };
 }
 
-module.exports = { makeApp, listen };
+// Poll until fn() returns a truthy value (or timeoutMs passes) and return it. For checks on things
+// written asynchronously, e.g. inspector records, which land later on Postgres than on SQLite.
+async function waitFor(fn, { timeoutMs = 5000, everyMs = 50 } = {}) {
+  const until = Date.now() + timeoutMs;
+  for (;;) {
+    const v = await fn();
+    if (v || Date.now() >= until) return v;
+    await new Promise((r) => setTimeout(r, everyMs));
+  }
+}
+
+module.exports = { makeApp, listen, waitFor };

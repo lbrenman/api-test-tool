@@ -151,6 +151,10 @@ Leor also runs a Fly.io copy by hand (`fly deploy`), not from CI; see `docs/deci
   Node's global `fetch`. GraphQL uses the reference `graphql` package. A new dependency needs a reason in the PR.
 - The Postman collection is **generated**: edit `scripts/build-postman.js`, run `npm run postman:build`, commit both.
 - One concern per branch, short topic names (`feat/…`, `fix/…`, `ci/…`, `docs/…`). Imperative commit subjects.
+- Tests: never sleep a fixed time before reading something written asynchronously (inspector records, webhook
+  deliveries, events). Poll with `waitFor(fn)` from `test/helpers.js`, and match the exact record (e.g. by
+  `X-Request-Id`), not "the newest one". Postgres writes land later than SQLite's, so a fixed sleep that passes
+  in `npm test` can flake in `npm test (postgres + s3)`.
 
 ## Checklist: what to update when a feature changes
 

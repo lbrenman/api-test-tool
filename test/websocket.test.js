@@ -4,7 +4,7 @@
 const { test, before, after } = require('node:test');
 const assert = require('node:assert/strict');
 const request = require('supertest');
-const { listen } = require('./helpers');
+const { listen, waitFor } = require('./helpers');
 const { connect, encodeFrame, OP } = require('../src/util/websocket');
 
 let t;
@@ -140,12 +140,17 @@ test('the upgrade goes through auth, chaos and the inspector', async () => {
   const c = await open('/ws/echo', { headers: { 'X-Request-Id': 'ws-inspect-1' } });
   c.conn.close();
   await c.closed;
-  await new Promise((r) => setTimeout(r, 100));
-  const captures = (await api().get('/admin/api/inspector').expect(200)).body;
-  const items = Array.isArray(captures) ? captures : captures.items || captures.captures || [];
-  const hit = items.find((x) => x.path === '/ws/echo' && x.kind === 'ws');
+  // Find this upgrade's own record by its request id, and wait for it: on Postgres the write can land
+  // after the close, and the newest record may still be one of the 401 upgrades above (issue #9).
+  const hit = await waitFor(async () => (await t.ctx.repo.list('inspector', { order: 'desc', limit: 50 }))
+    .find((x) => x.requestId === 'ws-inspect-1' && x.response?.status != null));
   assert.ok(hit, 'upgrade recorded');
-  assert.equal(hit.status ?? hit.response?.status, 101);
+  assert.equal(hit.path, '/ws/echo');
+  assert.equal(hit.kind, 'ws');
+  assert.equal(hit.response?.status, 101);
+  const listed = (await api().get('/admin/api/inspector').expect(200)).body;
+  const items = Array.isArray(listed) ? listed : listed.items || listed.captures || [];
+  assert.ok(items.some((x) => x.id === hit.id && x.status === 101), 'upgrade listed by the admin API');
 });
 
 test('limits: message size (1009), invalid UTF-8 (1007), idle timeout (1001), disabled', async () => {

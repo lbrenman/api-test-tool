@@ -2,7 +2,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const request = require('supertest');
-const { makeApp } = require('./helpers');
+const { makeApp, waitFor } = require('./helpers');
 
 test('catch-all captures unknown paths with the actual path, auth and body', async () => {
   const t = await makeApp({ SEED_SAMPLE_FILES: 'false', INSPECTOR_RETENTION: '5' });
@@ -45,8 +45,8 @@ test('catch-all captures unknown paths with the actual path, auth and body', asy
     // back on: /v1 traffic is captured
     await t.ctx.settings.set('inspectorLogAll', true);
     await request(t.app).get('/v1/employees/1').expect(200);
-    await new Promise((r) => setTimeout(r, 50));
-    const v1 = (await request(t.app).get('/admin/api/inspector')).body.find((x) => x.path === '/v1/employees/1');
+    const v1 = await waitFor(async () => (await request(t.app).get('/admin/api/inspector')).body.find((x) => x.path === '/v1/employees/1' && x.status != null));
+    assert.ok(v1, '/v1 request recorded');
     assert.equal(v1.kind, 'v1');
     assert.equal(v1.status, 200);
   } finally { await t.close(); }
