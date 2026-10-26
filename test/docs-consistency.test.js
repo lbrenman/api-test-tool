@@ -3,7 +3,7 @@
 //   - every setting in DEFS is documented in .env.example and the README env table
 //   - every protocol that /health reports is described in the dashboard help, has an Inspector source,
 //     a row in the help page's reserved-paths table and a README section
-// When one of these fails, update the docs named in the message (see the project instructions' checklist).
+// When one of these fails, update the docs named in the message (see the checklist in CLAUDE.md).
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
