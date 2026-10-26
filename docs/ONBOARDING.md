@@ -157,8 +157,8 @@ all merged, none open. I did not see the issues list; check it on GitHub before 
 | # | Finding | Evidence | Size |
 |---|---|---|---|
 | A | ~~No `CLAUDE.md`; contribution checklist lives in Leor's private project instructions~~ Done: `CLAUDE.md` | §6 | — |
-| B | README "Development" tree is stale: omits `src/protocols/*`, `src/util/`, tester `adapters/`, `routes/appApi`, `services/webhooks`, `docs/`, `facade/`, and the 3 storage CI jobs | README L1259–1286 vs tree | S |
-| C | README says Postman collection has 196 requests; generated collection has 198 | README L1155 vs collection | XS (could add a docs-consistency assertion so it can't drift again) |
+| B | ~~README "Development" tree is stale~~ Done (#7) | README | — |
+| C | ~~README says Postman collection has 196 requests~~ Done (#7), now checked by docs-consistency | README | — |
 | D | Design doc drift: names `fast-xml-parser`, `xmllint-wasm`, `ws` as deps (none in package.json), `src/protocols/soap/xml.js` (actual `src/util/xml.js`), `SSE_HEARTBEAT_MS` (actual `SSE_HEARTBEAT_SECONDS`), protocolStack header comment still says "SOAP, OData… later" | grep | XS |
 | E | No lint/format tooling despite eslint-disable comments | package.json | S, but a style decision for Leor |
 | F | OData v2 (`d.results`, `__count`, `__next`) not implemented; the design kept envelope code separate for it | README L787, design doc | M–L, only if someone needs v2 |

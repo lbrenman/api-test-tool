@@ -3,6 +3,7 @@
 //   - every setting in DEFS is documented in .env.example and the README env table
 //   - every protocol that /health reports is described in the dashboard help, has an Inspector source,
 //     a row in the help page's reserved-paths table and a README section
+//   - the README's Postman request count matches the generated collection
 // When one of these fails, update the docs named in the message (see the checklist in CLAUDE.md).
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
@@ -67,4 +68,13 @@ test('every protocol in /health is described in the help, the Inspector filter, 
   for (const name of ['SOAP', 'WebSocket', 'SSE', 'GraphQL', 'OData', 'LLM', 'MCP', 'A2A', 'S3']) {
     assert.ok(inspectorHelp.includes(name), `PAGE_HELP.inspector should mention ${name}`);
   }
+});
+
+test('the README states the Postman collection\'s real request count', () => {
+  const collection = JSON.parse(read('postman/API-Test-Tool.postman_collection.json'));
+  let n = 0;
+  (function walk(items) { for (const i of items) { if (i.item) walk(i.item); else n++; } })(collection.item);
+  const m = /API-Test-Tool\.postman_collection\.json` has (\d+) requests/.exec(read('README.md'));
+  assert.ok(m, 'README Postman section should say "…postman_collection.json` has N requests"');
+  assert.equal(Number(m[1]), n, `README says ${m[1]} Postman requests; the collection has ${n} (update the README's Postman section)`);
 });
