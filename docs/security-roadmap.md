@@ -1,7 +1,9 @@
-# API security roadmap (proposed)
+# API security roadmap
 
-Status: **proposal**, tracked in issue #13. Nothing here is built yet. Once Arun and Leor agree on it, each step
-gets its own issue and PR, and `docs/decisions.md` is updated as steps land (step 3 reverses the "mTLS out of scope" line).
+Status, tracked in issue #13: **steps 1 (first slice: profiles), 4a, 2 and 3 are built** (PR #14), each with dashboard
+UI, `?` guides, unit tests and Newman requests. Step 4b (SPIFFE) is parked: `spiffe://` URI SANs already work in lab CA
+certificates and `tls_client_auth`. The rest of step 1 (anything beyond per-request settings) is not started.
+`docs/decisions.md` records how each step deviates from the plan below, which is kept as the design record.
 
 ## Who this is for, and how steps are ranked
 
