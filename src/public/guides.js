@@ -637,6 +637,26 @@
           ['private_key_jwt: sign an RS256 assertion with your key.pem and get a token', assertionScript('RS256')],
         ],
       },
+      'auth.cimd': {
+        title: 'Client ID metadata documents (CIMD)',
+        purpose: 'A client identifies itself with an https URL as its `client_id`; the server fetches the JSON metadata at that URL (name, redirect URIs, auth method) instead of a registration step. This is how newer MCP clients connect (MCP authorization 2025-11-25). Discovery says `client_id_metadata_document_supported: true`.',
+        steps: [
+          'Use a hosted document\'s URL (for example `demo.json`) as the client id in your platform\'s OAuth or MCP connection, with one of its redirect URIs. "Try sign-in" opens the login page as that client.',
+          'Or host your own document anywhere on https: its `client_id` must be exactly its own URL, `token_endpoint_auth_method` is `none` (public, PKCE) or `private_key_jwt` (with `jwks` or `jwks_uri`), never a secret.',
+          'To prove the client really uses CIMD, set Dynamic client registration to `off`: a client that tries to register gets a 404, and the URL client ids it uses appear under "URL client_ids seen" with any error.',
+          'Fetched documents are cached for their Cache-Control max-age (5 minutes by default, at most an hour); "Forget cached documents" reloads them. Hosted documents apply at once.',
+          'The server only fetches https URLs on public addresses; `OAUTH_FETCH_PRIVATE` allows http and private hosts for a lab network.',
+          ...pw,
+        ],
+        curls: [
+          ['The hosted demo document', plain('GET', '/oauth/client-metadata/demo.json')],
+          ['Discovery says CIMD is supported', plain('GET', '/.well-known/oauth-authorization-server')],
+          ['Sign-in page for the demo document (open in a browser)', `${C.root}/oauth/authorize?response_type=code&client_id=${encodeURIComponent(`${C.root}/oauth/client-metadata/demo.json`)}&redirect_uri=${encodeURIComponent('https://oauth.pstmn.io/v1/callback')}&scope=read&state=xyz&code_challenge=CHALLENGE&code_challenge_method=S256`],
+          ['Exchange the code (public client: client_id and PKCE verifier, no secret)', `curl -s -d grant_type=authorization_code -d code=CODE -d redirect_uri=https://oauth.pstmn.io/v1/callback -d code_verifier=VERIFIER --data-urlencode ${q(`client_id=${C.root}/oauth/client-metadata/demo.json`)} ${q(C.ctx.tokenUrl)}`],
+          ['Host your own document on this server', admin('PUT', '/oauth/client-metadata/my-agent', { json: { client_name: 'My agent', redirect_uris: ['http://127.0.0.1:33418/callback'], grant_types: ['authorization_code', 'refresh_token'], token_endpoint_auth_method: 'none', scope: 'read' } })],
+          ['Turn dynamic registration off (CIMD only)', admin('PUT', '/settings', { json: { oauthRegistration: 'off' } })],
+        ],
+      },
       'auth.users': {
         title: 'OAuth users',
         purpose: 'The users who can sign in on the authorization_code (PKCE) login page, and the roles and attributes their tokens carry. Users come from OAUTH_USERS (env) and from this card (stored in the database).',

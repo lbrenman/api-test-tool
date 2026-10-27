@@ -451,6 +451,22 @@ async function generateOpenApi(ctx, req) {
     },
   };
 
+  // Client ID metadata documents the server hosts for demos (a URL client_id, CIMD), when OAUTH_CIMD is on.
+  if (settings.get('oauthCimd')) {
+    paths['/oauth/client-metadata/{file}'] = {
+      get: {
+        tags: ['OAuth'], operationId: 'oauthClientMetadataDocument', security: [],
+        summary: 'A client ID metadata document hosted by this server (use its URL as client_id)',
+        description: 'Any https URL serving client metadata can be a client_id (the server fetches it); these are the documents managed on the dashboard\'s Auth page, such as demo.json. Each one\'s client_id is its own URL.',
+        parameters: [{ name: 'file', in: 'path', required: true, schema: { type: 'string', pattern: '^[a-z0-9][a-z0-9-]{0,39}\\.json$' }, example: 'demo.json' }],
+        responses: {
+          200: { description: 'Client metadata', content: { 'application/json': { schema: { allOf: [S('ClientMetadata'), { type: 'object', required: ['client_id', 'redirect_uris'], properties: { client_id: { type: 'string', format: 'uri', description: 'The document\'s own URL' } } }] } } } },
+          404: { description: 'No such document', content: { 'application/json': { schema: S('OAuthError') } } },
+        },
+      },
+    };
+  }
+
   // Dynamic client registration (RFC 7591) and read/delete management (RFC 7592), when OAUTH_REGISTRATION is not off.
   if (settings.get('oauthRegistration') !== 'off') {
     const oauthErr = (d) => ({ description: d, content: { 'application/json': { schema: S('OAuthError') } } });

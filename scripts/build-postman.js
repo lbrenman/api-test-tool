@@ -185,6 +185,37 @@ const assertions = folder('Client assertions (RFC 7523)', [
   req('Delete the client', 'DELETE', '{{rootUrl}}/admin/api/oauth/clients/postman-pkj', { pre: adminOnly, tests: [status(204)] }),
 ], 'Client authentication with signed JWTs instead of a secret on the wire: client_secret_jwt (HS256 over the secret) and private_key_jwt (the client\'s key pair).');
 
+// Client ID metadata documents (CIMD): the hosted demo document's URL is the client_id; no registration step.
+const noRedirects = (item) => { item.protocolProfileBehavior = { followRedirects: false }; return item; };
+const cimdId = "{{rootUrl}}/oauth/client-metadata/demo.json";
+const cimdFolder = folder('Client ID metadata documents (CIMD)', [
+  req('Discovery says CIMD is supported', 'GET', '/.well-known/oauth-authorization-server', {
+    pre: ["pm.environment.set('rootUrl', pm.environment.get('baseUrl').replace(/\\/p\\/[^/]+\\/?$/, ''));"],
+    tests: [status(200), "pm.test('client_id_metadata_document_supported', () => pm.expect(pm.response.json().client_id_metadata_document_supported).to.eql(true));"],
+  }),
+  req('The hosted demo document', 'GET', `${cimdId}`, { tests: [status(200), "const d = pm.response.json();", "pm.test('client_id is its own URL', () => pm.expect(d.client_id).to.eql(pm.environment.get('rootUrl') + '/oauth/client-metadata/demo.json'));", "pm.test('public client', () => pm.expect(d.token_endpoint_auth_method).to.eql('none'));", "pm.environment.set('cimdId', d.client_id); pm.environment.set('cimdRedirect', d.redirect_uris[0]);"] }),
+  req('Sign-in page for the URL client_id', 'GET', '/oauth/authorize?response_type=code&client_id={{cimdIdEnc}}&redirect_uri={{cimdRedirectEnc}}&scope=read', {
+    pre: ["pm.environment.set('cimdIdEnc', encodeURIComponent(pm.environment.get('cimdId'))); pm.environment.set('cimdRedirectEnc', encodeURIComponent(pm.environment.get('cimdRedirect')));"],
+    tests: [status(200), "pm.test('names the document host', () => pm.expect(pm.response.text()).to.include('(CIMD)'));"],
+  }),
+  noRedirects(req('Sign in and allow (PKCE S256) → 302 with a code', 'POST', '/oauth/authorize', {
+    body: { mode: 'urlencoded', urlencoded: [['response_type', 'code'], ['client_id', '{{cimdId}}'], ['redirect_uri', '{{cimdRedirect}}'], ['scope', 'read'], ['state', 'cimd'], ['code_challenge', '{{cimdChallenge}}'], ['code_challenge_method', 'S256'], ['username', 'demo'], ['password', 'demo'], ['decision', 'allow']].map(([key, value]) => ({ key, value })) },
+    pre: [
+      "const CJ = require('crypto-js');",
+      "const verifier = CJ.lib.WordArray.random(32).toString(CJ.enc.Hex);",
+      "pm.environment.set('cimdVerifier', verifier);",
+      "pm.environment.set('cimdChallenge', CJ.enc.Base64.stringify(CJ.SHA256(verifier)).replace(/=+$/, '').replace(/\\+/g, '-').replace(/\\//g, '_'));",
+    ],
+    tests: [status(302), "const loc = pm.response.headers.get('Location');", "pm.test('code in the redirect', () => pm.expect(loc).to.match(/[?&]code=/));", "pm.environment.set('cimdCode', decodeURIComponent(/[?&]code=([^&]+)/.exec(loc)[1]));"],
+  })),
+  req('Exchange the code: client_id is the URL, no secret', 'POST', '/oauth/token', {
+    body: { mode: 'urlencoded', urlencoded: [['grant_type', 'authorization_code'], ['code', '{{cimdCode}}'], ['redirect_uri', '{{cimdRedirect}}'], ['client_id', '{{cimdId}}'], ['code_verifier', '{{cimdVerifier}}']].map(([key, value]) => ({ key, value })) },
+    tests: [status(200), "const t = pm.response.json();", "pm.test('token for the URL client', () => pm.expect(JSON.parse(atob(t.access_token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/'))).client_id).to.eql(pm.environment.get('cimdId')));", "pm.test('refresh token', () => pm.expect(t.refresh_token).to.be.a('string'));"],
+  }),
+  req('A redirect URI not in the document → 400', 'GET', '/oauth/authorize?response_type=code&client_id={{cimdIdEnc}}&redirect_uri=https%3A%2F%2Fevil.example%2Fcb', { tests: [status(400)] }),
+  req('A client_id URL on a private address → 400', 'GET', '/oauth/authorize?response_type=code&client_id=https%3A%2F%2F127.0.0.1%2Fclient.json&redirect_uri=https%3A%2F%2Fx.example%2Fcb', { tests: [status(400), "pm.test('names the client metadata document', () => pm.expect(pm.response.text()).to.include('Client metadata document'));"] }),
+], 'An https URL as client_id: the server fetches the client\'s metadata there instead of a registration (MCP authorization 2025-11-25). Uses the demo document this server hosts.');
+
 const authFolder = folder('Auth mode', [
   req('Without credentials', 'GET', '/v1/employees/1', { headers: { 'X-Skip-Auth': '1' }, tests: ["const m = pm.environment.get('authMode');", "pm.test('401 unless auth mode is none', () => pm.response.to.have.status(m === 'none' ? 200 : 401));", "if (m !== 'none') pm.test('WWW-Authenticate', () => pm.expect(pm.response.headers.get('WWW-Authenticate')).to.be.a('string'));"] }),
   req('With credentials', 'GET', '/v1/employees/1', { tests: [status(200)] }),
@@ -507,7 +538,7 @@ const collection = {
     { listen: 'test', script: { type: 'text/javascript', exec: collectionTest } },
   ],
   variable: [{ key: 'cachedToken', value: '' }, { key: 'cachedTokenExp', value: '0' }],
-  item: [platform, oauth, assertions, authFolder, crud, query, pagination, chaos, files, soapFolder, sseFolder, llmFolder, mcpFolder, a2aFolder, graphqlFolder, odataFolder, s3Folder, misc],
+  item: [platform, oauth, assertions, cimdFolder, authFolder, crud, query, pagination, chaos, files, soapFolder, sseFolder, llmFolder, mcpFolder, a2aFolder, graphqlFolder, odataFolder, s3Folder, misc],
 };
 
 const environment = {

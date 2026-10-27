@@ -53,6 +53,8 @@ class OAuthService {
     this.registrations = new Map(); // client IP -> timestamps of its open registrations in the last hour
     this.assertionIds = new Map(); // "<client>:<jti>" of client assertions already used -> their exp (ms), against replay
     this.jwksCache = new Map(); // jwks_uri -> { at, jwks }
+    const { CimdService } = require('./cimd'); // required here: cimd.js uses this module's exports
+    this.cimd = new CimdService(ctx, this);
   }
 
   async init() {
@@ -97,7 +99,11 @@ class OAuthService {
     return [...env, ...extra];
   }
 
-  async client(id) { return (await this.clients()).find((c) => c.clientId === id) || null; }
+  /** A client by id. A URL client_id is a client ID metadata document (CIMD), resolved with the request's server root. */
+  async client(id, req) {
+    if (req && /^https?:\/\//i.test(String(id || ''))) return this.cimd.resolve(id, req);
+    return (await this.clients()).find((c) => c.clientId === id) || null;
+  }
 
   async addClient({ clientId, secret, scopes, redirectUris, jwks, jwksUri, tokenEndpointAuthMethod }) {
     if (!clientId || !/^[A-Za-z0-9._-]{3,64}$/.test(clientId)) throw new OAuthError('invalid_request', 'clientId must be 3-64 chars [A-Za-z0-9._-]');
@@ -598,7 +604,7 @@ class OAuthService {
       secret = req.body?.client_secret;
     }
     if (!id) throw new OAuthError('invalid_client', 'Client authentication required', 401);
-    const client = await this.client(id);
+    const client = await this.client(id, req);
     if (!client) throw new OAuthError('invalid_client', 'Unknown client', 401);
     if (JWT_METHODS.includes(client.tokenEndpointAuthMethod)) {
       throw new OAuthError('invalid_client', `This client authenticates with a signed JWT (${client.tokenEndpointAuthMethod}): send client_assertion_type=${JWT_BEARER} and client_assertion`, 401);
@@ -633,7 +639,7 @@ class OAuthService {
     const id = claims.sub;
     if (!id || claims.iss !== id) throw fail('The client_assertion\'s iss and sub must both be the client_id');
     if (b.client_id && b.client_id !== id) throw fail('client_id does not match the client_assertion\'s sub');
-    const client = await this.client(id);
+    const client = await this.client(id, req);
     if (!client) throw fail('Unknown client');
     if (client.public) throw fail('A public client cannot authenticate with a client_assertion');
     const symmetric = SECRET_ALGS.includes(header.alg);

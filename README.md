@@ -215,6 +215,7 @@ Settings marked **restart** can only be set through the environment.
 | `OAUTH_REGISTRATION_GRANTS` | `authorization_code refresh_token client_credentials` | Grants an **open** registration may ask for. With `client_credentials` (the default) machine clients can register themselves, and anyone who finds `/oauth/register` can mint tokens without a user signing in; set `authorization_code refresh_token` to lock that down. `token` mode allows every grant |
 | `OAUTH_REGISTRATION_RATE` | `20` | Open registrations per client IP per hour (0 = no limit); 429 + `Retry-After` beyond it |
 | `OAUTH_REGISTRATION_TTL_DAYS` | `30` | Registered clients that obtain no token for this many days are deleted (0 = keep forever) |
+| `OAUTH_CIMD` | `true` | Accept client ID metadata documents (CIMD): an https URL as `client_id`, whose JSON metadata the server fetches instead of a registration (MCP clients). The lab hosts editable documents at `/oauth/client-metadata/<name>.json`. With `OAUTH_REGISTRATION=off` a client has to use CIMD |
 | `OAUTH_FETCH_PRIVATE` | `false` | Let the OAuth server fetch client documents (a client's `jwks_uri`, CIMD client metadata) from private, loopback and link-local addresses and over plain http. Keep it off on a public server |
 | `ERROR_RATE` | `0` | 0–100 % |
 | `ERROR_TYPES` | `500,503` | See [Chaos](#chaos-errors-and-latency) |
@@ -1153,7 +1154,7 @@ the facade spec in the **API tester** and pressing **Run all** contract-tests yo
 
 ## Postman and Newman
 
-- `postman/API-Test-Tool.postman_collection.json` has 209 requests with test scripts, covering:
+- `postman/API-Test-Tool.postman_collection.json` has 216 requests with test scripts, covering:
   - health, OpenAPI and discovery;
   - OAuth: token, introspect, revoke, error cases, and dynamic client registration (register, token for the new client, RFC 7592 read and delete, invalid metadata);
   - each auth mode (with and without credentials);

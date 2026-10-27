@@ -206,6 +206,17 @@ module.exports = function adminRouter(ctx, { adminAuth, filesApi }) {
     if (!out) throw new HttpError(404, `No OAuth client ${b.clientId}`);
     res.json({ ...out, tokenEndpoint: `${baseUrl.root(req)}/oauth/token` });
   });
+  // Client ID metadata documents (CIMD): the ones this server hosts (editable), and URL client_ids seen recently.
+  r.get('/oauth/client-metadata', async (req, res) => res.json({
+    enabled: settings.get('oauthCimd'), registration: settings.get('oauthRegistration'),
+    documents: await oauth.cimd.hostedDocs(baseUrl.root(req)), seen: oauth.cimd.seenList(),
+  }));
+  r.put('/oauth/client-metadata/:name', async (req, res) => res.json(await oauth.cimd.saveDoc(baseUrl.root(req), req.params.name, req.body)));
+  r.delete('/oauth/client-metadata/:name', async (req, res) => {
+    if (!(await oauth.cimd.removeDoc(baseUrl.root(req), req.params.name))) throw new HttpError(404, `No stored metadata document ${req.params.name} (built-in documents cannot be deleted)`);
+    res.status(204).end();
+  });
+  r.delete('/oauth/client-metadata-cache', (req, res) => { oauth.cimd.clearCache(); res.status(204).end(); });
   // Bulk delete of dynamically registered clients (?unused=true: only those that never obtained a token).
   r.delete('/oauth/registered', async (req, res) => res.json({ deleted: await oauth.removeRegisteredClients({ unusedOnly: req.query.unused === 'true' }) }));
   r.delete('/oauth/clients/:id', async (req, res) => {

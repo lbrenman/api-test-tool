@@ -793,6 +793,48 @@
           }) }, 'Delete all registered')) : null),
       h('div', { class: 'card' }, titled('Registration settings', 'auth.registration-settings'),
         settingsForm(['oauthRegistration', 'oauthRegistrationToken', 'oauthRegistrationScopes', 'oauthRegistrationGrants', 'oauthRegistrationRate', 'oauthRegistrationTtlDays', 'oauthRegistrationMax'], { onSaved: () => { loadCurlCtx().catch(() => {}); route(); } }))));
+    // ---- client ID metadata documents (CIMD): URL client_ids, hosted documents, what has been seen
+    const cimd = await api('GET', '/oauth/client-metadata');
+    const cimdName = h('input', { type: 'text', placeholder: 'name (becomes <name>.json)' });
+    const cimdJson = h('textarea', { rows: 8, class: 'mono', placeholder: '{"client_name": "…", "redirect_uris": ["https://…/callback"], "token_endpoint_auth_method": "none"}' });
+    const loadDoc = (d) => {
+      const { client_id: _id, ...rest } = d.document; // eslint-disable-line no-unused-vars
+      cimdName.value = d.name; cimdJson.value = JSON.stringify(rest, null, 2);
+      cimdName.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    };
+    const signIn = (d) => `${a.oauth.authorizeUrl}?${new URLSearchParams({ response_type: 'code', client_id: d.url, redirect_uri: d.document.redirect_uris?.[0] || '', scope: d.document.scope || 'read', state: 'cimd-demo' })}`;
+    el.append(h('div', { class: 'card stack' }, titled('Client ID metadata documents (CIMD)', 'auth.cimd'),
+      h('div', { class: 'small muted' }, `A client can use an https URL as its client_id; the server fetches the JSON metadata there (name, redirect URIs, auth method) instead of a registration. ${cimd.enabled ? 'Accepted now.' : 'Turned off now: URL client_ids are refused.'} ${cimd.registration === 'off' ? 'Dynamic registration is off, so MCP clients must use CIMD (or a client added below).' : 'Turn dynamic registration off (Registration settings) to prove a client really uses CIMD rather than falling back to registration.'}`),
+      settingsForm(['oauthCimd'], { onSaved: route }),
+      h('h3', null, 'Hosted here'),
+      h('div', { class: 'small muted' }, 'Documents this server serves at /oauth/client-metadata/<name>.json, so a demo needs nothing hosted elsewhere. Use the URL as the client_id in your platform\'s MCP or OAuth connection.'),
+      h('div', { class: 'table-wrap' }, h('table', null, h('thead', null, h('tr', null, ['Name', 'client_id (URL)', 'Auth', 'Redirect URIs', ''].map((x) => h('th', null, x)))),
+        h('tbody', null, cimd.documents.map((d) => h('tr', null,
+          h('td', null, d.name, d.builtIn ? h('div', { class: 'small muted' }, 'built-in') : d.overridesBuiltIn ? h('div', { class: 'small muted' }, 'edited built-in') : null, d.document.client_name ? h('div', { class: 'small muted' }, d.document.client_name) : null),
+          h('td', { class: 'mono small' }, d.url, ' ', h('button', { class: 'small', onclick: () => copy(d.url) }, 'copy')),
+          h('td', null, h('span', { class: 'badge' }, d.document.token_endpoint_auth_method || 'none')),
+          h('td', { class: 'small' }, (d.document.redirect_uris || []).join(' ')),
+          h('td', null, h('div', { class: 'row', style: { flexWrap: 'nowrap' } },
+            d.document.redirect_uris?.length ? h('a', { class: 'btn small', href: signIn(d), target: '_blank', rel: 'noopener', title: 'Open the sign-in page as this client' }, 'Try sign-in') : null,
+            h('button', { class: 'small', onclick: () => loadDoc(d) }, 'Edit'),
+            d.builtIn ? null : h('button', { class: 'small danger', onclick: guard(async () => {
+              if (!confirm(d.overridesBuiltIn ? `Revert ${d.name} to the built-in document?` : `Delete ${d.name}.json? Clients using it stop working.`)) return;
+              await api('DELETE', `/oauth/client-metadata/${encodeURIComponent(d.name)}`); route();
+            }) }, d.overridesBuiltIn ? 'Revert' : 'Delete')))))))),
+      h('div', { class: 'grid cols-2' }, field('Name', cimdName), h('div')), field('Metadata (JSON; client_id is set to the document URL)', cimdJson),
+      h('div', { class: 'row' }, h('button', { class: 'primary', onclick: guard(async () => {
+        let meta;
+        try { meta = JSON.parse(cimdJson.value || '{}'); } catch (e) { throw new Error(`Metadata must be JSON: ${e.message}`); }
+        const d = await api('PUT', `/oauth/client-metadata/${encodeURIComponent(cimdName.value.trim())}`, meta);
+        toast(`Saved ${d.url}`, 'ok'); route();
+      }) }, 'Save document')),
+      h('h3', null, 'URL client_ids seen'),
+      cimd.seen.length ? h('div', { class: 'table-wrap' }, h('table', null, h('thead', null, h('tr', null, ['client_id', 'Name', 'Auth', 'Uses', 'Last used', 'Last fetch', 'Problem'].map((x) => h('th', null, x)))),
+        h('tbody', null, cimd.seen.map((x) => h('tr', null, h('td', { class: 'mono small' }, x.url, x.hostedHere ? h('div', { class: 'small muted' }, 'hosted here') : null), h('td', null, x.clientName || '—'), h('td', null, x.method || '—'),
+          h('td', null, String(x.uses)), h('td', { class: 'small' }, x.lastUsedAt ? fmtDate(x.lastUsedAt) : '—'), h('td', { class: 'small' }, x.fetchedAt ? fmtDate(x.fetchedAt) : '—'),
+          h('td', { class: 'small' }, x.error ? h('span', { style: { color: 'var(--err)' } }, x.error) : '—'))))))
+        : h('div', { class: 'small muted' }, 'None since the server started. A client that uses CIMD shows up here, with the reason when its document is refused.'),
+      h('div', { class: 'row' }, h('button', { class: 'small', onclick: guard(async () => { await api('DELETE', '/oauth/client-metadata-cache'); toast('Fetched documents will be loaded again on next use', 'ok'); }) }, 'Forget cached documents'))));
     el.append(h('div', { class: 'card' }, titled('OAuth clients', 'auth.clients'),
       h('div', { class: 'table-wrap' }, h('table', null, h('thead', null, h('tr', null, ['Client id', 'Secret', 'Scopes', 'Grants', 'Redirect URIs', 'Source', ''].map((x) => h('th', null, x)))),
         h('tbody', null, a.clients.map((c) => h('tr', null, h('td', { class: 'mono' }, c.clientId, c.clientName ? h('div', { class: 'small muted' }, c.clientName) : null), h('td', { class: 'mono' }, c.secret || (c.public ? '(public)' : '—'), c.tokenEndpointAuthMethod && !c.public ? h('div', null, h('span', { class: 'badge' }, c.tokenEndpointAuthMethod)) : null, c.jwks?.keys?.length || c.jwksUri ? h('div', { class: 'small muted' }, c.jwksUri ? 'keys: jwks_uri' : `keys: ${c.jwks.keys.length} in JWKS`) : null), h('td', null, c.scopes.join(' ')),

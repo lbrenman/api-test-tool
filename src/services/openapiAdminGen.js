@@ -159,6 +159,20 @@ async function generateAdminOpenApi(ctx, req) {
     requestBody: body(obj({ clientId: { type: 'string' }, method: { type: 'string', enum: ['private_key_jwt', 'client_secret_jwt'], description: 'Default: the client\'s pinned JWT method, else private_key_jwt when it has a generated key' }, audience: { type: 'string', description: 'Default <server>/oauth/token' }, lifetime: { type: 'integer', minimum: 30, maximum: 3600, default: 300 } }, ['clientId']), { clientId: 'demo-client', method: 'client_secret_jwt' }),
     responses: { ...ok('Assertion', anyObj('method, assertion, clientAssertionType, tokenEndpoint, decoded {header, payload}')), ...BAD, ...AUTHED, ...NF },
   }));
+  add(`${A}/oauth/client-metadata`, 'get', op('Auth', 'listClientMetadata', 'Client ID metadata documents (CIMD): whether URL client_ids are accepted (OAUTH_CIMD), the documents this server hosts at /oauth/client-metadata/<name>.json, and the URL client_ids seen recently (with the last fetch error)', {
+    responses: { ...ok('CIMD state', obj({ enabled: { type: 'boolean' }, registration: { type: 'string' }, documents: { type: 'array', items: obj({ name: { type: 'string' }, builtIn: { type: 'boolean' }, url: { type: 'string', format: 'uri' }, document: { type: 'object', additionalProperties: true } }) }, seen: { type: 'array', items: { type: 'object', additionalProperties: true } } })), ...AUTHED },
+  }));
+  add(`${A}/oauth/client-metadata/{name}`, 'put', op('Auth', 'saveClientMetadata', 'Create or replace a hosted metadata document. Its client_id is always its own URL; token_endpoint_auth_method is none (default) or private_key_jwt (with jwks or jwks_uri). Saving the built-in "demo" stores an edited copy.', {
+    parameters: [pathParam('name', 'Document name (lowercase letters, digits, hyphens); served as <name>.json')],
+    requestBody: body({ type: 'object', additionalProperties: true, description: 'RFC 7591 client metadata: client_name, redirect_uris, grant_types, response_types, token_endpoint_auth_method, scope, jwks / jwks_uri, client_uri, logo_uri' }, { client_name: 'My demo agent', redirect_uris: ['https://oauth.pstmn.io/v1/callback'], grant_types: ['authorization_code', 'refresh_token'], token_endpoint_auth_method: 'none', scope: 'read' }),
+    responses: { ...ok('Saved document', anyObj('name, builtIn, url, document')), ...BAD, ...AUTHED },
+  }));
+  add(`${A}/oauth/client-metadata/{name}`, 'delete', op('Auth', 'deleteClientMetadata', 'Delete a stored hosted document (an edited "demo" reverts to the built-in one)', {
+    parameters: [pathParam('name', 'Document name')], responses: { ...noContent('Deleted'), ...AUTHED, ...NF },
+  }));
+  add(`${A}/oauth/client-metadata-cache`, 'delete', op('Auth', 'clearClientMetadataCache', 'Forget the cached fetched metadata documents, so the next use of each URL client_id fetches it again', {
+    responses: { ...noContent('Cleared'), ...AUTHED },
+  }));
   add(`${A}/oauth/registered`, 'delete', op('Auth', 'deleteRegisteredClients', 'Delete the clients that registered themselves through /oauth/register (all of them, or with unused=true only those that never obtained a token)', {
     parameters: [{ name: 'unused', in: 'query', schema: { type: 'boolean' }, description: 'Only delete registrations that never obtained a token' }],
     responses: { ...ok('How many were deleted', obj({ deleted: { type: 'integer' } })), ...AUTHED },

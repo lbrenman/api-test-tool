@@ -1616,11 +1616,379 @@
       "description": "Client authentication with signed JWTs instead of a secret on the wire: client_secret_jwt (HS256 over the secret) and private_key_jwt (the client's key pair)."
     },
     {
-      "id": "att-0014",
-      "name": "Auth mode",
+      "id": "att-0019",
+      "name": "Client ID metadata documents (CIMD)",
       "item": [
         {
           "id": "att-0012",
+          "name": "Discovery says CIMD is supported",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/.well-known/oauth-authorization-server",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                ".well-known",
+                "oauth-authorization-server"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.environment.set('rootUrl', pm.environment.get('baseUrl').replace(/\\/p\\/[^/]+\\/?$/, ''));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('client_id_metadata_document_supported', () => pm.expect(pm.response.json().client_id_metadata_document_supported).to.eql(true));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "att-0013",
+          "name": "The hosted demo document",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{rootUrl}}/oauth/client-metadata/demo.json",
+              "host": [
+                "{{rootUrl}}/oauth/client-metadata/demo.json"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "const d = pm.response.json();",
+                  "pm.test('client_id is its own URL', () => pm.expect(d.client_id).to.eql(pm.environment.get('rootUrl') + '/oauth/client-metadata/demo.json'));",
+                  "pm.test('public client', () => pm.expect(d.token_endpoint_auth_method).to.eql('none'));",
+                  "pm.environment.set('cimdId', d.client_id); pm.environment.set('cimdRedirect', d.redirect_uris[0]);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "att-0014",
+          "name": "Sign-in page for the URL client_id",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/oauth/authorize?response_type=code&client_id={{cimdIdEnc}}&redirect_uri={{cimdRedirectEnc}}&scope=read",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "oauth",
+                "authorize"
+              ],
+              "query": [
+                {
+                  "key": "response_type",
+                  "value": "code"
+                },
+                {
+                  "key": "client_id",
+                  "value": "{{cimdIdEnc}}"
+                },
+                {
+                  "key": "redirect_uri",
+                  "value": "{{cimdRedirectEnc}}"
+                },
+                {
+                  "key": "scope",
+                  "value": "read"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.environment.set('cimdIdEnc', encodeURIComponent(pm.environment.get('cimdId'))); pm.environment.set('cimdRedirectEnc', encodeURIComponent(pm.environment.get('cimdRedirect')));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('names the document host', () => pm.expect(pm.response.text()).to.include('(CIMD)'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "att-0015",
+          "name": "Sign in and allow (PKCE S256) → 302 with a code",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/oauth/authorize",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "oauth",
+                "authorize"
+              ]
+            },
+            "body": {
+              "mode": "urlencoded",
+              "urlencoded": [
+                {
+                  "key": "response_type",
+                  "value": "code"
+                },
+                {
+                  "key": "client_id",
+                  "value": "{{cimdId}}"
+                },
+                {
+                  "key": "redirect_uri",
+                  "value": "{{cimdRedirect}}"
+                },
+                {
+                  "key": "scope",
+                  "value": "read"
+                },
+                {
+                  "key": "state",
+                  "value": "cimd"
+                },
+                {
+                  "key": "code_challenge",
+                  "value": "{{cimdChallenge}}"
+                },
+                {
+                  "key": "code_challenge_method",
+                  "value": "S256"
+                },
+                {
+                  "key": "username",
+                  "value": "demo"
+                },
+                {
+                  "key": "password",
+                  "value": "demo"
+                },
+                {
+                  "key": "decision",
+                  "value": "allow"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const CJ = require('crypto-js');",
+                  "const verifier = CJ.lib.WordArray.random(32).toString(CJ.enc.Hex);",
+                  "pm.environment.set('cimdVerifier', verifier);",
+                  "pm.environment.set('cimdChallenge', CJ.enc.Base64.stringify(CJ.SHA256(verifier)).replace(/=+$/, '').replace(/\\+/g, '-').replace(/\\//g, '_'));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 302', () => pm.response.to.have.status(302));",
+                  "const loc = pm.response.headers.get('Location');",
+                  "pm.test('code in the redirect', () => pm.expect(loc).to.match(/[?&]code=/));",
+                  "pm.environment.set('cimdCode', decodeURIComponent(/[?&]code=([^&]+)/.exec(loc)[1]));"
+                ]
+              }
+            }
+          ],
+          "protocolProfileBehavior": {
+            "followRedirects": false
+          }
+        },
+        {
+          "id": "att-0016",
+          "name": "Exchange the code: client_id is the URL, no secret",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/oauth/token",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "oauth",
+                "token"
+              ]
+            },
+            "body": {
+              "mode": "urlencoded",
+              "urlencoded": [
+                {
+                  "key": "grant_type",
+                  "value": "authorization_code"
+                },
+                {
+                  "key": "code",
+                  "value": "{{cimdCode}}"
+                },
+                {
+                  "key": "redirect_uri",
+                  "value": "{{cimdRedirect}}"
+                },
+                {
+                  "key": "client_id",
+                  "value": "{{cimdId}}"
+                },
+                {
+                  "key": "code_verifier",
+                  "value": "{{cimdVerifier}}"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "const t = pm.response.json();",
+                  "pm.test('token for the URL client', () => pm.expect(JSON.parse(atob(t.access_token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/'))).client_id).to.eql(pm.environment.get('cimdId')));",
+                  "pm.test('refresh token', () => pm.expect(t.refresh_token).to.be.a('string'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "att-0017",
+          "name": "A redirect URI not in the document → 400",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/oauth/authorize?response_type=code&client_id={{cimdIdEnc}}&redirect_uri=https%3A%2F%2Fevil.example%2Fcb",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "oauth",
+                "authorize"
+              ],
+              "query": [
+                {
+                  "key": "response_type",
+                  "value": "code"
+                },
+                {
+                  "key": "client_id",
+                  "value": "{{cimdIdEnc}}"
+                },
+                {
+                  "key": "redirect_uri",
+                  "value": "https%3A%2F%2Fevil.example%2Fcb"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 400', () => pm.response.to.have.status(400));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "att-0018",
+          "name": "A client_id URL on a private address → 400",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/oauth/authorize?response_type=code&client_id=https%3A%2F%2F127.0.0.1%2Fclient.json&redirect_uri=https%3A%2F%2Fx.example%2Fcb",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "oauth",
+                "authorize"
+              ],
+              "query": [
+                {
+                  "key": "response_type",
+                  "value": "code"
+                },
+                {
+                  "key": "client_id",
+                  "value": "https%3A%2F%2F127.0.0.1%2Fclient.json"
+                },
+                {
+                  "key": "redirect_uri",
+                  "value": "https%3A%2F%2Fx.example%2Fcb"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 400', () => pm.response.to.have.status(400));",
+                  "pm.test('names the client metadata document', () => pm.expect(pm.response.text()).to.include('Client metadata document'));"
+                ]
+              }
+            }
+          ]
+        }
+      ],
+      "description": "An https URL as client_id: the server fetches the client's metadata there instead of a registration (MCP authorization 2025-11-25). Uses the demo document this server hosts."
+    },
+    {
+      "id": "att-001c",
+      "name": "Auth mode",
+      "item": [
+        {
+          "id": "att-001a",
           "name": "Without credentials",
           "request": {
             "method": "GET",
@@ -1657,7 +2025,7 @@
           ]
         },
         {
-          "id": "att-0013",
+          "id": "att-001b",
           "name": "With credentials",
           "request": {
             "method": "GET",
@@ -1690,11 +2058,11 @@
       "description": "The collection pre-request script authenticates /v1 calls according to {{authMode}}."
     },
     {
-      "id": "att-001l",
+      "id": "att-001t",
       "name": "Employees CRUD",
       "item": [
         {
-          "id": "att-0015",
+          "id": "att-001d",
           "name": "Create (201 + Location + ETag)",
           "request": {
             "method": "POST",
@@ -1740,7 +2108,7 @@
           ]
         },
         {
-          "id": "att-0016",
+          "id": "att-001e",
           "name": "Get (ETag)",
           "request": {
             "method": "GET",
@@ -1773,7 +2141,7 @@
           ]
         },
         {
-          "id": "att-0017",
+          "id": "att-001f",
           "name": "Get with If-None-Match → 304",
           "request": {
             "method": "GET",
@@ -1808,7 +2176,7 @@
           ]
         },
         {
-          "id": "att-0018",
+          "id": "att-001g",
           "name": "Patch with stale If-Match → 412",
           "request": {
             "method": "PATCH",
@@ -1853,7 +2221,7 @@
           ]
         },
         {
-          "id": "att-0019",
+          "id": "att-001h",
           "name": "Patch (merge patch, If-Match)",
           "request": {
             "method": "PATCH",
@@ -1897,7 +2265,7 @@
           ]
         },
         {
-          "id": "att-001a",
+          "id": "att-001i",
           "name": "Put (full replace)",
           "request": {
             "method": "PUT",
@@ -1942,7 +2310,7 @@
           ]
         },
         {
-          "id": "att-001b",
+          "id": "att-001j",
           "name": "Create with Idempotency-Key",
           "request": {
             "method": "POST",
@@ -1999,7 +2367,7 @@
           ]
         },
         {
-          "id": "att-001c",
+          "id": "att-001k",
           "name": "Replay same key → original response",
           "request": {
             "method": "POST",
@@ -2048,7 +2416,7 @@
           ]
         },
         {
-          "id": "att-001d",
+          "id": "att-001l",
           "name": "Same key, different body → 409",
           "request": {
             "method": "POST",
@@ -2097,7 +2465,7 @@
           ]
         },
         {
-          "id": "att-001e",
+          "id": "att-001m",
           "name": "Validation → 422",
           "request": {
             "method": "POST",
@@ -2143,7 +2511,7 @@
           ]
         },
         {
-          "id": "att-001f",
+          "id": "att-001n",
           "name": "Malformed JSON → 400",
           "request": {
             "method": "POST",
@@ -2183,7 +2551,7 @@
           ]
         },
         {
-          "id": "att-001g",
+          "id": "att-001o",
           "name": "Delete → 204",
           "request": {
             "method": "DELETE",
@@ -2213,7 +2581,7 @@
           ]
         },
         {
-          "id": "att-001h",
+          "id": "att-001p",
           "name": "Get deleted → 404",
           "request": {
             "method": "GET",
@@ -2245,7 +2613,7 @@
           ]
         },
         {
-          "id": "att-001i",
+          "id": "att-001q",
           "name": "Delete department in use → 409",
           "request": {
             "method": "DELETE",
@@ -2277,7 +2645,7 @@
           ]
         },
         {
-          "id": "att-001j",
+          "id": "att-001r",
           "name": "Nested: department employees",
           "request": {
             "method": "GET",
@@ -2315,7 +2683,7 @@
           ]
         },
         {
-          "id": "att-001k",
+          "id": "att-001s",
           "name": "Nested: category products",
           "request": {
             "method": "GET",
@@ -2355,11 +2723,11 @@
       ]
     },
     {
-      "id": "att-001r",
+      "id": "att-001z",
       "name": "Query: fields / filter / sort",
       "item": [
         {
-          "id": "att-001m",
+          "id": "att-001u",
           "name": "Sparse fieldset",
           "request": {
             "method": "GET",
@@ -2399,7 +2767,7 @@
           ]
         },
         {
-          "id": "att-001n",
+          "id": "att-001v",
           "name": "Range filter + sort",
           "request": {
             "method": "GET",
@@ -2449,7 +2817,7 @@
           ]
         },
         {
-          "id": "att-001o",
+          "id": "att-001w",
           "name": "Equality / list filter",
           "request": {
             "method": "GET",
@@ -2493,7 +2861,7 @@
           ]
         },
         {
-          "id": "att-001p",
+          "id": "att-001x",
           "name": "Text search",
           "request": {
             "method": "GET",
@@ -2533,7 +2901,7 @@
           ]
         },
         {
-          "id": "att-001q",
+          "id": "att-001y",
           "name": "Unknown filter field → 400",
           "request": {
             "method": "GET",
@@ -2572,11 +2940,11 @@
       ]
     },
     {
-      "id": "att-0020",
+      "id": "att-0028",
       "name": "Pagination (follow to the end)",
       "item": [
         {
-          "id": "att-001s",
+          "id": "att-0020",
           "name": "Reset walkers",
           "request": {
             "method": "GET",
@@ -2609,7 +2977,7 @@
           ]
         },
         {
-          "id": "att-001t",
+          "id": "att-0021",
           "name": "offset",
           "request": {
             "method": "GET",
@@ -2660,7 +3028,7 @@
           ]
         },
         {
-          "id": "att-001u",
+          "id": "att-0022",
           "name": "page",
           "request": {
             "method": "GET",
@@ -2711,7 +3079,7 @@
           ]
         },
         {
-          "id": "att-001v",
+          "id": "att-0023",
           "name": "cursor",
           "request": {
             "method": "GET",
@@ -2762,7 +3130,7 @@
           ]
         },
         {
-          "id": "att-001w",
+          "id": "att-0024",
           "name": "keyset",
           "request": {
             "method": "GET",
@@ -2813,7 +3181,7 @@
           ]
         },
         {
-          "id": "att-001x",
+          "id": "att-0025",
           "name": "link (RFC 8288)",
           "request": {
             "method": "GET",
@@ -2850,7 +3218,7 @@
           ]
         },
         {
-          "id": "att-001y",
+          "id": "att-0026",
           "name": "HAL",
           "request": {
             "method": "GET",
@@ -2885,7 +3253,7 @@
           ]
         },
         {
-          "id": "att-001z",
+          "id": "att-0027",
           "name": "token (nextPageToken)",
           "request": {
             "method": "GET",
@@ -2938,11 +3306,11 @@
       ]
     },
     {
-      "id": "att-0029",
+      "id": "att-002h",
       "name": "Chaos forcing headers",
       "item": [
         {
-          "id": "att-0021",
+          "id": "att-0029",
           "name": "X-Force-Error: 503",
           "request": {
             "method": "GET",
@@ -2981,7 +3349,7 @@
           ]
         },
         {
-          "id": "att-0022",
+          "id": "att-002a",
           "name": "X-Force-Error: 429",
           "request": {
             "method": "GET",
@@ -3018,7 +3386,7 @@
           ]
         },
         {
-          "id": "att-0023",
+          "id": "att-002b",
           "name": "X-Force-Status: 202",
           "request": {
             "method": "GET",
@@ -3054,7 +3422,7 @@
           ]
         },
         {
-          "id": "att-0024",
+          "id": "att-002c",
           "name": "X-Force-Latency: 300",
           "request": {
             "method": "GET",
@@ -3090,7 +3458,7 @@
           ]
         },
         {
-          "id": "att-0025",
+          "id": "att-002d",
           "name": "X-Force-Error: malformed-json",
           "request": {
             "method": "GET",
@@ -3126,7 +3494,7 @@
           ]
         },
         {
-          "id": "att-0026",
+          "id": "att-002e",
           "name": "X-Force-Error: wrong-content-type",
           "request": {
             "method": "GET",
@@ -3161,7 +3529,7 @@
           ]
         },
         {
-          "id": "att-0027",
+          "id": "att-002f",
           "name": "X-Force-Error: empty-body",
           "request": {
             "method": "GET",
@@ -3196,7 +3564,7 @@
           ]
         },
         {
-          "id": "att-0028",
+          "id": "att-002g",
           "name": "Unknown chaos type → 400",
           "request": {
             "method": "GET",
@@ -3235,11 +3603,11 @@
       ]
     },
     {
-      "id": "att-002t",
+      "id": "att-0031",
       "name": "Files",
       "item": [
         {
-          "id": "att-002a",
+          "id": "att-002i",
           "name": "List",
           "request": {
             "method": "GET",
@@ -3275,7 +3643,7 @@
           ]
         },
         {
-          "id": "att-002b",
+          "id": "att-002j",
           "name": "Multipart upload",
           "request": {
             "method": "POST",
@@ -3323,7 +3691,7 @@
           ]
         },
         {
-          "id": "att-002c",
+          "id": "att-002k",
           "name": "Download multipart file",
           "request": {
             "method": "GET",
@@ -3356,7 +3724,7 @@
           ]
         },
         {
-          "id": "att-002d",
+          "id": "att-002l",
           "name": "Raw PUT",
           "request": {
             "method": "PUT",
@@ -3398,7 +3766,7 @@
           ]
         },
         {
-          "id": "att-002e",
+          "id": "att-002m",
           "name": "Base64 upload",
           "request": {
             "method": "POST",
@@ -3443,7 +3811,7 @@
           ]
         },
         {
-          "id": "att-002f",
+          "id": "att-002n",
           "name": "Base64 download",
           "request": {
             "method": "GET",
@@ -3475,7 +3843,7 @@
           ]
         },
         {
-          "id": "att-002g",
+          "id": "att-002o",
           "name": "Presign PUT",
           "request": {
             "method": "POST",
@@ -3520,7 +3888,7 @@
           ]
         },
         {
-          "id": "att-002h",
+          "id": "att-002p",
           "name": "Upload to presigned URL",
           "request": {
             "method": "PUT",
@@ -3554,7 +3922,7 @@
           ]
         },
         {
-          "id": "att-002i",
+          "id": "att-002q",
           "name": "Presign GET",
           "request": {
             "method": "POST",
@@ -3599,7 +3967,7 @@
           ]
         },
         {
-          "id": "att-002j",
+          "id": "att-002r",
           "name": "Download from presigned URL",
           "request": {
             "method": "GET",
@@ -3625,7 +3993,7 @@
           ]
         },
         {
-          "id": "att-002k",
+          "id": "att-002s",
           "name": "Range download → 206",
           "request": {
             "method": "GET",
@@ -3663,7 +4031,7 @@
           ]
         },
         {
-          "id": "att-002l",
+          "id": "att-002t",
           "name": "Range not satisfiable → 416",
           "request": {
             "method": "GET",
@@ -3701,7 +4069,7 @@
           ]
         },
         {
-          "id": "att-002m",
+          "id": "att-002u",
           "name": "Chunked download",
           "request": {
             "method": "GET",
@@ -3733,7 +4101,7 @@
           ]
         },
         {
-          "id": "att-002n",
+          "id": "att-002v",
           "name": "tus: create",
           "request": {
             "method": "POST",
@@ -3777,7 +4145,7 @@
           ]
         },
         {
-          "id": "att-002o",
+          "id": "att-002w",
           "name": "tus: patch chunk 1",
           "request": {
             "method": "PATCH",
@@ -3820,7 +4188,7 @@
           ]
         },
         {
-          "id": "att-002p",
+          "id": "att-002x",
           "name": "tus: head",
           "request": {
             "method": "HEAD",
@@ -3851,7 +4219,7 @@
           ]
         },
         {
-          "id": "att-002q",
+          "id": "att-002y",
           "name": "tus: patch chunk 2 (completes)",
           "request": {
             "method": "PATCH",
@@ -3895,7 +4263,7 @@
           ]
         },
         {
-          "id": "att-002r",
+          "id": "att-002z",
           "name": "tus file in the shared pool (range)",
           "request": {
             "method": "GET",
@@ -3932,7 +4300,7 @@
           ]
         },
         {
-          "id": "att-002s",
+          "id": "att-0030",
           "name": "Delete raw file",
           "request": {
             "method": "DELETE",
@@ -3964,11 +4332,11 @@
       ]
     },
     {
-      "id": "att-0036",
+      "id": "att-003e",
       "name": "SOAP",
       "item": [
         {
-          "id": "att-002u",
+          "id": "att-0032",
           "name": "List services",
           "request": {
             "method": "GET",
@@ -3997,7 +4365,7 @@
           ]
         },
         {
-          "id": "att-002v",
+          "id": "att-0033",
           "name": "EmployeeService WSDL (always open)",
           "request": {
             "method": "GET",
@@ -4035,7 +4403,7 @@
           ]
         },
         {
-          "id": "att-002w",
+          "id": "att-0034",
           "name": "GetEmployee (SOAP 1.1)",
           "request": {
             "method": "POST",
@@ -4080,7 +4448,7 @@
           ]
         },
         {
-          "id": "att-002x",
+          "id": "att-0035",
           "name": "ListProducts page 2 (SOAP 1.2)",
           "request": {
             "method": "POST",
@@ -4121,7 +4489,7 @@
           ]
         },
         {
-          "id": "att-002y",
+          "id": "att-0036",
           "name": "CreateEmployee",
           "request": {
             "method": "POST",
@@ -4164,7 +4532,7 @@
           ]
         },
         {
-          "id": "att-002z",
+          "id": "att-0037",
           "name": "UpdateEmployee",
           "request": {
             "method": "POST",
@@ -4208,7 +4576,7 @@
           ]
         },
         {
-          "id": "att-0030",
+          "id": "att-0038",
           "name": "DeleteEmployee",
           "request": {
             "method": "POST",
@@ -4251,7 +4619,7 @@
           ]
         },
         {
-          "id": "att-0031",
+          "id": "att-0039",
           "name": "Not found → SOAP 1.1 Client fault (HTTP 500)",
           "request": {
             "method": "POST",
@@ -4295,7 +4663,7 @@
           ]
         },
         {
-          "id": "att-0032",
+          "id": "att-003a",
           "name": "Not found → SOAP 1.2 Sender fault (HTTP 400)",
           "request": {
             "method": "POST",
@@ -4335,7 +4703,7 @@
           ]
         },
         {
-          "id": "att-0033",
+          "id": "att-003b",
           "name": "Validation errors in the fault detail",
           "request": {
             "method": "POST",
@@ -4379,7 +4747,7 @@
           ]
         },
         {
-          "id": "att-0034",
+          "id": "att-003c",
           "name": "Wrong SOAPAction → fault",
           "request": {
             "method": "POST",
@@ -4422,7 +4790,7 @@
           ]
         },
         {
-          "id": "att-0035",
+          "id": "att-003d",
           "name": "X-Force-Error: 503 → fault with the real status",
           "request": {
             "method": "POST",
@@ -4472,11 +4840,11 @@
       ]
     },
     {
-      "id": "att-003d",
+      "id": "att-003l",
       "name": "Server-Sent Events",
       "item": [
         {
-          "id": "att-0037",
+          "id": "att-003f",
           "name": "List streams",
           "request": {
             "method": "GET",
@@ -4505,7 +4873,7 @@
           ]
         },
         {
-          "id": "att-0038",
+          "id": "att-003g",
           "name": "Ticks: three events then end",
           "request": {
             "method": "GET",
@@ -4549,7 +4917,7 @@
           ]
         },
         {
-          "id": "att-0039",
+          "id": "att-003h",
           "name": "Ticks resume after Last-Event-ID",
           "request": {
             "method": "GET",
@@ -4595,7 +4963,7 @@
           ]
         },
         {
-          "id": "att-003a",
+          "id": "att-003i",
           "name": "Stream (event format)",
           "request": {
             "method": "POST",
@@ -4641,7 +5009,7 @@
           ]
         },
         {
-          "id": "att-003b",
+          "id": "att-003j",
           "name": "Stream (OpenAI chunk format)",
           "request": {
             "method": "POST",
@@ -4686,7 +5054,7 @@
           ]
         },
         {
-          "id": "att-003c",
+          "id": "att-003k",
           "name": "Unknown resource → 400 before the stream starts",
           "request": {
             "method": "GET",
@@ -4725,11 +5093,11 @@
       ]
     },
     {
-      "id": "att-003r",
+      "id": "att-003z",
       "name": "Mock LLM (OpenAI-compatible)",
       "item": [
         {
-          "id": "att-003e",
+          "id": "att-003m",
           "name": "List models",
           "request": {
             "method": "GET",
@@ -4760,7 +5128,7 @@
           ]
         },
         {
-          "id": "att-003f",
+          "id": "att-003n",
           "name": "Chat completion",
           "request": {
             "method": "POST",
@@ -4807,7 +5175,7 @@
           ]
         },
         {
-          "id": "att-003g",
+          "id": "att-003o",
           "name": "Same seed → same answer (1 of 2)",
           "request": {
             "method": "POST",
@@ -4853,7 +5221,7 @@
           ]
         },
         {
-          "id": "att-003h",
+          "id": "att-003p",
           "name": "Same seed → same answer (2 of 2)",
           "request": {
             "method": "POST",
@@ -4899,7 +5267,7 @@
           ]
         },
         {
-          "id": "att-003i",
+          "id": "att-003q",
           "name": "max_tokens → finish_reason length",
           "request": {
             "method": "POST",
@@ -4945,7 +5313,7 @@
           ]
         },
         {
-          "id": "att-003j",
+          "id": "att-003r",
           "name": "Tool call (required)",
           "request": {
             "method": "POST",
@@ -4991,7 +5359,7 @@
           ]
         },
         {
-          "id": "att-003k",
+          "id": "att-003s",
           "name": "Reply to a tool result is text",
           "request": {
             "method": "POST",
@@ -5037,7 +5405,7 @@
           ]
         },
         {
-          "id": "att-003l",
+          "id": "att-003t",
           "name": "JSON output",
           "request": {
             "method": "POST",
@@ -5083,7 +5451,7 @@
           ]
         },
         {
-          "id": "att-003m",
+          "id": "att-003u",
           "name": "Streamed, with usage chunk",
           "request": {
             "method": "POST",
@@ -5132,7 +5500,7 @@
           ]
         },
         {
-          "id": "att-003n",
+          "id": "att-003v",
           "name": "Embeddings",
           "request": {
             "method": "POST",
@@ -5177,7 +5545,7 @@
           ]
         },
         {
-          "id": "att-003o",
+          "id": "att-003w",
           "name": "Missing messages → 400",
           "request": {
             "method": "POST",
@@ -5224,7 +5592,7 @@
           ]
         },
         {
-          "id": "att-003p",
+          "id": "att-003x",
           "name": "Unknown model → 404",
           "request": {
             "method": "GET",
@@ -5257,7 +5625,7 @@
           ]
         },
         {
-          "id": "att-003q",
+          "id": "att-003y",
           "name": "Injected 429 → OpenAI rate-limit error",
           "request": {
             "method": "GET",
@@ -5298,11 +5666,11 @@
       "description": "OpenAI-compatible mock LLM at /llm/v1. Uses the active auth mode; errors are OpenAI-shaped."
     },
     {
-      "id": "att-0049",
+      "id": "att-004h",
       "name": "MCP server",
       "item": [
         {
-          "id": "att-003s",
+          "id": "att-0040",
           "name": "server/discover",
           "request": {
             "method": "POST",
@@ -5357,7 +5725,7 @@
           ]
         },
         {
-          "id": "att-003t",
+          "id": "att-0041",
           "name": "tools/list",
           "request": {
             "method": "POST",
@@ -5412,7 +5780,7 @@
           ]
         },
         {
-          "id": "att-003u",
+          "id": "att-0042",
           "name": "tools/call get_employee",
           "request": {
             "method": "POST",
@@ -5471,7 +5839,7 @@
           ]
         },
         {
-          "id": "att-003v",
+          "id": "att-0043",
           "name": "tools/call with x-mcp-header argument",
           "request": {
             "method": "POST",
@@ -5534,7 +5902,7 @@
           ]
         },
         {
-          "id": "att-003w",
+          "id": "att-0044",
           "name": "Missing Mcp-Param header → 400 HeaderMismatch",
           "request": {
             "method": "POST",
@@ -5593,7 +5961,7 @@
           ]
         },
         {
-          "id": "att-003x",
+          "id": "att-0045",
           "name": "Missing record → tool error",
           "request": {
             "method": "POST",
@@ -5652,7 +6020,7 @@
           ]
         },
         {
-          "id": "att-003y",
+          "id": "att-0046",
           "name": "Unknown tool → -32602",
           "request": {
             "method": "POST",
@@ -5711,7 +6079,7 @@
           ]
         },
         {
-          "id": "att-003z",
+          "id": "att-0047",
           "name": "Unsupported protocol version → 400 -32022",
           "request": {
             "method": "POST",
@@ -5767,7 +6135,7 @@
           ]
         },
         {
-          "id": "att-0040",
+          "id": "att-0048",
           "name": "resources/read",
           "request": {
             "method": "POST",
@@ -5826,7 +6194,7 @@
           ]
         },
         {
-          "id": "att-0041",
+          "id": "att-0049",
           "name": "prompts/get",
           "request": {
             "method": "POST",
@@ -5885,7 +6253,7 @@
           ]
         },
         {
-          "id": "att-0042",
+          "id": "att-004a",
           "name": "Streamed progress (SSE)",
           "request": {
             "method": "POST",
@@ -5946,7 +6314,7 @@
           ]
         },
         {
-          "id": "att-0043",
+          "id": "att-004b",
           "name": "Protected resource metadata",
           "request": {
             "method": "GET",
@@ -5977,7 +6345,7 @@
           ]
         },
         {
-          "id": "att-0044",
+          "id": "att-004c",
           "name": "Legacy: initialize (session)",
           "request": {
             "method": "POST",
@@ -6025,7 +6393,7 @@
           ]
         },
         {
-          "id": "att-0045",
+          "id": "att-004d",
           "name": "Legacy: notifications/initialized → 202",
           "request": {
             "method": "POST",
@@ -6079,7 +6447,7 @@
           ]
         },
         {
-          "id": "att-0046",
+          "id": "att-004e",
           "name": "Legacy: tools/list in the session",
           "request": {
             "method": "POST",
@@ -6134,7 +6502,7 @@
           ]
         },
         {
-          "id": "att-0047",
+          "id": "att-004f",
           "name": "Legacy: DELETE ends the session",
           "request": {
             "method": "DELETE",
@@ -6167,7 +6535,7 @@
           ]
         },
         {
-          "id": "att-0048",
+          "id": "att-004g",
           "name": "Legacy: the ended session → 404",
           "request": {
             "method": "POST",
@@ -6225,11 +6593,11 @@
       "description": "Mock MCP server at /mcp: protocol 2026-07-28 requests (with the required headers) and a 2025-11-25 session. Uses the active auth mode."
     },
     {
-      "id": "att-004r",
+      "id": "att-004z",
       "name": "A2A agent",
       "item": [
         {
-          "id": "att-004a",
+          "id": "att-004i",
           "name": "Agent Card (1.0)",
           "request": {
             "method": "GET",
@@ -6259,7 +6627,7 @@
           ]
         },
         {
-          "id": "att-004b",
+          "id": "att-004j",
           "name": "Agent Card (0.3)",
           "request": {
             "method": "GET",
@@ -6291,7 +6659,7 @@
           ]
         },
         {
-          "id": "att-004c",
+          "id": "att-004k",
           "name": "SendMessage: greeting → direct Message",
           "request": {
             "method": "POST",
@@ -6338,7 +6706,7 @@
           ]
         },
         {
-          "id": "att-004d",
+          "id": "att-004l",
           "name": "SendMessage: question → COMPLETED task",
           "request": {
             "method": "POST",
@@ -6387,7 +6755,7 @@
           ]
         },
         {
-          "id": "att-004e",
+          "id": "att-004m",
           "name": "GetTask",
           "request": {
             "method": "POST",
@@ -6434,7 +6802,7 @@
           ]
         },
         {
-          "id": "att-004f",
+          "id": "att-004n",
           "name": "ListTasks",
           "request": {
             "method": "POST",
@@ -6481,7 +6849,7 @@
           ]
         },
         {
-          "id": "att-004g",
+          "id": "att-004o",
           "name": "Missing record → FAILED",
           "request": {
             "method": "POST",
@@ -6528,7 +6896,7 @@
           ]
         },
         {
-          "id": "att-004h",
+          "id": "att-004p",
           "name": "Out of scope → REJECTED",
           "request": {
             "method": "POST",
@@ -6575,7 +6943,7 @@
           ]
         },
         {
-          "id": "att-004i",
+          "id": "att-004q",
           "name": "Delete product → INPUT_REQUIRED",
           "request": {
             "method": "POST",
@@ -6623,7 +6991,7 @@
           ]
         },
         {
-          "id": "att-004j",
+          "id": "att-004r",
           "name": "Answer \"no\" on the same task → REJECTED",
           "request": {
             "method": "POST",
@@ -6670,7 +7038,7 @@
           ]
         },
         {
-          "id": "att-004k",
+          "id": "att-004s",
           "name": "Streamed answer",
           "request": {
             "method": "POST",
@@ -6720,7 +7088,7 @@
           ]
         },
         {
-          "id": "att-004l",
+          "id": "att-004t",
           "name": "Unknown task → -32001",
           "request": {
             "method": "POST",
@@ -6767,7 +7135,7 @@
           ]
         },
         {
-          "id": "att-004m",
+          "id": "att-004u",
           "name": "No A2A-Version header means 0.3 → -32601",
           "request": {
             "method": "POST",
@@ -6811,7 +7179,7 @@
           ]
         },
         {
-          "id": "att-004n",
+          "id": "att-004v",
           "name": "HTTP+JSON: message:send",
           "request": {
             "method": "POST",
@@ -6860,7 +7228,7 @@
           ]
         },
         {
-          "id": "att-004o",
+          "id": "att-004w",
           "name": "HTTP+JSON: unknown task → 404 google.rpc.Status",
           "request": {
             "method": "GET",
@@ -6897,7 +7265,7 @@
           ]
         },
         {
-          "id": "att-004p",
+          "id": "att-004x",
           "name": "A2A 0.3: message/send",
           "request": {
             "method": "POST",
@@ -6941,7 +7309,7 @@
           ]
         },
         {
-          "id": "att-004q",
+          "id": "att-004y",
           "name": "Forced failure",
           "request": {
             "method": "POST",
@@ -6995,11 +7363,11 @@
       "description": "Mock A2A agent: Agent Cards, A2A 1.0 JSON-RPC and HTTP+JSON, and 0.3. Uses the active auth mode."
     },
     {
-      "id": "att-0057",
+      "id": "att-005f",
       "name": "GraphQL",
       "item": [
         {
-          "id": "att-004s",
+          "id": "att-0050",
           "name": "SDL (always open)",
           "request": {
             "method": "GET",
@@ -7030,7 +7398,7 @@
           ]
         },
         {
-          "id": "att-004t",
+          "id": "att-0051",
           "name": "Query: offset page with nested department",
           "request": {
             "method": "POST",
@@ -7075,7 +7443,7 @@
           ]
         },
         {
-          "id": "att-004u",
+          "id": "att-0052",
           "name": "Query over GET",
           "request": {
             "method": "GET",
@@ -7111,7 +7479,7 @@
           ]
         },
         {
-          "id": "att-004v",
+          "id": "att-0053",
           "name": "Relay connection: first page",
           "request": {
             "method": "POST",
@@ -7155,7 +7523,7 @@
           ]
         },
         {
-          "id": "att-004w",
+          "id": "att-0054",
           "name": "Relay connection: next page",
           "request": {
             "method": "POST",
@@ -7199,7 +7567,7 @@
           ]
         },
         {
-          "id": "att-004x",
+          "id": "att-0055",
           "name": "Filter and sort",
           "request": {
             "method": "POST",
@@ -7243,7 +7611,7 @@
           ]
         },
         {
-          "id": "att-004y",
+          "id": "att-0056",
           "name": "Mutation: create department",
           "request": {
             "method": "POST",
@@ -7287,7 +7655,7 @@
           ]
         },
         {
-          "id": "att-004z",
+          "id": "att-0057",
           "name": "Mutation: update (merge patch)",
           "request": {
             "method": "POST",
@@ -7331,7 +7699,7 @@
           ]
         },
         {
-          "id": "att-0050",
+          "id": "att-0058",
           "name": "Mutation: delete",
           "request": {
             "method": "POST",
@@ -7375,7 +7743,7 @@
           ]
         },
         {
-          "id": "att-0051",
+          "id": "att-0059",
           "name": "Not found → field error NOT_FOUND (HTTP 200)",
           "request": {
             "method": "POST",
@@ -7419,7 +7787,7 @@
           ]
         },
         {
-          "id": "att-0052",
+          "id": "att-005a",
           "name": "Validation → BAD_USER_INPUT with field errors",
           "request": {
             "method": "POST",
@@ -7463,7 +7831,7 @@
           ]
         },
         {
-          "id": "att-0053",
+          "id": "att-005b",
           "name": "Invalid query → 400 with graphql-response+json",
           "request": {
             "method": "POST",
@@ -7512,7 +7880,7 @@
           ]
         },
         {
-          "id": "att-0054",
+          "id": "att-005c",
           "name": "Injected field error → partial data",
           "request": {
             "method": "POST",
@@ -7559,7 +7927,7 @@
           ]
         },
         {
-          "id": "att-0055",
+          "id": "att-005d",
           "name": "Mutation over GET → 405",
           "request": {
             "method": "GET",
@@ -7595,7 +7963,7 @@
           ]
         },
         {
-          "id": "att-0056",
+          "id": "att-005e",
           "name": "X-Force-Error: 503 → errors with the real status",
           "request": {
             "method": "POST",
@@ -7644,11 +8012,11 @@
       ]
     },
     {
-      "id": "att-005q",
+      "id": "att-005y",
       "name": "OData v4",
       "item": [
         {
-          "id": "att-0058",
+          "id": "att-005g",
           "name": "Service document (open)",
           "request": {
             "method": "GET",
@@ -7678,7 +8046,7 @@
           ]
         },
         {
-          "id": "att-0059",
+          "id": "att-005h",
           "name": "$metadata (open)",
           "request": {
             "method": "GET",
@@ -7711,7 +8079,7 @@
           ]
         },
         {
-          "id": "att-005a",
+          "id": "att-005i",
           "name": "Filter, select, orderby, count",
           "request": {
             "method": "GET",
@@ -7761,7 +8129,7 @@
           ]
         },
         {
-          "id": "att-005b",
+          "id": "att-005j",
           "name": "Functions and lambda",
           "request": {
             "method": "GET",
@@ -7802,7 +8170,7 @@
           ]
         },
         {
-          "id": "att-005c",
+          "id": "att-005k",
           "name": "Expand with nested options",
           "request": {
             "method": "GET",
@@ -7839,7 +8207,7 @@
           ]
         },
         {
-          "id": "att-005d",
+          "id": "att-005l",
           "name": "$count",
           "request": {
             "method": "GET",
@@ -7877,7 +8245,7 @@
           ]
         },
         {
-          "id": "att-005e",
+          "id": "att-005m",
           "name": "Property value",
           "request": {
             "method": "GET",
@@ -7911,7 +8279,7 @@
           ]
         },
         {
-          "id": "att-005f",
+          "id": "att-005n",
           "name": "Reset the paging walker",
           "request": {
             "method": "GET",
@@ -7940,7 +8308,7 @@
           ]
         },
         {
-          "id": "att-005g",
+          "id": "att-005o",
           "name": "Server paging: follow @odata.nextLink to the end",
           "request": {
             "method": "GET",
@@ -7981,7 +8349,7 @@
           ]
         },
         {
-          "id": "att-005h",
+          "id": "att-005p",
           "name": "Create employee with @odata.bind",
           "request": {
             "method": "POST",
@@ -8026,7 +8394,7 @@
           ]
         },
         {
-          "id": "att-005i",
+          "id": "att-005q",
           "name": "PATCH with a stale If-Match → 412",
           "request": {
             "method": "PATCH",
@@ -8076,7 +8444,7 @@
           ]
         },
         {
-          "id": "att-005j",
+          "id": "att-005r",
           "name": "PATCH with If-Match → 204",
           "request": {
             "method": "PATCH",
@@ -8124,7 +8492,7 @@
           ]
         },
         {
-          "id": "att-005k",
+          "id": "att-005s",
           "name": "PATCH return=representation → 200",
           "request": {
             "method": "PATCH",
@@ -8173,7 +8541,7 @@
           ]
         },
         {
-          "id": "att-005l",
+          "id": "att-005t",
           "name": "DELETE → 204",
           "request": {
             "method": "DELETE",
@@ -8203,7 +8571,7 @@
           ]
         },
         {
-          "id": "att-005m",
+          "id": "att-005u",
           "name": "Deleted → 404",
           "request": {
             "method": "GET",
@@ -8235,7 +8603,7 @@
           ]
         },
         {
-          "id": "att-005n",
+          "id": "att-005v",
           "name": "Unknown property in $filter → 400",
           "request": {
             "method": "GET",
@@ -8273,7 +8641,7 @@
           ]
         },
         {
-          "id": "att-005o",
+          "id": "att-005w",
           "name": "Validation → 422 with details",
           "request": {
             "method": "POST",
@@ -8320,7 +8688,7 @@
           ]
         },
         {
-          "id": "att-005p",
+          "id": "att-005x",
           "name": "X-Force-Error: 503 → OData error",
           "request": {
             "method": "GET",
@@ -8365,11 +8733,11 @@
       ]
     },
     {
-      "id": "att-0068",
+      "id": "att-006g",
       "name": "S3-compatible API",
       "item": [
         {
-          "id": "att-005r",
+          "id": "att-005z",
           "name": "ListBuckets",
           "request": {
             "method": "GET",
@@ -8422,7 +8790,7 @@
           ]
         },
         {
-          "id": "att-005s",
+          "id": "att-0060",
           "name": "HeadBucket",
           "request": {
             "method": "HEAD",
@@ -8476,7 +8844,7 @@
           ]
         },
         {
-          "id": "att-005t",
+          "id": "att-0061",
           "name": "ListObjectsV2 (page of 3)",
           "request": {
             "method": "GET",
@@ -8542,7 +8910,7 @@
           ]
         },
         {
-          "id": "att-005u",
+          "id": "att-0062",
           "name": "ListObjectsV2 (next page)",
           "request": {
             "method": "GET",
@@ -8610,7 +8978,7 @@
           ]
         },
         {
-          "id": "att-005v",
+          "id": "att-0063",
           "name": "PutObject with metadata",
           "request": {
             "method": "PUT",
@@ -8679,7 +9047,7 @@
           ]
         },
         {
-          "id": "att-005w",
+          "id": "att-0064",
           "name": "HeadObject",
           "request": {
             "method": "HEAD",
@@ -8736,7 +9104,7 @@
           ]
         },
         {
-          "id": "att-005x",
+          "id": "att-0065",
           "name": "GetObject",
           "request": {
             "method": "GET",
@@ -8793,7 +9161,7 @@
           ]
         },
         {
-          "id": "att-005y",
+          "id": "att-0066",
           "name": "GetObject with Range → 206",
           "request": {
             "method": "GET",
@@ -8855,7 +9223,7 @@
           ]
         },
         {
-          "id": "att-005z",
+          "id": "att-0067",
           "name": "CopyObject",
           "request": {
             "method": "PUT",
@@ -8917,7 +9285,7 @@
           ]
         },
         {
-          "id": "att-0060",
+          "id": "att-0068",
           "name": "List a \"folder\" with a delimiter",
           "request": {
             "method": "GET",
@@ -8986,7 +9354,7 @@
           ]
         },
         {
-          "id": "att-0061",
+          "id": "att-0069",
           "name": "The copy is in the file pool (/v1/files)",
           "request": {
             "method": "GET",
@@ -9022,7 +9390,7 @@
           ]
         },
         {
-          "id": "att-0062",
+          "id": "att-006a",
           "name": "DeleteObjects",
           "request": {
             "method": "POST",
@@ -9091,7 +9459,7 @@
           ]
         },
         {
-          "id": "att-0063",
+          "id": "att-006b",
           "name": "Deleted → 404 NoSuchKey",
           "request": {
             "method": "GET",
@@ -9148,7 +9516,7 @@
           ]
         },
         {
-          "id": "att-0064",
+          "id": "att-006c",
           "name": "Unknown bucket → 404 NoSuchBucket",
           "request": {
             "method": "GET",
@@ -9209,7 +9577,7 @@
           ]
         },
         {
-          "id": "att-0065",
+          "id": "att-006d",
           "name": "Wrong secret → 403 SignatureDoesNotMatch",
           "request": {
             "method": "GET",
@@ -9270,7 +9638,7 @@
           ]
         },
         {
-          "id": "att-0066",
+          "id": "att-006e",
           "name": "Unsigned → 403 AccessDenied",
           "request": {
             "method": "GET",
@@ -9304,7 +9672,7 @@
           ]
         },
         {
-          "id": "att-0067",
+          "id": "att-006f",
           "name": "X-Force-Error: 503 → S3 XML error",
           "request": {
             "method": "GET",
@@ -9373,11 +9741,11 @@
       "description": "The file pool as an S3 bucket (path-style). Requests use Postman's AWS Signature auth with {{s3AccessKeyId}}, {{s3SecretAccessKey}} and {{s3Region}}, independent of {{authMode}}."
     },
     {
-      "id": "att-006b",
+      "id": "att-006j",
       "name": "Headers & inspector",
       "item": [
         {
-          "id": "att-0069",
+          "id": "att-006h",
           "name": "Request id echo",
           "request": {
             "method": "GET",
@@ -9417,7 +9785,7 @@
           ]
         },
         {
-          "id": "att-006a",
+          "id": "att-006i",
           "name": "Inspector catch-all",
           "request": {
             "method": "POST",

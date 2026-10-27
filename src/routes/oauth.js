@@ -5,6 +5,7 @@
 const express = require('express');
 const { OAuthError, OAuthService, clientIp, ASSERTION_ALGS } = require('../services/oauth');
 const { verify } = require('../middleware/body');
+const { CIMD_PREFIX } = require('../services/cimd');
 
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
@@ -31,7 +32,8 @@ input[type=text],input[type=password]{width:100%;padding:10px 12px;border:1px so
 .row{display:flex;gap:8px;margin-top:20px}button{flex:1;padding:10px;border-radius:8px;border:1px solid var(--border);font:inherit;cursor:pointer;background:transparent;color:inherit}
 button.primary{background:var(--accent);border-color:var(--accent);color:#fff}.err{color:var(--err);margin-top:10px}.hint{font-size:12px;color:var(--muted);margin-top:14px}
 </style></head><body><form class="card" method="post" action="/oauth/authorize">
-<h1>Sign in</h1><p><strong>${esc(client.clientId)}</strong> is requesting access.</p>
+<h1>Sign in</h1><p><strong>${esc(client.clientName || client.clientId)}</strong> is requesting access.</p>
+${client.source === 'cimd' ? `<p class="hint">Identified by its metadata document on <strong>${esc(client.metadataHost)}</strong> (CIMD)${client.hostedHere ? ', hosted by this server' : ''}. Only continue if you trust that site.</p>` : ''}
 ${hidden}
 <label for="u">Username</label><input id="u" type="text" name="username" autocomplete="username" required autofocus>
 <label for="p">Password</label><input id="p" type="password" name="password" autocomplete="current-password" required>
@@ -64,7 +66,7 @@ module.exports = function oauthRouter(ctx) {
 
   async function validateAuthorize(q, req) {
     if (q.response_type !== 'code') throw new OAuthError('unsupported_response_type', 'response_type must be "code"');
-    const client = await oauth.client(q.client_id);
+    const client = await oauth.client(q.client_id, req);
     if (!client) throw new OAuthError('invalid_client', 'Unknown client_id');
     if (!q.redirect_uri) throw new OAuthError('invalid_request', 'redirect_uri is required');
     if (!OAuthService.redirectAllowed(client, q.redirect_uri)) {
@@ -220,6 +222,15 @@ module.exports = function oauthRouter(ctx) {
     return next(err);
   });
 
+  // Client ID metadata documents this server hosts for demos (services/cimd.js); a document's client_id is its own URL.
+  r.get(`${CIMD_PREFIX}:file`, async (req, res) => {
+    const m = /^([a-z0-9][a-z0-9-]{0,39})\.json$/.exec(req.params.file);
+    const d = m && await oauth.cimd.hostedDoc(baseUrl.root(req), m[1]);
+    if (!d) return res.status(404).json({ error: 'not_found', error_description: `No hosted client metadata document ${req.params.file}` });
+    res.setHeader('Cache-Control', 'public, max-age=60');
+    return res.json(d.document);
+  });
+
   function metadata(req) {
     const base = baseUrl.root(req);
     return {
@@ -239,6 +250,7 @@ module.exports = function oauthRouter(ctx) {
       revocation_endpoint_auth_signing_alg_values_supported: ASSERTION_ALGS,
       code_challenge_methods_supported: ['S256', 'plain'],
       ...(settings.get('oauthRegistration') !== 'off' ? { registration_endpoint: `${base}/oauth/register` } : {}),
+      ...(settings.get('oauthCimd') ? { client_id_metadata_document_supported: true } : {}),
       scopes_supported: [...new Set(['read', 'write', ...oauth.envClients().flatMap((c) => c.scopes), ...oauth.registrationScopes()])],
       id_token_signing_alg_values_supported: [settings.get('jwtAlg')],
       subject_types_supported: ['public'],
