@@ -292,6 +292,7 @@ Settings marked **restart** can only be set through the environment.
 | `OTEL_TRACES_EXPORTER` / `OTEL_METRICS_EXPORTER` | `otlp` / `otlp` | `none` turns that signal's export off (`/metrics` keeps working) |
 | `OTEL_TRACES_SAMPLER_ARG` | `1` | Share of requests traced (0–1); a request with a `traceparent` header follows the caller's sampled flag |
 | `OTEL_METRIC_EXPORT_INTERVAL` | `60000` | Milliseconds between metric exports (1000–3600000) |
+| `OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE` | `cumulative` | How exported counters and histograms count: `cumulative` (totals; Grafana Cloud and other Prometheus-style backends), `delta` (change since the last export; New Relic and Datadog prefer it), or `lowmemory` (delta except CPU time). `/metrics` is always cumulative |
 | `INSPECTOR_RETENTION` | `500` | Captures kept |
 | `INSPECTOR_LOG_ALL` | `true` | Also record `/v1/*`, `/soap/*`, `/ws/*` (upgrades), `/sse/*`, `/graphql`, `/odata/*`, `/llm/*`, `/mcp`, `/a2a/*`, S3 API and `/oauth/*` calls (with their real responses). Toggle with **Record API calls** on the Inspector page. |
 | `INSPECTOR_RESPONSE_STATUS`, `INSPECTOR_RESPONSE_CONTENT_TYPE`, `INSPECTOR_RESPONSE_BODY`, `INSPECTOR_RESPONSE_HEADERS`, `INSPECTOR_RESPONSE_DELAY_MS` | `200`, `application/json`, receipt, —, `0` | Default catch-all response |
@@ -1210,6 +1211,8 @@ Metric names follow the OpenTelemetry semantic conventions. `/metrics` spells th
 
 Every request is measured, including those rejected before they reach a handler (unknown profile, bad body, auth, rate limit, chaos). Route labels are templates and each metric is capped at 2000 label sets (beyond that, new ones are counted under `otel_metric_overflow="true"`), so scanners hitting random paths can't blow up a metrics backend.
 
+Exports larger than 900 KB are split into several requests (New Relic, for one, rejects payloads of 1 MB or more). With `OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE=delta`, counters and histograms are exported as the change since the last successful export; if an export fails, its increments go out with the next one.
+
 `/health` (`settings.telemetry`) shows what is on, the export endpoint's origin (never the headers), and the last export of each signal with its error; the Overview page warns while an export is failing.
 
 ### Grafana Cloud
@@ -1246,8 +1249,8 @@ Pushed metrics get a `job` label from `service.name`, so give each deployment it
 | Backend | `OTEL_EXPORTER_OTLP_ENDPOINT` | `OTEL_EXPORTER_OTLP_HEADERS` |
 |---|---|---|
 | Honeycomb | `https://api.honeycomb.io` (EU: `https://api.eu1.honeycomb.io`) | `x-honeycomb-team=<API key>` |
-| New Relic | `https://otlp.nr-data.net` (EU: `https://otlp.eu01.nr-data.net`) | `api-key=<license key>` |
-| Datadog | Send to a Datadog Agent or an OpenTelemetry Collector with OTLP enabled, e.g. `http://<agent host>:4318` | — |
+| New Relic | `https://otlp.nr-data.net` (EU: `https://otlp.eu01.nr-data.net`). Keep the default `http/protobuf`, and set `OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE=delta` (New Relic prefers delta; cumulative works but raises ingest) | `api-key=<license key>` |
+| Datadog | Send to a Datadog Agent or an OpenTelemetry Collector with OTLP enabled, e.g. `http://<agent host>:4318`, with `OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE=delta` | — |
 | SigNoz Cloud | `https://ingest.<region>.signoz.cloud:443` | `signoz-ingestion-key=<key>` |
 | Jaeger, SigNoz or a Collector you run | `http://<host>:4318` | — |
 

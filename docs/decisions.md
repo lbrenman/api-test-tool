@@ -126,5 +126,5 @@ Not yet verified:
 - The mock LLM with the official OpenAI SDKs or the platform's LLM connector.
 - The MCP 2026-07-28 path with a real client (covered by the tool's own tests only).
 - The MCP server and A2A agent with the platform's own clients or gateways.
-- OTLP export to a real backend (Grafana Cloud, Honeycomb, …) and the Fly `[metrics]` scrape on the live Fly app
+- OTLP export to a real backend (Grafana Cloud, Honeycomb, New Relic with delta temporality, …) and the Fly `[metrics]` scrape on the live Fly app
   (CI covers both encodings against a local collector; the protobuf encoding was checked against the .proto files).

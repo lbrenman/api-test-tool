@@ -210,6 +210,52 @@ test('OTLP http/protobuf (the default) and failing exports reported in /health',
   }
 });
 
+test('delta temporality (New Relic, Datadog) and large exports split under the size limit', async () => {
+  got.length = 0;
+  const t = await makeApp({ SEED_SAMPLE_FILES: 'false', OTEL_EXPORTER_OTLP_ENDPOINT: `${otlp}/delta`, OTEL_EXPORTER_OTLP_PROTOCOL: 'http/json', OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE: 'delta', OTEL_TRACES_EXPORTER: 'none' });
+  try {
+    const metric = (body, name) => body.resourceMetrics[0].scopeMetrics[0].metrics.find((m) => m.name === name);
+    const route = (m, r) => m?.histogram.dataPoints.find((p) => attr(p.attributes, 'http.route') === r);
+    for (let i = 0; i < 3; i += 1) await request(t.app).get('/v1/employees/1').expect(200);
+    await t.ctx.telemetry.flushMetrics();
+    for (let i = 0; i < 2; i += 1) await request(t.app).get('/v1/employees/1').expect(200);
+    await t.ctx.telemetry.flushMetrics();
+    const [first, second] = got.filter((x) => x.path === '/delta/v1/metrics').map(json);
+    const h1 = metric(first, 'http.server.request.duration');
+    const h2 = metric(second, 'http.server.request.duration');
+    assert.equal(h1.histogram.aggregationTemporality, 1, 'AGGREGATION_TEMPORALITY_DELTA');
+    assert.equal(route(h1, '/v1/employees/{id}').count, '3');
+    assert.equal(route(h2, '/v1/employees/{id}').count, '2', 'the second export carries only the new requests');
+    assert.equal(route(h2, '/v1/employees/{id}').startTimeUnixNano, route(h1, '/v1/employees/{id}').timeUnixNano, 'each delta starts where the last one ended');
+    assert.equal(metric(second, 'http.server.active_requests').sum.aggregationTemporality, 2, 'up-down counters stay cumulative');
+    assert.equal(metric(second, 'process.cpu.time').sum.aggregationTemporality, 1);
+    assert.equal((await request(t.app).get('/health').expect(200)).body.settings.telemetry.otlp.metrics.temporality, 'delta');
+    assert.match((await request(t.app).get('/metrics').expect(200)).text, /http_server_request_duration_seconds_count\{[^}]*http_route="\/v1\/employees\/\{id\}"[^}]*\} [5-9]/, '/metrics stays cumulative');
+
+    // A failed export keeps its increments for the next one.
+    await t.ctx.settings.set('otelEndpoint', `${otlp}/broken`);
+    await request(t.app).get('/v1/employees/1').expect(200);
+    assert.equal(await t.ctx.telemetry.flushMetrics(), false);
+    await t.ctx.settings.set('otelEndpoint', `${otlp}/delta`);
+    await request(t.app).get('/v1/employees/1').expect(200);
+    await t.ctx.telemetry.flushMetrics();
+    assert.equal(route(metric(got.filter((x) => x.path === '/delta/v1/metrics').map(json).at(-1), 'http.server.request.duration'), '/v1/employees/{id}').count, '2');
+
+    // Exports larger than the limit are split; every span still arrives.
+    got.length = 0;
+    await t.ctx.settings.set('otelTracesExporter', 'otlp');
+    t.ctx.telemetry.maxExportBytes = 4000;
+    for (let i = 0; i < 20; i += 1) await request(t.app).get(`/v1/products/${i + 1}`).expect(200);
+    await t.ctx.telemetry.flush();
+    const posts = got.filter((x) => x.path === '/delta/v1/traces');
+    assert.ok(posts.length > 1, `split into ${posts.length} requests`);
+    assert.ok(posts.every((x) => x.raw.length <= 4000), 'each request under the limit');
+    assert.equal(posts.map(json).reduce((n, b) => n + b.resourceSpans[0].scopeSpans[0].spans.length, 0), 20);
+  } finally {
+    await t.close();
+  }
+});
+
 test('an export pointed at the tool\'s own Inspector is captured there, and the export itself is not traced', async () => {
   const t = await listen({ SEED_SAMPLE_FILES: 'false', OTEL_EXPORTER_OTLP_PROTOCOL: 'http/json', OTEL_METRICS_EXPORTER: 'none' });
   try {

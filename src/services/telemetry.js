@@ -21,6 +21,7 @@ const otlpProto = require('../util/otlpProto');
 const DURATION_BUCKETS = [0.005, 0.01, 0.025, 0.05, 0.075, 0.1, 0.25, 0.5, 0.75, 1, 2.5, 5, 7.5, 10, 30, 60, 120];
 const MAX_SERIES = 2000; // per metric; beyond it new attribute sets go to one otel.metric.overflow series
 const MAX_QUEUED_SPANS = 2048;
+const MAX_EXPORT_BYTES = 900000; // larger exports are split; New Relic, for one, rejects payloads of 1 MB or more
 const SPAN_BATCH = 512;
 const SPAN_FLUSH_MS = 5000;
 const EXPORT_TIMEOUT_MS = 10000;
@@ -71,12 +72,13 @@ class Metric {
   }
 
   // Current points: stored series, or the observe() callback's [{attrs, value}] for observed instruments.
+  // Each point carries its series key (for delta temporality).
   points() {
-    if (!this.observe) return [...this.series.values()];
+    if (!this.observe) return [...this.series.entries()].map(([key, v]) => ({ key, ...v }));
     let out;
     try { out = this.observe(); } catch { return []; }
     if (typeof out === 'number') out = [{ attrs: {}, value: out }];
-    return (out || []).filter((p) => Number.isFinite(p.value)).map((p) => ({ attrs: normAttrs(p.attrs), value: p.value }));
+    return (out || []).filter((p) => Number.isFinite(p.value)).map((p) => { const attrs = normAttrs(p.attrs); return { key: JSON.stringify(attrs), attrs, value: p.value }; });
   }
 
   // Prometheus name, the way OTLP-to-Prometheus translation spells it.
@@ -179,6 +181,9 @@ class TelemetryService {
     this.warnedAt = {};
     this.flushing = { traces: null, metrics: null };
     this.closed = false;
+    this.maxExportBytes = MAX_EXPORT_BYTES;
+    this.exported = new Map(); // delta temporality: per metric, the values at the last successful export
+    this.exportedAt = PROCESS_START_NS;
 
     const m = (def) => { const x = new Metric(def); this.metrics.push(x); return x; };
     this.duration = m({ name: 'http.server.request.duration', type: 'histogram', unit: 's', description: 'Duration of HTTP requests served, by protocol, route, method, status and settings profile', buckets: DURATION_BUCKETS });
@@ -379,11 +384,31 @@ class TelemetryService {
     if (this.spans.length >= SPAN_BATCH) this.flushTraces();
   }
 
-  // body is in OTLP JSON shape; http/protobuf encodes it with util/otlpProto.js.
-  async post(signal, body) {
+  encode(signal, body) {
+    return this.settings.get('otelProtocol') === 'http/protobuf'
+      ? otlpProto.encode(body, signal === 'traces' ? 'ExportTraceServiceRequest' : 'ExportMetricsServiceRequest')
+      : Buffer.from(JSON.stringify(body));
+  }
+
+  // Encodes the leaves (spans, or metric data points) with build(), halving them until each request stays under
+  // maxExportBytes; a single oversized leaf is sent as it is. Returns the encoded payloads.
+  split(signal, leaves, build) {
+    const payload = this.encode(signal, build(leaves));
+    if (payload.length <= this.maxExportBytes || leaves.length < 2) return [payload];
+    const mid = Math.ceil(leaves.length / 2);
+    return [...this.split(signal, leaves.slice(0, mid), build), ...this.split(signal, leaves.slice(mid), build)];
+  }
+
+  // Sends every payload in order; true only when all were accepted.
+  async postAll(signal, payloads) {
+    for (const p of payloads) if (!(await this.post(signal, p))) return false;
+    return true;
+  }
+
+  // payload is already encoded (http/protobuf with util/otlpProto.js, or http/json).
+  async post(signal, payload) {
     const url = `${this.endpoint()}/v1/${signal}`;
     const proto = this.settings.get('otelProtocol') === 'http/protobuf';
-    const payload = proto ? otlpProto.encode(body, signal === 'traces' ? 'ExportTraceServiceRequest' : 'ExportMetricsServiceRequest') : JSON.stringify(body);
     const headers = { 'Content-Type': proto ? 'application/x-protobuf' : 'application/json', 'User-Agent': `api-test-tool-otlp/${pkg.version}`, ...parseKeyValues(this.settings.get('otelHeaders')) };
     const st = this.status[signal];
     const at = new Date().toISOString();
@@ -391,7 +416,7 @@ class TelemetryService {
       const res = await fetch(url, { method: 'POST', headers, body: payload, signal: AbortSignal.timeout(EXPORT_TIMEOUT_MS) });
       const text = await res.text().catch(() => '');
       if (!res.ok) throw new Error(`HTTP ${res.status}${text ? `: ${text.slice(0, 200)}` : ''}`);
-      st.last = { at, ok: true, status: res.status };
+      st.last = { at, ok: true, status: res.status, bytes: payload.length };
       return true;
     } catch (e) {
       const error = e.name === 'TimeoutError' ? `no response within ${EXPORT_TIMEOUT_MS} ms` : (e.cause?.message || e.message);
@@ -411,40 +436,88 @@ class TelemetryService {
     if (!this.spans.length) return true;
     const batch = this.spans.splice(0, SPAN_BATCH);
     this.flushing.traces = (async () => {
-      const ok = await this.post('traces', { resourceSpans: [{ resource: this.resource(), scopeSpans: [{ scope: this.scope(), spans: batch }] }] });
+      const resource = this.resource();
+      const build = (spans) => ({ resourceSpans: [{ resource, scopeSpans: [{ scope: this.scope(), spans }] }] });
+      const ok = await this.postAll('traces', this.split('traces', batch, build));
       if (ok) this.status.traces.sent += batch.length; else this.status.traces.failed += batch.length;
       return ok;
     })();
     try { return await this.flushing.traces; } finally { this.flushing.traces = null; }
   }
 
+  // OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE, as in the OpenTelemetry SDKs: delta for counters and
+  // histograms (lowmemory: only the synchronous ones), cumulative for up-down counters; gauges have none.
+  temporality(m) {
+    const pref = this.settings.get('otelMetricsTemporality');
+    if (pref === 'delta' && ['counter', 'ocounter', 'histogram'].includes(m.type)) return 'delta';
+    if (pref === 'lowmemory' && ['counter', 'histogram'].includes(m.type)) return 'delta';
+    return 'cumulative';
+  }
+
+  // The metrics export in OTLP JSON shape, as data point leaves (see split()), plus commit(), which records the
+  // exported values as the baseline for the next delta. It is called only after a successful export, so a failed
+  // export's increments are carried into the next one.
   otlpMetrics() {
-    const t = String(nowNs());
-    const start = String(PROCESS_START_NS);
-    const point = (s, extra) => ({ attributes: otlpAttrs(s.attrs), startTimeUnixNano: start, timeUnixNano: t, ...extra });
+    const now = nowNs();
+    const t = String(now);
     const num = (v) => (Number.isInteger(v) ? { asInt: String(v) } : { asDouble: v });
-    const out = [];
+    const leaves = [];
+    const next = new Map();
     for (const m of this.metrics) {
-      const pts = m.points();
-      if (!pts.length) continue;
-      const base = { name: m.name, description: m.description, unit: m.unit };
-      if (m.type === 'histogram') {
-        out.push({ ...base, histogram: { aggregationTemporality: 2, dataPoints: pts.map((s) => point(s, { count: String(s.count), sum: s.sum, bucketCounts: s.buckets.map(String), explicitBounds: m.buckets })) } });
-      } else if (m.type === 'gauge') {
-        out.push({ ...base, gauge: { dataPoints: pts.map((s) => ({ attributes: otlpAttrs(s.attrs), timeUnixNano: t, ...num(s.value) })) } });
-      } else {
-        out.push({ ...base, sum: { aggregationTemporality: 2, isMonotonic: m.type !== 'updown', dataPoints: pts.map((s) => point(s, num(s.value))) } });
+      const delta = this.temporality(m) === 'delta';
+      const before = this.exported.get(m) || new Map();
+      const after = new Map();
+      const start = String(delta ? this.exportedAt : PROCESS_START_NS);
+      for (const s of m.points()) {
+        after.set(s.key, s);
+        const b = delta ? before.get(s.key) : null;
+        const attributes = otlpAttrs(s.attrs);
+        let point;
+        if (m.type === 'histogram') {
+          const count = s.count - (b?.count || 0);
+          if (delta && count === 0) continue; // nothing new for this series
+          point = { attributes, startTimeUnixNano: start, timeUnixNano: t, count: String(count), sum: s.sum - (b?.sum || 0), bucketCounts: s.buckets.map((n, i) => String(n - (b?.buckets[i] || 0))), explicitBounds: m.buckets };
+        } else if (m.type === 'gauge') {
+          point = { attributes, timeUnixNano: t, ...num(s.value) };
+        } else {
+          const v = delta ? s.value - (b?.value || 0) : s.value;
+          if (delta && v === 0) continue;
+          point = { attributes, startTimeUnixNano: start, timeUnixNano: t, ...num(Number.isInteger(s.value) ? v : Math.max(0, Number(v.toFixed(9)))) };
+        }
+        leaves.push({ m, delta, point });
       }
+      if (delta) next.set(m, new Map([...after].map(([k, s]) => [k, m.type === 'histogram' ? { count: s.count, sum: s.sum, buckets: [...s.buckets] } : { value: s.value }])));
     }
-    return { resourceMetrics: [{ resource: this.resource(), scopeMetrics: [{ scope: this.scope(), metrics: out }] }] };
+    const resource = this.resource();
+    const build = (part) => {
+      const byMetric = new Map();
+      for (const { m, delta, point } of part) {
+        if (!byMetric.has(m)) byMetric.set(m, { delta, points: [] });
+        byMetric.get(m).points.push(point);
+      }
+      const metrics = [...byMetric].map(([m, { delta, points }]) => {
+        const base = { name: m.name, description: m.description, unit: m.unit };
+        const temporality = delta ? 1 : 2; // AGGREGATION_TEMPORALITY_DELTA / _CUMULATIVE
+        if (m.type === 'histogram') return { ...base, histogram: { aggregationTemporality: temporality, dataPoints: points } };
+        if (m.type === 'gauge') return { ...base, gauge: { dataPoints: points } };
+        return { ...base, sum: { aggregationTemporality: temporality, isMonotonic: m.type !== 'updown', dataPoints: points } };
+      });
+      return { resourceMetrics: [{ resource, scopeMetrics: [{ scope: this.scope(), metrics }] }] };
+    };
+    const commit = () => {
+      for (const [m, values] of next) this.exported.set(m, values);
+      this.exportedAt = now;
+    };
+    return { leaves, build, body: build(leaves), commit };
   }
 
   async flushMetrics() {
     if (this.flushing.metrics) return this.flushing.metrics;
     if (!this.metricsExportOn()) return false;
     this.flushing.metrics = (async () => {
-      const ok = await this.post('metrics', this.otlpMetrics());
-      if (ok) this.status.metrics.sent += 1; else this.status.metrics.failed += 1;
+      const { leaves, build, commit } = this.otlpMetrics();
+      const ok = await this.postAll('metrics', this.split('metrics', leaves, build));
+      if (ok) { commit(); this.status.metrics.sent += 1; } else this.status.metrics.failed += 1;
       return ok;
     })();
     try { return await this.flushing.metrics; } finally { this.flushing.metrics = null; }
@@ -470,7 +543,7 @@ class TelemetryService {
         protocol: this.settings.get('otelProtocol'),
         serviceName: this.serviceName(),
         traces: this.tracesOn() ? { sampleRatio: this.settings.get('otelTracesSampleRatio'), ...this.status.traces, queued: this.spans.length } : false,
-        metrics: this.metricsExportOn() ? { intervalMs: this.settings.get('otelMetricExportIntervalMs'), ...this.status.metrics } : false,
+        metrics: this.metricsExportOn() ? { intervalMs: this.settings.get('otelMetricExportIntervalMs'), temporality: this.settings.get('otelMetricsTemporality'), ...this.status.metrics } : false,
       } : false,
     };
   }

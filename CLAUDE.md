@@ -155,6 +155,8 @@ Leor also runs a Fly.io copy by hand (`fly deploy`), not from CI; see `docs/deci
   renders them as an OTLP-to-Prometheus bridge would. The exporter is in-house: OTLP JSON built once, encoded to
   protobuf by `src/util/otlpProto.js` (field numbers from opentelemetry-proto v1). Spans only for API surfaces, never
   for the tool's own exports (`User-Agent: api-test-tool-otlp/…`). Export is off until `OTEL_EXPORTER_OTLP_ENDPOINT` is set.
+  Delta temporality (`OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE`) diffs against the values of the last
+  *successful* export; exports over 900 KB are split (`split()` halves the spans or data points).
 - **Tester:** shared core in `src/services/tester/`, adapters in `adapters/{openapi.js,wsdl/,websocket/}`.
 - **OpenAPI:** two specs that must not overlap. `src/services/openapiGen.js` = data spec (`/v1`, `/oauth/token`,
   `/oauth/register`, `/sse`, `/llm/v1`) at `/openapi.json`; `src/services/openapiAdminGen.js` = admin spec
