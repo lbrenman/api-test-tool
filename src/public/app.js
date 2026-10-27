@@ -2601,7 +2601,7 @@
           ['/app', 'Back office app: KPIs and a friendly view of the mock data with create, edit and delete (dashboard password).'],
           ['/docs', 'Swagger UI for both specs (?spec=admin for the admin API).'],
           ['/health, /ready', 'Health and readiness checks.'],
-          ['/metrics', 'Request, activity and process metrics in Prometheus text format, for Fly.io, Prometheus or Grafana to scrape (METRICS_ENABLED; Bearer METRICS_TOKEN when set). The same measurements, plus one trace span per API request, can be pushed to any OpenTelemetry backend: Settings → telemetry.'],
+          ['/metrics', 'Request, activity and process metrics in Prometheus text format, for Fly.io, Prometheus or Grafana to scrape (METRICS_ENABLED; Bearer METRICS_TOKEN when set). The same measurements, one trace span and one access log per API request, and the tool\'s own warnings and errors can be pushed to any OpenTelemetry backend: Settings → telemetry.'],
           ['/samples/…', 'Bundled example specs for the API Tester.'],
           ['/dashboard, /admin/api/…', 'This dashboard and its API (password protected when ADMIN_PASSWORD is set).'],
           ['/mock/{spec}/…', 'Not reserved — created by "Mock from spec" as Inspector rules.'],

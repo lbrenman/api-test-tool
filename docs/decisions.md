@@ -13,7 +13,7 @@ The app was first built from a written spec (not in the repo). These choices dif
   `fetch` (no `undici`); XML on `saxes` (no `fast-xml-parser`); the OData `$filter` parser; SigV4 verification and
   aws-chunked decoding (checked against the AWS documentation example); MCP and A2A (no SDK dependency — the
   official SDKs are used only as test clients in scratch CI runs). GraphQL uses the reference `graphql` package (16.11.0).
-  Telemetry: the OTLP exporter (traces and metrics, http/protobuf and http/json) and the Prometheus `/metrics` renderer
+  Telemetry: the OTLP exporter (traces, metrics and logs, http/protobuf and http/json) and the Prometheus `/metrics` renderer
   are in-house (no `@opentelemetry/*` SDK, which would have added about 30 packages and pinned the wire format). The
   protobuf field numbers were checked by decoding the encoder's output against the opentelemetry-proto v1 `.proto`
   files; no gRPC.
@@ -114,6 +114,7 @@ Verified:
   speaking 2025-11-25), in CI.
 - A2A with the official SDKs in CI: Python `a2a-sdk` 1.2.2 (JSON-RPC and HTTP+JSON), `@a2a-js/sdk` 1.3.0, and
   `a2a-sdk` 0.3.26 against `/a2a/v0.3`.
+- OTLP traces and metrics to New Relic from the Fly app (http/protobuf, delta temporality; Oct 27, 2026).
 - The API Lab deploy job (OIDC role, ECR push and rollout all green, Oct 19, 2026, including PR #4's `commit` in `/health`).
 
 Not yet verified:
@@ -126,5 +127,5 @@ Not yet verified:
 - The mock LLM with the official OpenAI SDKs or the platform's LLM connector.
 - The MCP 2026-07-28 path with a real client (covered by the tool's own tests only).
 - The MCP server and A2A agent with the platform's own clients or gateways.
-- OTLP export to a real backend (Grafana Cloud, Honeycomb, New Relic with delta temporality, …) and the Fly `[metrics]` scrape on the live Fly app
+- OTLP export to Grafana Cloud or Honeycomb, and OTLP logs to a real backend and the Fly `[metrics]` scrape on the live Fly app
   (CI covers both encodings against a local collector; the protobuf encoding was checked against the .proto files).

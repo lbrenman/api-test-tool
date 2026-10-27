@@ -2,14 +2,15 @@
 // Protobuf encoding of OTLP export requests (OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf), in-house like the other wire
 // formats here. Input is the OTLP JSON shape services/telemetry.js builds (camelCase fields, hex trace/span ids,
 // 64-bit integers as decimal strings), so one builder serves both encodings. Field numbers are those of
-// opentelemetry-proto v1 (collector/{trace,metrics}/v1, trace/v1, metrics/v1, common/v1, resource/v1); only the
+// opentelemetry-proto v1 (collector/{trace,metrics,logs}/v1, trace/v1, metrics/v1, logs/v1, common/v1, resource/v1); only the
 // fields this tool sends are listed.
 
-// Field types: string, bytes (from hex), enum/uint32/bool (varint), int64 (signed varint), fixed64, sfixed64,
+// Field types: string, bytes (from hex), enum/uint32/bool (varint), int64 (signed varint), fixed32, fixed64, sfixed64,
 // double, a message name, or [type] for repeated fields (repeated numbers are packed).
 const MESSAGES = {
   ExportTraceServiceRequest: { resourceSpans: [1, ['ResourceSpans']] },
   ExportMetricsServiceRequest: { resourceMetrics: [1, ['ResourceMetrics']] },
+  ExportLogsServiceRequest: { resourceLogs: [1, ['ResourceLogs']] },
   Resource: { attributes: [1, ['KeyValue']], droppedAttributesCount: [2, 'uint32'] },
   InstrumentationScope: { name: [1, 'string'], version: [2, 'string'], attributes: [3, ['KeyValue']] },
   KeyValue: { key: [1, 'string'], value: [2, 'AnyValue'] },
@@ -25,6 +26,12 @@ const MESSAGES = {
   ResourceMetrics: { resource: [1, 'Resource'], scopeMetrics: [2, ['ScopeMetrics']], schemaUrl: [3, 'string'] },
   ScopeMetrics: { scope: [1, 'InstrumentationScope'], metrics: [2, ['Metric']], schemaUrl: [3, 'string'] },
   Metric: { name: [1, 'string'], description: [2, 'string'], unit: [3, 'string'], gauge: [5, 'Gauge'], sum: [7, 'Sum'], histogram: [9, 'Histogram'] },
+  ResourceLogs: { resource: [1, 'Resource'], scopeLogs: [2, ['ScopeLogs']], schemaUrl: [3, 'string'] },
+  ScopeLogs: { scope: [1, 'InstrumentationScope'], logRecords: [2, ['LogRecord']], schemaUrl: [3, 'string'] },
+  LogRecord: {
+    timeUnixNano: [1, 'fixed64'], severityNumber: [2, 'enum'], severityText: [3, 'string'], body: [5, 'AnyValue'],
+    attributes: [6, ['KeyValue']], flags: [8, 'fixed32'], traceId: [9, 'bytes'], spanId: [10, 'bytes'], observedTimeUnixNano: [11, 'fixed64'],
+  },
   Gauge: { dataPoints: [1, ['NumberDataPoint']] },
   Sum: { dataPoints: [1, ['NumberDataPoint']], aggregationTemporality: [2, 'enum'], isMonotonic: [3, 'bool'] },
   Histogram: { dataPoints: [1, ['HistogramDataPoint']], aggregationTemporality: [2, 'enum'] },
@@ -38,6 +45,7 @@ const MESSAGES = {
 const VARINT = 0;
 const I64 = 1;
 const LEN = 2;
+const I32 = 5;
 
 function varint(n) {
   let v = BigInt.asUintN(64, BigInt(n));
@@ -75,6 +83,7 @@ function scalar(type, v) {
     case 'enum':
     case 'uint32':
     case 'int64': return [VARINT, varint(v)];
+    case 'fixed32': { const b = Buffer.alloc(4); b.writeUInt32LE(Number(v) >>> 0); return [I32, b]; }
     case 'fixed64': return [I64, i64(v, false)];
     case 'sfixed64': return [I64, i64(v, true)];
     case 'double': return [I64, f64(v)];
