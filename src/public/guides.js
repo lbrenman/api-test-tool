@@ -250,7 +250,7 @@
           `Configure credentials to match the active auth mode: ${C.authLabel}.`,
           `Point webhooks at any path that is not reserved, e.g. \`${B}/hooks/orders\`, and watch them on the Inspector page.`,
           `Import \`${B}/openapi.json\` into your client tool to get every endpoint pre-defined.`,
-          `Watch this tool from an external dashboard: Prometheus, Grafana or Fly.io can scrape \`${B}/metrics\`, and Settings → telemetry pushes metrics and one trace per API request to any OpenTelemetry backend.`,
+          `Watch this tool from an external dashboard: Prometheus, Grafana or Fly.io can scrape \`${B}/metrics\`, and Settings → telemetry pushes metrics, one trace and one access log per API request, and the tool\'s warnings and errors to any OpenTelemetry backend.`,
           'The other entries are the same data over SOAP, WebSocket, SSE, GraphQL and OData, an OpenAI-compatible mock LLM, an MCP server, an A2A agent, and the file pool as an S3 bucket (endpoint = the base URL); the Protocols page has the details for each.',
         ],
         curls: [

@@ -18,7 +18,7 @@ const { commit } = require('../util/build');
 function exportWarnings(ctx) {
   const o = ctx.telemetry?.summary().otlp;
   if (!o) return [];
-  return ['traces', 'metrics'].filter((k) => o[k] && o[k].last && !o[k].last.ok)
+  return ['traces', 'metrics', 'logs'].filter((k) => o[k] && o[k].last && !o[k].last.ok)
     .map((k) => `OpenTelemetry ${k} export to ${o.endpoint} is failing: ${o[k].last.error} (Settings → telemetry).`);
 }
 

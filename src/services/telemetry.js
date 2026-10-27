@@ -1,6 +1,7 @@
 'use strict';
 // Observability for the tool itself: a small in-process metrics registry, served as Prometheus text at /metrics,
-// plus an optional OTLP/HTTP exporter (protobuf or JSON) that pushes traces (one server span per API request) and the same
+// plus an optional OTLP/HTTP exporter (protobuf or JSON) that pushes traces (one server span per API request), logs
+// (an access-log record per API request, linked to its span, and the tool's own log lines) and the same
 // metrics to any OpenTelemetry backend (Grafana Cloud, Honeycomb, New Relic, Datadog, SigNoz, a collector…).
 // In-house on purpose, like the other wire formats here: no OpenTelemetry SDK, no new dependency.
 //
@@ -11,6 +12,7 @@
 // Settings (section "telemetry"): METRICS_ENABLED, METRICS_TOKEN and the standard OTEL_* variables. Export is off
 // until OTEL_EXPORTER_OTLP_ENDPOINT is set; every setting is read when used, so dashboard changes apply live.
 const os = require('node:os');
+const util = require('node:util');
 const crypto = require('node:crypto');
 const { monitorEventLoopDelay } = require('node:perf_hooks');
 const pkg = require('../../package.json');
@@ -20,7 +22,9 @@ const otlpProto = require('../util/otlpProto');
 // http.server.request.duration buckets from the semantic conventions, extended for chaos latency and long streams.
 const DURATION_BUCKETS = [0.005, 0.01, 0.025, 0.05, 0.075, 0.1, 0.25, 0.5, 0.75, 1, 2.5, 5, 7.5, 10, 30, 60, 120];
 const MAX_SERIES = 2000; // per metric; beyond it new attribute sets go to one otel.metric.overflow series
-const MAX_QUEUED_SPANS = 2048;
+const MAX_QUEUED_SPANS = 2048; // also the log record queue's size
+const MAX_LOG_BODY = 8000;
+const SEVERITY = { debug: [5, 'DEBUG'], info: [9, 'INFO'], warn: [13, 'WARN'], error: [17, 'ERROR'] };
 const MAX_EXPORT_BYTES = 900000; // larger exports are split; New Relic, for one, rejects payloads of 1 MB or more
 const SPAN_BATCH = 512;
 const SPAN_FLUSH_MS = 5000;
@@ -176,10 +180,12 @@ class TelemetryService {
     this.apiKind = apiKind;
     this.metrics = [];
     this.spans = [];
+    this.logs = [];
+    this.muted = false; // set while the exporter reports its own failures, so they are not exported as logs
     this.timers = [];
-    this.status = { traces: { sent: 0, failed: 0, dropped: 0, last: null }, metrics: { sent: 0, failed: 0, last: null } };
+    this.status = { traces: { sent: 0, failed: 0, dropped: 0, last: null }, metrics: { sent: 0, failed: 0, last: null }, logs: { sent: 0, failed: 0, dropped: 0, last: null } };
     this.warnedAt = {};
-    this.flushing = { traces: null, metrics: null };
+    this.flushing = { traces: null, metrics: null, logs: null };
     this.closed = false;
     this.maxExportBytes = MAX_EXPORT_BYTES;
     this.exported = new Map(); // delta temporality: per metric, the values at the last successful export
@@ -215,7 +221,7 @@ class TelemetryService {
       ctx.events.on('file', (e) => this.fileEvents.add({ 'att.file.event': e.type, 'att.file.via': e.via }));
     }
 
-    this.every(SPAN_FLUSH_MS, () => this.flushTraces());
+    this.every(SPAN_FLUSH_MS, () => { this.flushTraces(); this.flushLogs(); });
     this.scheduleMetrics();
   }
 
@@ -238,6 +244,7 @@ class TelemetryService {
   endpoint() { return String(this.settings.get('otelEndpoint') || '').trim().replace(/\/+$/, ''); }
   tracesOn() { return !!this.endpoint() && this.settings.get('otelTracesExporter') === 'otlp'; }
   metricsExportOn() { return !!this.endpoint() && this.settings.get('otelMetricsExporter') === 'otlp'; }
+  logsOn() { return !!this.endpoint() && this.settings.get('otelLogsExporter') === 'otlp'; }
 
   serviceName() {
     return this.settings.get('otelServiceName') || parseKeyValues(this.settings.get('otelResourceAttributes'))['service.name'] || 'api-test-tool';
@@ -310,21 +317,26 @@ class TelemetryService {
     this.duration.record(attrs, seconds);
     if (chaos) this.chaos.add({ 'att.protocol': protocol, 'att.chaos.type': String(chaos) });
 
-    // Spans for the APIs under test and the inspector catch-all; not for the dashboard, admin API or probes, and not
-    // for this tool's own exports (an endpoint pointed at its own inspector would otherwise trace itself forever).
+    // Spans and access logs for the APIs under test and the inspector catch-all; not for the dashboard, admin API or
+    // probes, and not for this tool's own exports (an endpoint pointed at its own inspector would otherwise trace itself forever).
     const ownExport = String(req.get('user-agent') || '').startsWith('api-test-tool-otlp/');
-    if (st.span && !ownExport && !['platform', 'admin', 'ui'].includes(protocol)) {
-      const spanAttrs = {
-        ...attrs,
-        'url.path': path,
-        'url.scheme': req.protocol,
-        'server.address': req.hostname,
-        'client.address': req.ip,
-        'user_agent.original': req.get('user-agent'),
-        'att.request_id': req.id,
-        'att.correlation_id': req.correlationId !== req.id ? req.correlationId : undefined,
-        'att.chaos.type': chaos ? String(chaos) : undefined,
-      };
+    if (ownExport || ['platform', 'admin', 'ui'].includes(protocol)) return;
+    const failed = aborted || status >= 400;
+    const access = this.logsOn() ? this.settings.get('otelAccessLogs') : 'none';
+    const logIt = access === 'all' || (access === 'errors' && failed);
+    if (!st.span && !logIt) return;
+    const detail = normAttrs({
+      ...attrs,
+      'url.path': path,
+      'url.scheme': req.protocol,
+      'server.address': req.hostname,
+      'client.address': req.ip,
+      'user_agent.original': req.get('user-agent'),
+      'att.request_id': req.id,
+      'att.correlation_id': req.correlationId !== req.id ? req.correlationId : undefined,
+      'att.chaos.type': chaos ? String(chaos) : undefined,
+    });
+    if (st.span) {
       this.queueSpan({
         traceId: st.span.traceId,
         spanId: st.span.spanId,
@@ -333,10 +345,34 @@ class TelemetryService {
         kind: 2, // SPAN_KIND_SERVER
         startTimeUnixNano: String(st.startNs),
         endTimeUnixNano: String(st.startNs + durNs),
-        attributes: otlpAttrs(normAttrs(spanAttrs)),
+        attributes: otlpAttrs(detail),
         status: aborted || status >= 500 ? { code: 2, message: aborted ? 'connection closed before the response finished' : `HTTP ${status}` } : { code: 0 },
       });
     }
+    if (logIt) {
+      // One access-log record, with the span's trace and span ids so backends show it next to the trace.
+      const ms = Math.round(seconds * 1000);
+      const [num, text] = aborted || status >= 500 ? SEVERITY.error : status >= 400 ? SEVERITY.warn : SEVERITY.info;
+      this.queueLog({
+        timeUnixNano: String(st.startNs + durNs),
+        observedTimeUnixNano: String(nowNs()),
+        severityNumber: num,
+        severityText: text,
+        body: { stringValue: `${req.method} ${path} ${aborted ? 'aborted' : status} ${ms} ms` },
+        attributes: otlpAttrs(normAttrs({ ...Object.fromEntries(detail), 'att.log.kind': 'access', 'att.duration_ms': ms })),
+        ...(st.span ? { traceId: st.span.traceId, spanId: st.span.spanId, flags: 1 } : {}),
+      });
+    }
+  }
+
+  // The tool's own log lines (ctx.log, already filtered by LOG_LEVEL) as log records.
+  log(level, args) {
+    if (this.muted || !this.logsOn()) return;
+    const [num, text] = SEVERITY[level] || SEVERITY.info;
+    let body = util.format(...args);
+    if (body.length > MAX_LOG_BODY) body = `${body.slice(0, MAX_LOG_BODY)}…(truncated)`;
+    const t = String(nowNs());
+    this.queueLog({ timeUnixNano: t, observedTimeUnixNano: t, severityNumber: num, severityText: text, body: { stringValue: body }, attributes: otlpAttrs([['att.log.kind', 'tool']]) });
   }
 
   webhookDelivery(rec) {
@@ -378,6 +414,12 @@ class TelemetryService {
 
   // ------------------------------------------------------------ OTLP export
 
+  queueLog(record) {
+    if (this.logs.length >= MAX_QUEUED_SPANS) { this.status.logs.dropped += 1; return; }
+    this.logs.push(record);
+    if (this.logs.length >= SPAN_BATCH) this.flushLogs();
+  }
+
   queueSpan(span) {
     if (this.spans.length >= MAX_QUEUED_SPANS) { this.status.traces.dropped += 1; return; }
     this.spans.push(span);
@@ -386,7 +428,7 @@ class TelemetryService {
 
   encode(signal, body) {
     return this.settings.get('otelProtocol') === 'http/protobuf'
-      ? otlpProto.encode(body, signal === 'traces' ? 'ExportTraceServiceRequest' : 'ExportMetricsServiceRequest')
+      ? otlpProto.encode(body, { traces: 'ExportTraceServiceRequest', metrics: 'ExportMetricsServiceRequest', logs: 'ExportLogsServiceRequest' }[signal])
       : Buffer.from(JSON.stringify(body));
   }
 
@@ -423,7 +465,8 @@ class TelemetryService {
       st.last = { at, ok: false, error };
       if (!this.warnedAt[signal] || Date.now() - this.warnedAt[signal] > WARN_EVERY_MS) {
         this.warnedAt[signal] = Date.now();
-        this.ctx.log('warn', `OTLP ${signal} export to ${url} failed: ${error}`);
+        this.muted = true; // printed, never exported: it would fail the same way, and could feed itself
+        try { this.ctx.log('warn', `OTLP ${signal} export to ${url} failed: ${error}`); } finally { this.muted = false; }
       }
       return false;
     }
@@ -457,6 +500,22 @@ class TelemetryService {
   // The metrics export in OTLP JSON shape, as data point leaves (see split()), plus commit(), which records the
   // exported values as the baseline for the next delta. It is called only after a successful export, so a failed
   // export's increments are carried into the next one.
+  // Sends queued log records now, like flushTraces().
+  async flushLogs() {
+    if (this.flushing.logs) return this.flushing.logs;
+    if (!this.logsOn()) { this.logs.length = 0; return false; }
+    if (!this.logs.length) return true;
+    const batch = this.logs.splice(0, SPAN_BATCH);
+    this.flushing.logs = (async () => {
+      const resource = this.resource();
+      const build = (logRecords) => ({ resourceLogs: [{ resource, scopeLogs: [{ scope: this.scope(), logRecords }] }] });
+      const ok = await this.postAll('logs', this.split('logs', batch, build));
+      if (ok) this.status.logs.sent += batch.length; else this.status.logs.failed += batch.length;
+      return ok;
+    })();
+    try { return await this.flushing.logs; } finally { this.flushing.logs = null; }
+  }
+
   otlpMetrics() {
     const now = nowNs();
     const t = String(now);
@@ -523,13 +582,13 @@ class TelemetryService {
     try { return await this.flushing.metrics; } finally { this.flushing.metrics = null; }
   }
 
-  // Both signals now (tests, shutdown). Waits for an export already in flight, then sends whatever is still queued.
+  // Every signal now (tests, shutdown). Waits for an export already in flight, then sends whatever is still queued.
   async flush() {
-    const traces = (async () => {
-      let ok = await this.flushTraces();
-      while (ok && this.spans.length) ok = await this.flushTraces();
-    })();
-    await Promise.all([traces, this.flushMetrics()]);
+    const drain = async (flush, queue) => {
+      let ok = await flush();
+      while (ok && queue.length) ok = await flush();
+    };
+    await Promise.all([drain(() => this.flushTraces(), this.spans), drain(() => this.flushLogs(), this.logs), this.flushMetrics()]);
   }
 
   // For /health and the admin overview: what is configured and how the last exports went. No secrets.
@@ -543,6 +602,7 @@ class TelemetryService {
         protocol: this.settings.get('otelProtocol'),
         serviceName: this.serviceName(),
         traces: this.tracesOn() ? { sampleRatio: this.settings.get('otelTracesSampleRatio'), ...this.status.traces, queued: this.spans.length } : false,
+        logs: this.logsOn() ? { accessLogs: this.settings.get('otelAccessLogs'), ...this.status.logs, queued: this.logs.length } : false,
         metrics: this.metricsExportOn() ? { intervalMs: this.settings.get('otelMetricExportIntervalMs'), temporality: this.settings.get('otelMetricsTemporality'), ...this.status.metrics } : false,
       } : false,
     };

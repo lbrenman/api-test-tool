@@ -2,7 +2,8 @@
 // Observability: /metrics (Prometheus text: request histogram by protocol/route/status/profile, chaos, data changes,
 // OAuth tokens, process metrics; METRICS_ENABLED and METRICS_TOKEN), and OTLP export of traces and metrics to a
 // local collector in both encodings (W3C traceparent honoured, headers and resource attributes sent, failures
-// reported in /health), plus the route templates that keep metric cardinality low.
+// reported in /health), OTLP logs (access logs linked to spans, the tool's own log lines), plus the route templates
+// that keep metric cardinality low.
 const { test, before, after } = require('node:test');
 const assert = require('node:assert/strict');
 const http = require('node:http');
@@ -256,6 +257,73 @@ test('delta temporality (New Relic, Datadog) and large exports split under the s
   }
 });
 
+test('OTLP logs: an access log per API request linked to its span, the tool\'s own log lines, errors-only mode', async () => {
+  got.length = 0;
+  const t = await makeApp({ SEED_SAMPLE_FILES: 'false', OTEL_EXPORTER_OTLP_ENDPOINT: `${otlp}/logs`, OTEL_EXPORTER_OTLP_PROTOCOL: 'http/json', OTEL_METRICS_EXPORTER: 'none' });
+  try {
+    const records = () => got.filter((x) => x.path === '/logs/v1/logs').map(json).flatMap((b) => b.resourceLogs.flatMap((r) => r.scopeLogs.flatMap((sl) => sl.logRecords)));
+    const ok = await request(t.app).get('/v1/employees/1').set('traceparent', `00-${'c'.repeat(32)}-${'d'.repeat(16)}-01`).expect(200);
+    await request(t.app).get('/v1/employees/999999').expect(404);
+    await request(t.app).get('/v1/employees/2').set('X-Force-Error', '503').expect(503);
+    await request(t.app).get('/health').expect(200); // not an API under test: no access log
+    t.ctx.log('error', 'something broke:', 42);
+    await t.ctx.telemetry.flush();
+
+    const recs = records();
+    const access = recs.filter((r) => attr(r.attributes, 'att.log.kind') === 'access');
+    assert.equal(access.length, 3);
+    assert.ok(!access.some((r) => attr(r.attributes, 'url.path') === '/health'));
+    const first = access.find((r) => attr(r.attributes, 'url.path') === '/v1/employees/1');
+    assert.match(first.body.stringValue, /^GET \/v1\/employees\/1 200 \d+ ms$/);
+    assert.equal(first.severityNumber, 9);
+    assert.equal(first.severityText, 'INFO');
+    assert.equal(first.traceId, 'c'.repeat(32), 'the access log carries the caller\'s trace id');
+    assert.equal(first.flags, 1);
+    assert.equal(attr(first.attributes, 'att.request_id'), ok.headers['x-request-id']);
+    const spans = got.filter((x) => x.path === '/logs/v1/traces').map(json).flatMap((b) => b.resourceSpans[0].scopeSpans[0].spans);
+    assert.equal(first.spanId, spans.find((sp) => sp.traceId === 'c'.repeat(32)).spanId, 'and its span id: logs in context');
+    assert.equal(access.find((r) => attr(r.attributes, 'url.path') === '/v1/employees/999999').severityText, 'WARN');
+    const failed = access.find((r) => attr(r.attributes, 'url.path') === '/v1/employees/2');
+    assert.equal(failed.severityNumber, 17);
+    assert.equal(attr(failed.attributes, 'att.chaos.type'), '503');
+    const tool = recs.find((r) => attr(r.attributes, 'att.log.kind') === 'tool');
+    assert.equal(tool.body.stringValue, 'something broke: 42');
+    assert.equal(tool.severityText, 'ERROR');
+    assert.equal(tool.traceId, undefined);
+
+    // errors: only 4xx, 5xx and dropped connections get an access log.
+    got.length = 0;
+    await t.ctx.settings.set('otelAccessLogs', 'errors');
+    await request(t.app).get('/v1/employees/3').expect(200);
+    await request(t.app).get('/v1/employees/4').set('X-Force-Error', '500').expect(500);
+    await t.ctx.telemetry.flush();
+    assert.deepEqual(records().map((r) => attr(r.attributes, 'url.path')), ['/v1/employees/4']);
+    const h = (await request(t.app).get('/health').expect(200)).body.settings.telemetry.otlp.logs;
+    assert.equal(h.accessLogs, 'errors');
+    assert.equal(h.last.ok, true);
+
+    // The exporter's own failure warnings are printed but never exported (they would fail too, and feed themselves).
+    await t.ctx.settings.set('logLevel', 'warn');
+    await t.ctx.settings.set('otelEndpoint', `${otlp}/broken`);
+    await request(t.app).get('/v1/employees/5').set('X-Force-Error', '500').expect(500);
+    await t.ctx.telemetry.flush();
+    assert.ok(!t.ctx.telemetry.logs.some((r) => /OTLP .* export/.test(r.body.stringValue)));
+    assert.equal((await request(t.app).get('/health').expect(200)).body.settings.telemetry.otlp.logs.last.ok, false);
+
+    // OTEL_LOGS_EXPORTER=none: nothing queued or sent.
+    await t.ctx.settings.set('otelEndpoint', `${otlp}/logs`);
+    await t.ctx.settings.set('otelLogsExporter', 'none');
+    got.length = 0;
+    await request(t.app).get('/v1/employees/6').set('X-Force-Error', '500').expect(500);
+    t.ctx.log('error', 'not exported');
+    await t.ctx.telemetry.flush();
+    assert.equal(records().length, 0);
+    assert.equal((await request(t.app).get('/health').expect(200)).body.settings.telemetry.otlp.logs, false);
+  } finally {
+    await t.close();
+  }
+});
+
 test('an export pointed at the tool\'s own Inspector is captured there, and the export itself is not traced', async () => {
   const t = await listen({ SEED_SAMPLE_FILES: 'false', OTEL_EXPORTER_OTLP_PROTOCOL: 'http/json', OTEL_METRICS_EXPORTER: 'none' });
   try {
@@ -300,5 +368,7 @@ test('otlpProto: varints, packed repeated numbers and nested messages', () => {
   // Histogram data point: count (fixed64 4), packed bucket_counts (6) and explicit_bounds (7).
   const hp = otlpProto.encode({ count: '3', bucketCounts: ['1', '2'], explicitBounds: [0.5] }, 'HistogramDataPoint');
   assert.equal(hp.toString('hex'), `21${'0300000000000000'}3210${'0100000000000000'}${'0200000000000000'}3a08${'000000000000e03f'}`);
+  // LogRecord flags (fixed32, field 8) and severity_number (enum, field 2).
+  assert.equal(otlpProto.encode({ severityNumber: 17, flags: 1 }, 'LogRecord').toString('hex'), '10114501000000');
   assert.throws(() => otlpProto.encode({}, 'Nope'), /unknown message/);
 });

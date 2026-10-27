@@ -70,7 +70,9 @@ ScopedEmitter.prototype.removeListener = ScopedEmitter.prototype.off;
 async function createContext({ env = process.env, overrides = {} } = {}) {
   const settings = new Settings({ ...env, ...overrides });
   const log = (level, ...args) => {
-    if (LEVELS[level] >= LEVELS[settings.get('logLevel')]) (level === 'error' ? console.error : console.log)(`[${level}]`, ...args);
+    if (LEVELS[level] < LEVELS[settings.get('logLevel')]) return;
+    (level === 'error' ? console.error : console.log)(`[${level}]`, ...args);
+    log.sink?.(level, args); // OTLP log export (services/telemetry.js), once the context has it
   };
   const repo = await Repo.create({ driver: settings.get('dbDriver'), sqlitePath: settings.get('sqlitePath'), databaseUrl: settings.get('databaseUrl') });
   await settings.attach(repo);
@@ -95,7 +97,8 @@ async function createContext({ env = process.env, overrides = {} } = {}) {
   ctx.tester = new TesterService(ctx);
   ctx.webhooks = new WebhookService(ctx); // outgoing webhooks on data changes (stored in the database)
   await ctx.webhooks.init();
-  ctx.telemetry = new TelemetryService(ctx, { apiKind }); // /metrics and optional OTLP export of traces and metrics
+  ctx.telemetry = new TelemetryService(ctx, { apiKind }); // /metrics and optional OTLP export of traces, metrics and logs
+  log.sink = (level, args) => ctx.telemetry.log(level, args);
   return ctx;
 }
 

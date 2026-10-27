@@ -32,7 +32,8 @@ both calls APIs and exposes them:
   2025-xx session eras), A2A agent `/a2a` (1.0.1 JSON-RPC and HTTP+JSON, plus 0.3). No real model is called;
   the A2A agent is rule-based.
 - **Observability of the tool itself:** `/metrics` (Prometheus text) and optional OTLP/HTTP export (protobuf or JSON) of
-  the same metrics plus one span per API request to any OpenTelemetry backend, configured with the standard `OTEL_*` vars.
+  the same metrics, one span per API request and logs (access logs linked to spans, the tool's own log lines) to any
+  OpenTelemetry backend, configured with the standard `OTEL_*` vars.
 - **Contract tester (incoming):** OpenAPI 3.0/3.1/Swagger 2.0, WSDL 1.1 (XSD validation), AsyncAPI 2.x/3.0 or
   scripted WebSocket scenarios. Lint, try-it, validation, run-all with ID chaining and negative tests, reports.
 
@@ -156,7 +157,10 @@ Leor also runs a Fly.io copy by hand (`fly deploy`), not from CI; see `docs/deci
   protobuf by `src/util/otlpProto.js` (field numbers from opentelemetry-proto v1). Spans only for API surfaces, never
   for the tool's own exports (`User-Agent: api-test-tool-otlp/…`). Export is off until `OTEL_EXPORTER_OTLP_ENDPOINT` is set.
   Delta temporality (`OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE`) diffs against the values of the last
-  *successful* export; exports over 900 KB are split (`split()` halves the spans or data points).
+  *successful* export; exports over 900 KB are split (`split()` halves the spans, log records or data points).
+  Logs: `end()` queues an access-log record (`TELEMETRY_ACCESS_LOGS`) with the span's trace/span ids; `ctx.log` feeds
+  `telemetry.log()` through `log.sink` (set in `createContext`), so anything logged at `LOG_LEVEL` is exported. The
+  exporter's own failure warnings run with `muted` set and are never exported (they would fail too, and feed themselves).
 - **Tester:** shared core in `src/services/tester/`, adapters in `adapters/{openapi.js,wsdl/,websocket/}`.
 - **OpenAPI:** two specs that must not overlap. `src/services/openapiGen.js` = data spec (`/v1`, `/oauth/token`,
   `/oauth/register`, `/sse`, `/llm/v1`) at `/openapi.json`; `src/services/openapiAdminGen.js` = admin spec
@@ -301,7 +305,8 @@ claim an issue: assign yourself and add the `in progress` label. Link the PR to 
 - SPIFFE (roadmap step 4b) is parked: `spiffe://` URI SANs work in lab CA certificates and `tls_client_auth`
   (`san_uri`), but there is no SVID/trust-bundle handling.
 - Telemetry: no gRPC export (http/protobuf and http/json only), server spans only (no client spans or `traceparent`
-  on outgoing webhooks and inspector forwards yet), and no OTLP logs.
+  on outgoing webhooks and inspector forwards yet). Log lines written with `console.*` directly (a few in the inspector)
+  are not exported; use `ctx.log`.
 - Run **one instance**. Resource lists, idempotency keys, MCP sessions, A2A tasks, the SSE/WebSocket change feeds,
   the Inspector live stream and the rate-limit budget are in-process, so even Postgres + S3 doesn't make two instances work.
 - More in `docs/decisions.md` (deliberate deviations, and what has and hasn't been verified in a real environment).
