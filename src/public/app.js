@@ -265,7 +265,7 @@
   // One-line purpose of each page; shown in the Help guide and as the tooltip of each page's help link.
   const PAGE_HELP = {
     overview: { purpose: 'Your starting point: the URLs to give integrations, current auth mode, health, data counts and copy-ready curl commands.' },
-    settings: { purpose: 'Every setting in one place. Environment variables set defaults; changes here override them and survive restarts. Badges show where each value comes from.' },
+    settings: { purpose: 'Every setting in one place. Environment variables set defaults; changes here override them and survive restarts. Badges show where each value comes from. The telemetry section sends this tool\'s own metrics and traces to an external dashboard.' },
     data: { purpose: 'The seeded mock data (employees, products, departments, categories): counts, a preview, re-seed with different sizes, or clear it.' },
     inspector: { purpose: 'Every call made to this server shows up here live, with headers, auth, body and the response that was returned: webhooks and other calls to unreserved paths, plus calls to every API the tool serves (/v1, SOAP, WebSocket upgrades, SSE, GraphQL, OData, the LLM mock, the MCP server, the A2A agent, the S3 API and OAuth). Filter by source, or switch API recording off with the checkbox at the top of the page.' },
     webhooks: { purpose: 'Outgoing webhooks: when an employee, product, department or category is created, updated or deleted, or a file is uploaded, downloaded or deleted (through any protocol), POST its type and id to URLs you choose. Stored in the database, so they survive restarts; every delivery is logged with the response.' },
@@ -2601,6 +2601,7 @@
           ['/app', 'Back office app: KPIs and a friendly view of the mock data with create, edit and delete (dashboard password).'],
           ['/docs', 'Swagger UI for both specs (?spec=admin for the admin API).'],
           ['/health, /ready', 'Health and readiness checks.'],
+          ['/metrics', 'Request, activity and process metrics in Prometheus text format, for Fly.io, Prometheus or Grafana to scrape (METRICS_ENABLED; Bearer METRICS_TOKEN when set). The same measurements, plus one trace span per API request, can be pushed to any OpenTelemetry backend: Settings → telemetry.'],
           ['/samples/…', 'Bundled example specs for the API Tester.'],
           ['/dashboard, /admin/api/…', 'This dashboard and its API (password protected when ADMIN_PASSWORD is set).'],
           ['/mock/{spec}/…', 'Not reserved — created by "Mock from spec" as Inspector rules.'],
@@ -2624,6 +2625,7 @@
           ['X-Force-MCP-Error: tool | rpc | rpc:-32603 | drop', 'On an MCP request: a tool error (isError), a JSON-RPC error, or a dropped connection.'],
           ['X-Force-A2A-Error: fail | reject | input-required | auth-required | rpc | drop', 'On an A2A message: end the task in that state, return a JSON-RPC error, or cut the stream.'],
           ['X-Request-Id / X-Correlation-Id', 'Echoed back (generated if missing) for tracing.'],
+          ['traceparent: 00-<trace id>-<span id>-01', 'W3C Trace Context: with OpenTelemetry export on (Settings → telemetry), this request\'s span joins your trace, so the call shows up under your client\'s trace in Grafana, Honeycomb, Jaeger and the like.'],
         ].map(([hd, d]) => h('tr', null, h('td', null, code(hd)), h('td', null, d))))))));
 
     el.append(section('more', 'More information',

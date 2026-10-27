@@ -1,12 +1,14 @@
 'use strict';
-// /health, /ready, /openapi.json|yaml (mock data API spec), /docs (Swagger UI for the data and admin specs),
+// /health, /ready, /metrics (Prometheus text, services/telemetry.js), /openapi.json|yaml (mock data API spec), /docs (Swagger UI for the data and admin specs),
 // /samples/* (bundled specs). The admin spec itself is served by the admin router at /admin/api/openapi.json|yaml.
 const express = require('express');
 const path = require('node:path');
 const yaml = require('js-yaml');
 const { generateOpenApi } = require('../services/openapiGen');
 const pkg = require('../../package.json');
+const crypto = require('node:crypto');
 const { commit } = require('../util/build');
+const { sendProblem } = require('../util/problem');
 
 const STARTED = Date.now();
 
@@ -61,6 +63,7 @@ module.exports = function platformRouter(ctx, { adminAuth } = {}) {
         s3: settings.get('s3ApiEnabled') ? { endpoint: ctx.baseUrl(req), bucket: settings.get('s3ApiBucket'), region: settings.get('s3ApiRegion'), addressing: 'path-style' } : false,
         maxFileSizeMb: settings.get('maxFileSizeMb'),
         dashboardProtected: !!settings.get('adminPassword'),
+        telemetry: ctx.telemetry ? ctx.telemetry.summary() : false,
       },
       data: db.ok ? await resources.counts() : undefined,
     });
@@ -69,6 +72,26 @@ module.exports = function platformRouter(ctx, { adminAuth } = {}) {
   r.get('/ready', async (req, res) => {
     const db = await check(() => repo.ping());
     res.status(ctx.ready && db.ok ? 200 : 503).json({ ready: !!(ctx.ready && db.ok) });
+  });
+
+  // Request, activity and process metrics for Prometheus-style scrapers (Fly.io, Prometheus, Grafana Alloy, collectors).
+  r.get('/metrics', (req, res) => {
+    if (!settings.get('metricsEnabled')) return sendProblem(req, res, 404, { detail: 'Metrics are off on this server (METRICS_ENABLED=false)', code: 'metrics-disabled' });
+    const token = settings.get('metricsToken');
+    if (token) {
+      const given = Buffer.from(/^Bearer\s+(.+)$/i.exec(req.get('authorization') || '')?.[1]?.trim() || '');
+      const want = Buffer.from(token);
+      if (given.length !== want.length || !crypto.timingSafeEqual(given, want)) {
+        return sendProblem(req, res, 401, { detail: 'This server\'s /metrics needs Authorization: Bearer <METRICS_TOKEN>', code: 'metrics-token-required', headers: { 'WWW-Authenticate': 'Bearer realm="metrics"' } });
+      }
+    }
+    // Written directly: res.type()/send() would reorder the parameters, and some scrapers match the exact media type.
+    const body = Buffer.from(ctx.telemetry.prometheus(), 'utf8');
+    res.status(200);
+    res.setHeader('Cache-Control', 'no-store');
+    res.setHeader('Content-Type', 'text/plain; version=0.0.4; charset=utf-8');
+    res.setHeader('Content-Length', String(body.length));
+    res.end(req.method === 'HEAD' ? undefined : body);
   });
 
   r.get('/openapi.json', async (req, res) => {

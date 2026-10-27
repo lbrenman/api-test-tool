@@ -14,6 +14,14 @@ const { ProfileService } = require('../services/profiles');
 const pkg = require('../../package.json');
 const { commit } = require('../util/build');
 
+// The last OTLP export of a signal failed: say so on the Overview page (the details are in /health).
+function exportWarnings(ctx) {
+  const o = ctx.telemetry?.summary().otlp;
+  if (!o) return [];
+  return ['traces', 'metrics'].filter((k) => o[k] && o[k].last && !o[k].last.ok)
+    .map((k) => `OpenTelemetry ${k} export to ${o.endpoint} is failing: ${o[k].last.error} (Settings → telemetry).`);
+}
+
 module.exports = function adminRouter(ctx, { adminAuth, filesApi }) {
   const r = express.Router();
   const { settings, repo, resources, files, inspector, oauth, baseUrl } = ctx;
@@ -64,7 +72,7 @@ module.exports = function adminRouter(ctx, { adminAuth, filesApi }) {
       version: pkg.version,
       commit,
       baseUrl: base,
-      urls: { api: `${base}/v1`, profiles: `${base}/p/<profile>/v1`, ...(settings.get('mtlsEnabled') ? { mtls: `${baseUrl.mtls(req)}/p/mtls/v1` } : {}), docs: `${base}/docs`, openapi: `${base}/openapi.json`, adminOpenapi: `${base}/admin/api/openapi.json`, app: `${base}/app/`, health: `${base}/health`, inspector: `${base}/<any-other-path>`, token: `${base}/oauth/token`, ...(settings.get('soapEnabled') ? { soap: `${base}/soap`, soapWsdl: `${base}/soap/EmployeeService?wsdl` } : {}), ...(settings.get('wsEnabled') ? { websocket: `${base.replace(/^http/, 'ws')}/ws/rpc`, asyncapi: `${base}/ws/asyncapi.json` } : {}), ...(settings.get('sseEnabled') ? { sse: `${base}/sse/changes` } : {}), ...(settings.get('odataEnabled') ? { odata: `${base}/odata/v4`, odataMetadata: `${base}/odata/v4/$metadata` } : {}), ...(settings.get('graphqlEnabled') ? { graphql: `${base}/graphql`, graphqlSchema: `${base}/graphql/schema.graphql` } : {}), ...(settings.get('llmEnabled') ? { llm: `${base}/llm/v1` } : {}), ...(settings.get('mcpEnabled') ? { mcp: `${base}/mcp` } : {}), ...(settings.get('a2aEnabled') ? { a2a: `${base}/a2a`, agentCard: `${base}/.well-known/agent-card.json` } : {}), ...(settings.get('s3ApiEnabled') ? { s3Endpoint: base, s3Bucket: `${base}/${settings.get('s3ApiBucket')}` } : {}) },
+      urls: { api: `${base}/v1`, profiles: `${base}/p/<profile>/v1`, ...(settings.get('mtlsEnabled') ? { mtls: `${baseUrl.mtls(req)}/p/mtls/v1` } : {}), docs: `${base}/docs`, openapi: `${base}/openapi.json`, adminOpenapi: `${base}/admin/api/openapi.json`, app: `${base}/app/`, health: `${base}/health`, ...(settings.get('metricsEnabled') ? { metrics: `${base}/metrics` } : {}), inspector: `${base}/<any-other-path>`, token: `${base}/oauth/token`, ...(settings.get('soapEnabled') ? { soap: `${base}/soap`, soapWsdl: `${base}/soap/EmployeeService?wsdl` } : {}), ...(settings.get('wsEnabled') ? { websocket: `${base.replace(/^http/, 'ws')}/ws/rpc`, asyncapi: `${base}/ws/asyncapi.json` } : {}), ...(settings.get('sseEnabled') ? { sse: `${base}/sse/changes` } : {}), ...(settings.get('odataEnabled') ? { odata: `${base}/odata/v4`, odataMetadata: `${base}/odata/v4/$metadata` } : {}), ...(settings.get('graphqlEnabled') ? { graphql: `${base}/graphql`, graphqlSchema: `${base}/graphql/schema.graphql` } : {}), ...(settings.get('llmEnabled') ? { llm: `${base}/llm/v1` } : {}), ...(settings.get('mcpEnabled') ? { mcp: `${base}/mcp` } : {}), ...(settings.get('a2aEnabled') ? { a2a: `${base}/a2a`, agentCard: `${base}/.well-known/agent-card.json` } : {}), ...(settings.get('s3ApiEnabled') ? { s3Endpoint: base, s3Bucket: `${base}/${settings.get('s3ApiBucket')}` } : {}) },
       authMode: mode,
       dateFormat: settings.get('dateFormat'),
       chaos: { errorRate: settings.get('errorRate'), errorTypes: settings.get('errorTypes'), latency: [settings.get('latencyMinMs'), settings.get('latencyMaxMs')] },
@@ -76,6 +84,7 @@ module.exports = function adminRouter(ctx, { adminAuth, filesApi }) {
       curls,
       warnings: [
         ...(!settings.get('adminPassword') ? ['ADMIN_PASSWORD is not set — the dashboard is open to anyone who can reach this URL.'] : []),
+        ...exportWarnings(ctx),
       ],
     });
   });

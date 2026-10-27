@@ -13,14 +13,19 @@ The app was first built from a written spec (not in the repo). These choices dif
   `fetch` (no `undici`); XML on `saxes` (no `fast-xml-parser`); the OData `$filter` parser; SigV4 verification and
   aws-chunked decoding (checked against the AWS documentation example); MCP and A2A (no SDK dependency — the
   official SDKs are used only as test clients in scratch CI runs). GraphQL uses the reference `graphql` package (16.11.0).
+  Telemetry: the OTLP exporter (traces and metrics, http/protobuf and http/json) and the Prometheus `/metrics` renderer
+  are in-house (no `@opentelemetry/*` SDK, which would have added about 30 packages and pinned the wire format). The
+  protobuf field numbers were checked by decoding the encoder's output against the opentelemetry-proto v1 `.proto`
+  files; no gRPC.
 - **Extra settings** beyond the spec: `S3_PREFIX`, `CHAOS_TIMEOUT_SECONDS`, `CHAOS_SLOW_DRIP_MS`, `HMAC_KEY_ID`,
   `HMAC_MAX_SKEW_SECONDS`, `OAUTH_USERS` (`user:password[:roles[:attributes]]`), `OAUTH_ROLES_CLAIM`,
   `OAUTH_REFRESH_TTL`, `OAUTH_REGISTRATION(_TOKEN, _SCOPES, _MAX, _GRANTS, _RATE, _TTL_DAYS)`, and the `SOAP_*`,
-  `WS_*`, `SSE_*`, `GRAPHQL_*`, `ODATA_*`, `S3_API_*`, `WEBHOOK(S)_*`, `LLM_*`, `MCP_*` and `A2A_*` groups.
+  `WS_*`, `SSE_*`, `GRAPHQL_*`, `ODATA_*`, `S3_API_*`, `WEBHOOK(S)_*`, `LLM_*`, `MCP_*` and `A2A_*` groups, plus
+  `METRICS_ENABLED`, `METRICS_TOKEN` and the standard OpenTelemetry `OTEL_*` variables (telemetry).
   `S3_API_*` are the keys S3 *clients* sign with; `S3_*` choose where the tool *stores* files.
 - **Extra reserved paths:** `/samples/*`, `/app`, `GET /` (redirects to the dashboard; a SigV4-signed request to `/`
   is S3 ListBuckets), `/soap`, `/ws`, `/sse`, `/graphql`, `/odata`, `/llm`, `/mcp`, `/a2a`, `/oauth/register`,
-  `/.well-known/oauth-protected-resource/mcp`, `/.well-known/agent-card.json`, and the S3 bucket name (`/files` by default).
+  `/.well-known/oauth-protected-resource/mcp`, `/.well-known/agent-card.json`, `/metrics`, and the S3 bucket name (`/files` by default).
 - **OpenAPI** is split into a data spec and an admin spec (see `CLAUDE.md`).
 - **HMAC:** streamed `/v1/files` uploads sign the literal `UNSIGNED-PAYLOAD` instead of a body hash.
 - An explicit `If-None-Match` returns 304 even when `Cache-Control: no-cache` is sent.
@@ -121,3 +126,5 @@ Not yet verified:
 - The mock LLM with the official OpenAI SDKs or the platform's LLM connector.
 - The MCP 2026-07-28 path with a real client (covered by the tool's own tests only).
 - The MCP server and A2A agent with the platform's own clients or gateways.
+- OTLP export to a real backend (Grafana Cloud, Honeycomb, New Relic with delta temporality, …) and the Fly `[metrics]` scrape on the live Fly app
+  (CI covers both encodings against a local collector; the protobuf encoding was checked against the .proto files).
