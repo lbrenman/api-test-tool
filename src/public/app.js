@@ -115,13 +115,25 @@
   // The guides only read the configuration (env or dashboard override); they never change it.
   let CURL = null;
   let PASSWORD_REQUIRED = false;
+  // Settings profile the guides are written for (picker at the bottom of the menu); '' = the global settings.
+  let GUIDE_PROFILE = '';
+  try { GUIDE_PROFILE = localStorage.getItem('att-guide-profile') || ''; } catch { /* storage unavailable */ }
 
   async function loadCurlCtx() {
-    const [a] = await Promise.all([api('GET', '/auth'), SETTINGS ? Promise.resolve() : loadSettings()]);
-    const base = a.oauth.tokenUrl.replace(/\/oauth\/token$/, '');
+    let a;
+    try {
+      [a] = await Promise.all([api('GET', GUIDE_PROFILE ? `/auth?profile=${encodeURIComponent(GUIDE_PROFILE)}` : '/auth'), SETTINGS ? Promise.resolve() : loadSettings()]);
+    } catch (e) {
+      if (e.status !== 404 || !GUIDE_PROFILE) throw e;
+      setGuideProfile('', { reload: false }); // the profile was deleted
+      a = await api('GET', '/auth');
+    }
+    const root = a.oauth.tokenUrl.replace(/\/oauth\/token$/, '');
     const client = a.clients.find((c) => c.secret) || a.clients[0];
     CURL = window.ATT_GUIDES.makeCurl({
-      base,
+      base: a.apiBase || root,
+      root,
+      profile: a.profile,
       mode: a.mode,
       apiKey: a.apiKey,
       basic: a.basic,
@@ -130,10 +142,27 @@
       s3: a.s3 ? { bucket: a.s3.bucket, region: a.s3.region, accessKeyId: a.s3.accessKeyId, secretAccessKey: a.s3.secretAccessKey } : null,
       tokenUrl: a.oauth.tokenUrl,
       client: client ? { clientId: client.clientId, secret: client.secret || '' } : null,
-      required: (sval('requiredHeaders') || []).map((r) => ({ name: r.name, value: r.value })),
+      required: (a.requiredHeaders || sval('requiredHeaders') || []).map((r) => ({ name: r.name, value: r.value })),
       adminPasswordRequired: PASSWORD_REQUIRED,
     });
     return CURL;
+  }
+
+  function setGuideProfile(name, { reload = true } = {}) {
+    GUIDE_PROFILE = name || '';
+    try { if (GUIDE_PROFILE) localStorage.setItem('att-guide-profile', GUIDE_PROFILE); else localStorage.removeItem('att-guide-profile'); } catch { /* ignore */ }
+    const sel = document.getElementById('guide-profile');
+    if (sel) sel.value = GUIDE_PROFILE;
+    if (reload) route();
+  }
+
+  // Fills the menu's profile picker (built-in and custom profiles).
+  async function loadProfilePicker() {
+    const sel = document.getElementById('guide-profile');
+    if (!sel) return;
+    const { profiles } = await api('GET', '/profiles');
+    clear(sel).append(h('option', { value: '' }, 'Guides: global'), ...profiles.map((p) => h('option', { value: p.name }, `Guides: /p/${p.name}`)));
+    sel.value = profiles.some((p) => p.name === GUIDE_PROFILE) ? GUIDE_PROFILE : '';
   }
 
   const inlineCode = (text) => String(text).split('`').map((part, i) => (i % 2 ? h('code', null, part) : part));
@@ -229,7 +258,7 @@
   // ---------------------------------------------------------------- shell & routing
   const PAGES = [
     ['overview', 'Overview'], ['settings', 'Settings'], ['data', 'Data'], ['inspector', 'Inspector'], ['webhooks', 'Webhooks'], ['files', 'Files'],
-    ['auth', 'Auth'], ['chaos', 'Chaos'], ['headers', 'Headers'], ['protocols', 'Protocols'], ['openapi', 'OpenAPI'], ['tester', 'API Tester'],
+    ['auth', 'Auth'], ['profiles', 'Profiles'], ['chaos', 'Chaos'], ['headers', 'Headers'], ['protocols', 'Protocols'], ['openapi', 'OpenAPI'], ['tester', 'API Tester'],
     ['help', 'About & Help'],
   ];
   // One-line purpose of each page; shown in the Help guide and as the tooltip of each page's help link.
@@ -241,6 +270,7 @@
     webhooks: { purpose: 'Outgoing webhooks: when an employee, product, department or category is created, updated or deleted, or a file is uploaded, downloaded or deleted (through any protocol), POST its type and id to URLs you choose. Stored in the database, so they survive restarts; every delivery is logged with the response.' },
     files: { purpose: 'The shared file pool used by every file protocol (multipart, raw/octet-stream, base64, tus, presigned, range, chunked) and by the S3-compatible API, where it is a bucket. The Upload card\'s ? guides have curl examples for testing each upload protocol, including error cases (413, 400, 415); upload, download, delete or regenerate samples.' },
     auth: { purpose: 'Choose how API calls must authenticate (none, API key, Basic, Bearer, JWT, OAuth2, HMAC) on /v1, SOAP, WebSocket, SSE, GraphQL, OData, the LLM mock, the MCP server and the A2A agent; see the credentials, manage OAuth clients (added here, from OAUTH_CLIENTS, or registered dynamically), control dynamic client registration and get test tokens. The S3 API signs with its own keys (Protocols page).' },
+    profiles: { purpose: 'Use several setups side by side on one server: a request to /p/<name>/… (for example /p/hmac/v1/employees) runs with that profile\'s auth mode, credentials, chaos, headers, rate limit and formats, without touching the global settings. One built-in profile per auth mode; add your own. Data, files, OAuth clients and webhooks stay shared. The picker at the bottom of the menu writes every guide for a profile.' },
     chaos: { purpose: 'Make the mock API misbehave on purpose: random errors, latency, timeouts, broken JSON and rate limits, globally or per route, so you can test client error handling.' },
     headers: { purpose: 'Headers added to every response, and headers every API request must carry on every protocol (missing ones are rejected with 400 in that protocol\'s error format).' },
     protocols: { purpose: 'The same mock data over other protocols: SOAP 1.1/1.2 services with live WSDLs, WebSocket channels (echo, JSON-RPC, live change feed) with an AsyncAPI document and a live console, Server-Sent Events streams (change feed with replay, ticks, LLM-style streaming) with a live viewer, GraphQL (queries, mutations, subscriptions), OData v4, an OpenAI-compatible mock LLM (chat completions with random token usage, tool calls, streaming, embeddings), an MCP server (tools, resources and prompts over the data; protocol 2026-07-28 and session-based 2025 clients), an A2A agent that answers questions about the data as tasks (A2A 1.0 JSON-RPC and HTTP+JSON, and 0.3), and the file pool as an S3-compatible bucket (AWS Signature V4), each with a console. Auth (the S3 API uses its own keys), chaos, rate limits and required headers apply as on /v1.' },
@@ -259,11 +289,13 @@
       h('div', { class: 'brand' }, h('span', { class: 'dot' }), 'API Test Tool'),
       PAGES.map(([id, label]) => h('a', { href: `#/${id}`, dataset: { page: id } }, label, id === 'inspector' ? h('span', { class: 'live-dot', id: 'nav-live' }) : null)),
       h('div', { class: 'foot' },
+        h('select', { id: 'guide-profile', 'aria-label': 'Settings profile for the guides', title: 'Write every ? guide and curl for a settings profile (/p/<name>/…) instead of the global settings', onchange: (e) => setGuideProfile(e.target.value) },
+          h('option', { value: '' }, 'Guides: global')),
         h('select', { 'aria-label': 'Theme', onchange: (e) => setTheme(e.target.value) },
           h('option', { value: '' }, 'Theme: system'), h('option', { value: 'light' }, 'Theme: light'), h('option', { value: 'dark' }, 'Theme: dark')),
         h('a', { href: '/docs', target: '_blank', rel: 'noopener' }, 'Swagger UI ↗'),
         h('button', { class: 'small', id: 'logout-btn', onclick: guard(async () => { await api('POST', '/logout'); location.reload(); }) }, 'Log out')));
-    const sel = navEl.querySelector('select');
+    const sel = navEl.querySelector('select[aria-label="Theme"]');
     sel.value = document.documentElement.dataset.theme || '';
     mainEl = h('main', { class: 'main' });
     root.append(h('div', { class: 'shell' }, navEl, mainEl));
@@ -289,6 +321,7 @@
     try {
       SETTINGS = null;
       await loadCurlCtx().catch((e) => { if (e.status === 401) throw e; });
+      loadProfilePicker().catch(() => {});
       cleanup = (await fn(mainEl, parts.slice(1))) || null;
     } catch (e) {
       if (e.status !== 401) mainEl.append(h('div', { class: 'card' }, h('h2', null, 'Something went wrong'), h('pre', null, e.message)));
@@ -395,7 +428,7 @@
       h('div', { class: 'card' }, titled('Data', 'overview.data'),
         kv({ ...o.counts, files: o.files, 'inspector captures': o.inspector, 'last seed': o.lastSeed ? `${fmtDate(o.lastSeed.at)} (seed ${o.lastSeed.seed})` : 'never' }))));
     const quick = CURL ? window.ATT_GUIDES.build(CURL)['overview.curls'].curls.map(([, cmd]) => cmd) : o.curls;
-    el.append(h('div', { class: 'card' }, titled('Quick curls', 'overview.curls'), h('div', { class: 'small muted', style: { marginBottom: '8px' } }, `Built for the active auth mode (${o.authMode}) and any required headers.`), quick.map((c) => h('div', { class: 'row', style: { marginBottom: '8px', flexWrap: 'nowrap' } }, h('pre', { style: { flex: '1' } }, c), h('button', { class: 'small', onclick: () => copy(c) }, 'copy')))));
+    el.append(h('div', { class: 'card' }, titled('Quick curls', 'overview.curls'), h('div', { class: 'small muted', style: { marginBottom: '8px' } }, CURL?.prefix ? `Built for the settings profile ${CURL.prefix} (auth mode ${CURL.mode}), as chosen at the bottom of the menu.` : `Built for the active auth mode (${o.authMode}) and any required headers.`), quick.map((c) => h('div', { class: 'row', style: { marginBottom: '8px', flexWrap: 'nowrap' } }, h('pre', { style: { flex: '1' } }, c), h('button', { class: 'small', onclick: () => copy(c) }, 'copy')))));
   };
 
   VIEWS.settings = async (el) => {
@@ -455,6 +488,9 @@
     const filterMethod = h('select', { 'aria-label': 'Method' }, ['', 'GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'].map((m) => h('option', { value: m }, m || 'All methods')));
     const filterSource = h('select', { 'aria-label': 'Source' },
       [['', 'All sources'], ['catch-all', 'Webhooks / other paths'], ['v1', 'Mock API (/v1)'], ['soap', 'SOAP (/soap)'], ['ws', 'WebSocket (/ws)'], ['sse', 'SSE (/sse)'], ['graphql', 'GraphQL (/graphql)'], ['odata', 'OData (/odata)'], ['llm', 'LLM (/llm)'], ['mcp', 'MCP (/mcp)'], ['a2a', 'A2A (/a2a)'], ['s3', 'S3 API (/<bucket>)'], ['oauth', 'OAuth (/oauth)']].map(([v, l]) => h('option', { value: v }, l)));
+    const profileNames = [...new Set(items.map((it) => it.profile).filter(Boolean))].sort();
+    const filterProfile = h('select', { 'aria-label': 'Profile', title: 'Settings profile (/p/<name>/…) the request ran in' },
+      [['', 'All profiles'], ['-', 'No profile'], ...profileNames.map((n) => [n, `/p/${n}`])].map(([v, l]) => h('option', { value: v }, l)));
     const live = h('span', { class: 'live-dot' });
     const count = h('span', { class: 'muted small' });
     const logAll = h('input', { type: 'checkbox', checked: !!sval('inspectorLogAll') });
@@ -468,6 +504,7 @@
     const matches = (it) => {
       if (filterMethod.value && it.method !== filterMethod.value) return false;
       if (filterSource.value && (it.kind || 'catch-all') !== filterSource.value) return false;
+      if (filterProfile.value && (it.profile || '-') !== filterProfile.value) return false;
       const q = filterText.value.trim().toLowerCase();
       if (!q) return true;
       return JSON.stringify(it).toLowerCase().includes(q);
@@ -494,6 +531,7 @@
           h('div', { style: { minWidth: 0 } }, h('div', { class: 'path', title: it.path }, it.path + (it.query && Object.keys(it.query).length ? `?${new URLSearchParams(it.query)}` : '')),
             h('div', { class: 'small muted' }, `${fmtTime(it.ts)} · ${it.ip || ''} · ${fmtBytes(it.size)}${it.durationMs != null ? ` · ${it.durationMs} ms` : ''}${it.rule ? ` · ${it.rule}` : ''}`)),
           h('div', { class: 'row', style: { gap: '6px', flexWrap: 'nowrap' } },
+            it.profile ? h('span', { class: 'badge', title: `Settings profile ${it.profile}` }, `p/${it.profile}`) : null,
             SOURCE_LABEL[it.kind] ? h('span', { class: 'badge' }, SOURCE_LABEL[it.kind]) : null,
             h('span', { class: statusClass(it.aborted ? null : it.status), title: it.aborted ? 'The connection closed before the response finished' : '' }, it.aborted ? `${it.status ?? ''} dropped`.trim() : (it.status ?? '…')),
             h('button', { class: 'icon-btn del', title: 'Delete this capture', 'aria-label': 'Delete this capture', onclick: (ev) => { ev.stopPropagation(); removeCapture(it.id); } }, '×'))));
@@ -523,7 +561,7 @@
       const replayOut = h('div');
       const views = {
         request: () => h('div', { class: 'stack' },
-          h('div', { class: 'kv' }, h('div', null, 'URL'), h('div', null, e.url), h('div', null, 'Client IP'), h('div', null, `${e.ip}${e.ips?.length ? ` (via ${e.ips.join(', ')})` : ''}`), h('div', null, 'HTTP'), h('div', null, e.httpVersion), h('div', null, 'Request id'), h('div', null, e.requestId || '')),
+          h('div', { class: 'kv' }, h('div', null, 'URL'), h('div', null, e.url), h('div', null, 'Client IP'), h('div', null, `${e.ip}${e.ips?.length ? ` (via ${e.ips.join(', ')})` : ''}`), h('div', null, 'HTTP'), h('div', null, e.httpVersion), h('div', null, 'Request id'), h('div', null, e.requestId || ''), h('div', null, 'Profile'), h('div', null, e.profile ? `${e.profile} (/p/${e.profile})` : 'none (global settings)')),
           e.query && Object.keys(e.query).length ? h('div', null, h('h3', null, 'Query'), kv(e.query)) : null,
           h('h3', null, 'Headers'), kv(e.headers),
           showBody(e.body, 'Body')),
@@ -553,7 +591,8 @@
     const es = new EventSource('/admin/api/inspector/stream');
     es.onopen = () => { live.classList.add('on'); $('#nav-live')?.classList.add('on'); };
     es.onerror = () => { live.classList.remove('on'); $('#nav-live')?.classList.remove('on'); };
-    es.addEventListener('request', (ev) => { const it = JSON.parse(ev.data); items.unshift(it); items = items.slice(0, sval('inspectorRetention') || 500); renderList(); });
+    const seeProfile = (n) => { if (n && !profileNames.includes(n)) { profileNames.push(n); filterProfile.append(h('option', { value: n }, `/p/${n}`)); } };
+    es.addEventListener('request', (ev) => { const it = JSON.parse(ev.data); seeProfile(it.profile); items.unshift(it); items = items.slice(0, sval('inspectorRetention') || 500); renderList(); });
     es.addEventListener('update', (ev) => {
       const it = JSON.parse(ev.data);
       const i = items.findIndex((x) => x.id === it.id);
@@ -567,6 +606,7 @@
     filterText.addEventListener('input', renderList);
     filterMethod.addEventListener('change', renderList);
     filterSource.addEventListener('change', renderList);
+    filterProfile.addEventListener('change', renderList);
 
     const fwdEnabled = h('input', { type: 'checkbox', checked: sval('inspectorForwardEnabled') });
     const fwdUrl = h('input', { type: 'url', value: sval('inspectorForwardUrl') || '', placeholder: 'https://example.com/webhooks' });
@@ -576,7 +616,7 @@
       h('label', { class: 'check', title: 'INSPECTOR_LOG_ALL' }, logAll, 'Record API calls'),
       h('a', { class: 'btn', href: '/admin/api/inspector/export' }, 'Export JSON'),
       h('button', { class: 'danger', onclick: guard(async () => { if (!confirm('Clear all captured requests?')) return; await api('DELETE', '/inspector'); }) }, 'Clear')));
-    el.append(h('div', { class: 'card' }, h('div', { class: 'row', style: { flexWrap: 'nowrap' } }, tip('inspector.capture'), filterSource, filterMethod, filterText),
+    el.append(h('div', { class: 'card' }, h('div', { class: 'row', style: { flexWrap: 'nowrap' } }, tip('inspector.capture'), filterSource, filterProfile, filterMethod, filterText),
       h('details', { style: { marginTop: '10px' } }, h('summary', null, 'Default response, rules & forwarding'),
         h('div', { class: 'grid cols-2', style: { marginTop: '10px' } },
           h('div', null, h('h3', { class: 'with-tip' }, 'Default response', tip('inspector.rules')), settingsForm(['inspectorResponseStatus', 'inspectorResponseContentType', 'inspectorResponseBody', 'inspectorResponseHeaders', 'inspectorResponseDelayMs'])),
@@ -935,6 +975,85 @@
   };
 
   // ---------------------------------------------------------------- chaos
+  // ---------------------------------------------------------------- profiles
+  VIEWS.profiles = async (el) => {
+    const d = await api('GET', '/profiles');
+    const defs = d.settings || {};
+    const show = (v) => (typeof v === 'object' ? JSON.stringify(v) : String(v));
+    const editBox = h('div');
+
+    el.append(header('Profiles', 'Several setups side by side on one server: /p/<name>/… runs a request with the profile\'s settings; everything else stays global.'));
+    el.append(h('div', { class: 'card stack' }, h('h2', null, 'How profiles work'),
+      h('div', null, 'Prefix any mock API path with ', h('code', null, '/p/<name>'), ': ', h('code', null, `${d.profiles[0]?.url.replace(/\/p\/[^/]+$/, '') || location.origin}/p/hmac/v1/employees`),
+        ' is ', h('code', null, '/v1/employees'), ' with auth mode hmac. Every protocol works this way (REST, SOAP, WebSocket, SSE, GraphQL, OData, LLM, MCP, A2A, S3), and links, specs and WSDLs stay inside the profile.'),
+      h('div', { class: 'small muted' }, 'A profile changes behaviour only: auth mode and credentials, chaos, required and response headers, the rate limit (each profile has its own budget), date formats and a few protocol options. Data, files, OAuth clients and users, webhooks, the inspector and the OAuth server are shared, so a token from /oauth/token works in every profile.'),
+      h('div', { class: 'small muted' }, 'Give each person or each demo its own profile, so changing one does not break anyone else. To write every ? guide for a profile, pick it at the bottom of the menu.')));
+
+    const table = h('table', null,
+      h('thead', null, h('tr', null, ['Profile', 'Description', 'Settings', 'Base URL', ''].map((x) => h('th', null, x)))),
+      h('tbody', null, d.profiles.map((p) => h('tr', null,
+        h('td', null, h('b', null, p.name), ' ', p.builtIn ? h('span', { class: 'badge' }, 'built-in') : null),
+        h('td', { class: 'small' }, p.description || ''),
+        h('td', { class: 'small mono' }, Object.entries(p.settings).map(([k, v]) => `${k}=${defs[k]?.secret ? '********' : show(v)}`).join(' · ') || '(all global)'),
+        h('td', null, h('code', null, p.url), ' ', h('button', { class: 'small', onclick: () => copy(p.url) }, 'copy')),
+        h('td', null, h('div', { class: 'row', style: { flexWrap: 'nowrap' } },
+          GUIDE_PROFILE === p.name ? h('span', { class: 'badge ok' }, 'in guides') : h('button', { class: 'small', title: 'Write every ? guide and curl for this profile', onclick: () => setGuideProfile(p.name) }, 'Use in guides'),
+          p.builtIn ? null : h('button', { class: 'small', onclick: () => editor(p) }, 'Edit'),
+          p.builtIn ? null : h('button', { class: 'small danger', onclick: guard(async () => {
+            if (!confirm(`Delete profile ${p.name}? Requests to /p/${p.name}/… will get 404.`)) return;
+            await api('DELETE', `/profiles/${encodeURIComponent(p.name)}`);
+            if (GUIDE_PROFILE === p.name) setGuideProfile('', { reload: false });
+            toast(`Deleted ${p.name}`, 'ok'); route();
+          }) }, 'Delete')))))));
+    el.append(h('div', { class: 'card table-wrap' }, titled('Profiles', 'profiles.list'), table,
+      h('div', { class: 'row', style: { marginTop: '10px' } }, h('button', { class: 'primary', onclick: () => editor(null) }, 'New profile'),
+        GUIDE_PROFILE ? h('button', { onclick: () => setGuideProfile('') }, 'Guides: back to global settings') : null)));
+    el.append(editBox);
+
+    // Create or edit a custom profile: a name, a description and any number of settings rows.
+    function editor(p) {
+      const nameIn = h('input', { type: 'text', value: p?.name || '', placeholder: 'e.g. arun-demo', disabled: !!p, pattern: '[a-z0-9][a-z0-9-]*' });
+      const descIn = h('input', { type: 'text', value: p?.description || '', placeholder: 'What this profile is for' });
+      const rowsEl = h('div', { class: 'stack' });
+      const rows = [];
+      const addRow = (key, value) => {
+        const keySel = h('select', { style: { width: '220px', flex: '0 0 auto' }, 'aria-label': 'Setting' }, d.keys.map((k) => h('option', { value: k }, k)));
+        keySel.value = key || d.keys.find((k) => !rows.some((r) => r.keySel.value === k)) || d.keys[0];
+        const slot = h('div', { style: { flex: '1', minWidth: '200px' } });
+        const row = { keySel, input: null };
+        const renderInput = (v) => {
+          const def = defs[keySel.value] || { key: keySel.value, type: 'string', value: '' };
+          row.input = settingInput({ ...def, restartRequired: false, value: v === undefined ? def.value : v });
+          clear(slot).append(...[def.type === 'bool' ? h('label', { class: 'check' }, row.input, h('span', null, 'on')) : row.input,
+            def.description ? h('div', { class: 'small muted' }, def.description) : null,
+            h('div', { class: 'small muted' }, `Global value: ${def.secret ? '********' : show(def.value)}`)].filter(Boolean));
+        };
+        keySel.addEventListener('change', () => renderInput(undefined));
+        renderInput(value);
+        const wrap = h('div', { class: 'row', style: { alignItems: 'flex-start', flexWrap: 'wrap' } }, keySel, slot,
+          h('button', { class: 'small', title: 'Remove this setting (the global value applies)', onclick: () => { rows.splice(rows.indexOf(row), 1); wrap.remove(); } }, 'Remove'));
+        rows.push(row);
+        rowsEl.append(wrap);
+      };
+      for (const [k, v] of Object.entries(p?.settings || { authMode: 'none' })) addRow(k, v);
+      clear(editBox).append(h('div', { class: 'card stack' },
+        h('div', { class: 'row between' }, h('h2', { class: 'with-tip' }, p ? `Edit ${p.name}` : 'New profile', tip('profiles.edit')), h('button', { class: 'small', onclick: () => clear(editBox) }, 'Cancel')),
+        h('div', { class: 'grid cols-2' }, field('Name', nameIn, 'Lowercase letters, digits and hyphens; it becomes the path /p/<name>.'), field('Description', descIn)),
+        h('h3', null, 'Settings'), h('div', { class: 'small muted' }, 'Only what differs from the global settings. Anything not listed uses the global value.'),
+        rowsEl,
+        h('div', { class: 'row' }, h('button', { class: 'small', onclick: () => addRow() }, 'Add setting'),
+          h('button', { class: 'primary', onclick: guard(async () => {
+            const settings = {};
+            for (const r of rows) settings[r.keySel.value] = readInput(r.input);
+            const body = { description: descIn.value, settings };
+            const saved = p ? await api('PATCH', `/profiles/${encodeURIComponent(p.name)}`, body) : await api('POST', '/profiles', { name: nameIn.value.trim(), ...body });
+            toast(`Saved ${saved.name}: ${saved.url}`, 'ok');
+            route();
+          }) }, 'Save profile'))));
+      editBox.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+  };
+
   VIEWS.chaos = async (el) => {
     await loadSettings();
     el.append(header('Chaos', 'Random error and latency injection for /v1/*, plus deterministic forcing headers.'));

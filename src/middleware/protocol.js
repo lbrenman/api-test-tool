@@ -4,7 +4,7 @@
 // protocols get the same required-headers, rate-limit, auth and chaos behaviour - only the error
 // *shape* differs.
 //
-//   errorFormat -> [protocol body parser] -> required headers -> rate limit -> auth -> chaos
+//   errorFormat -> [protocol body parser] -> (profile) -> required headers -> rate limit -> auth -> chaos
 //
 // The error format is set first so that body-parse failures, 401s and 429s are all rendered by the
 // protocol's own renderer (registered with registerErrorRenderer in util/problem.js).
@@ -16,6 +16,7 @@ const rateLimit = require('./ratelimit');
 const { makeAuth } = require('./auth');
 const { makeChaos } = require('./chaos');
 const { errorFormats } = require('../util/problem');
+const { rescope } = require('./profile');
 
 function errorFormat(name) {
   return (req, res, next) => {
@@ -47,6 +48,7 @@ function protocolStack(ctx, { format = 'problem', body, auth } = {}) {
   return [
     errorFormat(format),
     ...(body ? [].concat(body) : []),
+    rescope(ctx),
     s.requiredHeaders,
     s.rateLimit,
     auth || s.auth,

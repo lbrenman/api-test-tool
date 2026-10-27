@@ -3,6 +3,7 @@
 const path = require('node:path');
 const http = require('node:http');
 const { EventEmitter } = require('node:events');
+const { AsyncResource } = require('node:async_hooks');
 const express = require('express');
 const { Settings } = require('./config/settings');
 const { makeBaseUrl } = require('./config/baseUrl');
@@ -12,6 +13,7 @@ const { ResourceService } = require('./services/resources');
 const { FileService, createStore } = require('./services/files');
 const { KeyService } = require('./services/keys');
 const { OAuthService } = require('./services/oauth');
+const { ProfileService } = require('./services/profiles');
 const { InspectorService } = require('./services/inspector');
 const { TesterService } = require('./services/tester');
 const { WebhookService } = require('./services/webhooks');
@@ -27,6 +29,7 @@ const { protocolStack } = require('./middleware/protocol');
 const { v1Body } = require('./middleware/body');
 const { makeAdminAuth } = require('./middleware/adminAuth');
 const { catchAll, logAll } = require('./middleware/inspector');
+const { profileRouting } = require('./middleware/profile');
 
 const platformRouter = require('./routes/platform');
 const oauthRouter = require('./routes/oauth');
@@ -45,6 +48,20 @@ const a2aRouter = require('./protocols/a2a/router');
 
 const LEVELS = { debug: 10, info: 20, warn: 30, error: 40 };
 
+// Listeners run in the async context they were added in: a change made inside one settings profile reaches a
+// /sse/changes or /ws/changes subscriber with that subscriber's profile, and global listeners (webhooks) with none.
+class ScopedEmitter extends EventEmitter {
+  #bound = new WeakMap();
+  on(event, fn) {
+    const b = AsyncResource.bind(fn);
+    this.#bound.set(fn, b);
+    return super.on(event, b);
+  }
+  off(event, fn) { return super.off(event, this.#bound.get(fn) || fn); }
+}
+ScopedEmitter.prototype.addListener = ScopedEmitter.prototype.on;
+ScopedEmitter.prototype.removeListener = ScopedEmitter.prototype.off;
+
 async function createContext({ env = process.env, overrides = {} } = {}) {
   const settings = new Settings({ ...env, ...overrides });
   const log = (level, ...args) => {
@@ -55,7 +72,7 @@ async function createContext({ env = process.env, overrides = {} } = {}) {
   const ctx = { settings, repo, log, ready: false };
   ctx.baseUrl = makeBaseUrl(settings, env);
   ctx.dates = makeDateFormatter(settings);
-  ctx.events = new EventEmitter(); // 'change' events from ResourceService feed /ws/changes (and /sse/changes)
+  ctx.events = new ScopedEmitter(); // 'change' events from ResourceService feed /ws/changes (and /sse/changes)
   ctx.events.setMaxListeners(0);
   ctx.wsHub = new Set(); // open mock WebSocket connections
   ctx.resources = new ResourceService(repo, ctx.dates, ctx.events);
@@ -65,6 +82,8 @@ async function createContext({ env = process.env, overrides = {} } = {}) {
   await ctx.keys.init();
   ctx.oauth = new OAuthService(ctx);
   await ctx.oauth.init();
+  ctx.profiles = new ProfileService(ctx);
+  await ctx.profiles.init();
   ctx.inspector = new InspectorService(ctx);
   ctx.tester = new TesterService(ctx);
   ctx.webhooks = new WebhookService(ctx); // outgoing webhooks on data changes (stored in the database)
@@ -123,6 +142,7 @@ async function createApp(opts = {}) {
   const adminAuth = makeAdminAuth(settings);
 
   app.use(requestId());
+  app.use(profileRouting(ctx)); // /p/<profile>/… : the rest of the request runs with that settings profile
   app.use(responseHeaders(settings));
   app.use(cors(settings));
   app.use(s3Router.detect(ctx)); // marks S3 API requests (req.s3): /<bucket>/…, or signed with AWS SigV4

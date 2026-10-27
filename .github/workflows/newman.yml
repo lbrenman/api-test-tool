@@ -52,9 +52,36 @@ jobs:
             --env-var authMode=${{ matrix.auth }} \
             --working-dir postman \
             --reporters cli,junit --reporter-junit-export newman-results/${{ matrix.auth }}.xml
+      # Settings profiles: the same collection through /p/<mode> on a fresh server whose global AUTH_MODE is a
+      # different mode, so any request that escapes the profile fails (same as npm run postman -- --profiles).
+      - name: Start a second server (another global auth mode)
+        if: ${{ !cancelled() }}
+        env:
+          PORT: '3001'
+          AUTH_MODE: ${{ matrix.auth == 'bearer' && 'basic' || 'bearer' }}
+          DB_DRIVER: sqlite
+          SQLITE_PATH: ./profile-run/app.db
+          FILE_STORE: local
+          FILE_DIR: ./profile-run/files
+          SEED_ON_START: always
+          PUBLIC_BASE_URL: http://127.0.0.1:3001
+          LOG_LEVEL: warn
+        run: |
+          mkdir -p profile-run
+          nohup node src/server.js > server-profile.log 2>&1 &
+          for i in $(seq 1 60); do curl -fsS http://127.0.0.1:3001/ready && break; sleep 1; done
+      - name: Run Postman collection through settings profile /p/${{ matrix.auth }}
+        if: ${{ !cancelled() }}
+        run: |
+          npx newman run postman/API-Test-Tool.postman_collection.json \
+            -e postman/API-Test-Tool.postman_environment.json \
+            --env-var baseUrl=http://127.0.0.1:3001/p/${{ matrix.auth }} \
+            --env-var authMode=${{ matrix.auth }} \
+            --working-dir postman \
+            --reporters cli,junit --reporter-junit-export newman-results/profile-${{ matrix.auth }}.xml
       - name: Server log
         if: failure()
-        run: cat server.log
+        run: cat server.log; echo '--- profile run ---'; cat server-profile.log 2>/dev/null || true
       - name: Report Newman failures as annotations
         if: failure()
         run: |

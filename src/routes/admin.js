@@ -10,6 +10,7 @@ const yaml = require('js-yaml');
 const testerRouter = require('./tester');
 const appApiRouter = require('./appApi');
 const { generateAdminOpenApi } = require('../services/openapiAdminGen');
+const { ProfileService } = require('../services/profiles');
 const pkg = require('../../package.json');
 const { commit } = require('../util/build');
 
@@ -63,7 +64,7 @@ module.exports = function adminRouter(ctx, { adminAuth, filesApi }) {
       version: pkg.version,
       commit,
       baseUrl: base,
-      urls: { api: `${base}/v1`, docs: `${base}/docs`, openapi: `${base}/openapi.json`, adminOpenapi: `${base}/admin/api/openapi.json`, app: `${base}/app/`, health: `${base}/health`, inspector: `${base}/<any-other-path>`, token: `${base}/oauth/token`, ...(settings.get('soapEnabled') ? { soap: `${base}/soap`, soapWsdl: `${base}/soap/EmployeeService?wsdl` } : {}), ...(settings.get('wsEnabled') ? { websocket: `${base.replace(/^http/, 'ws')}/ws/rpc`, asyncapi: `${base}/ws/asyncapi.json` } : {}), ...(settings.get('sseEnabled') ? { sse: `${base}/sse/changes` } : {}), ...(settings.get('odataEnabled') ? { odata: `${base}/odata/v4`, odataMetadata: `${base}/odata/v4/$metadata` } : {}), ...(settings.get('graphqlEnabled') ? { graphql: `${base}/graphql`, graphqlSchema: `${base}/graphql/schema.graphql` } : {}), ...(settings.get('llmEnabled') ? { llm: `${base}/llm/v1` } : {}), ...(settings.get('mcpEnabled') ? { mcp: `${base}/mcp` } : {}), ...(settings.get('a2aEnabled') ? { a2a: `${base}/a2a`, agentCard: `${base}/.well-known/agent-card.json` } : {}), ...(settings.get('s3ApiEnabled') ? { s3Endpoint: base, s3Bucket: `${base}/${settings.get('s3ApiBucket')}` } : {}) },
+      urls: { api: `${base}/v1`, profiles: `${base}/p/<profile>/v1`, docs: `${base}/docs`, openapi: `${base}/openapi.json`, adminOpenapi: `${base}/admin/api/openapi.json`, app: `${base}/app/`, health: `${base}/health`, inspector: `${base}/<any-other-path>`, token: `${base}/oauth/token`, ...(settings.get('soapEnabled') ? { soap: `${base}/soap`, soapWsdl: `${base}/soap/EmployeeService?wsdl` } : {}), ...(settings.get('wsEnabled') ? { websocket: `${base.replace(/^http/, 'ws')}/ws/rpc`, asyncapi: `${base}/ws/asyncapi.json` } : {}), ...(settings.get('sseEnabled') ? { sse: `${base}/sse/changes` } : {}), ...(settings.get('odataEnabled') ? { odata: `${base}/odata/v4`, odataMetadata: `${base}/odata/v4/$metadata` } : {}), ...(settings.get('graphqlEnabled') ? { graphql: `${base}/graphql`, graphqlSchema: `${base}/graphql/schema.graphql` } : {}), ...(settings.get('llmEnabled') ? { llm: `${base}/llm/v1` } : {}), ...(settings.get('mcpEnabled') ? { mcp: `${base}/mcp` } : {}), ...(settings.get('a2aEnabled') ? { a2a: `${base}/a2a`, agentCard: `${base}/.well-known/agent-card.json` } : {}), ...(settings.get('s3ApiEnabled') ? { s3Endpoint: base, s3Bucket: `${base}/${settings.get('s3ApiBucket')}` } : {}) },
       authMode: mode,
       dateFormat: settings.get('dateFormat'),
       chaos: { errorRate: settings.get('errorRate'), errorTypes: settings.get('errorTypes'), latency: [settings.get('latencyMinMs'), settings.get('latencyMaxMs')] },
@@ -127,10 +128,34 @@ module.exports = function adminRouter(ctx, { adminAuth, filesApi }) {
   });
   r.get('/files/:id/download', async (req, res) => filesApi.sendFile(req, res, await files.mustGet(req.params.id), { inline: req.query.inline === 'true', via: 'dashboard' }));
 
+  // ---- settings profiles (/p/<name>/…)
+  const presentProfile = (req, p) => ({ ...p, url: `${baseUrl.root(req)}/p/${p.name}` });
+  r.get('/profiles', (req, res) => {
+    const defs = Object.fromEntries(settings.describe().filter((d) => ProfileService.keys().includes(d.key)).map((d) => [d.key, d]));
+    res.json({ profiles: ctx.profiles.list().map((p) => presentProfile(req, p)), keys: ProfileService.keys(), settings: defs });
+  });
+  r.post('/profiles', async (req, res) => {
+    const b = req.body || {};
+    res.status(201).json(presentProfile(req, await ctx.profiles.save(b.name, b, { create: true })));
+  });
+  r.get('/profiles/:name', (req, res) => {
+    const p = ctx.profiles.get(req.params.name);
+    if (!p) throw new HttpError(404, `No profile "${req.params.name}"`, { code: 'profile-not-found' });
+    res.json(presentProfile(req, p));
+  });
+  r.patch('/profiles/:name', async (req, res) => res.json(presentProfile(req, await ctx.profiles.save(req.params.name, req.body || {}))));
+  r.delete('/profiles/:name', async (req, res) => { await ctx.profiles.remove(req.params.name); res.status(204).end(); });
+
   // ---- auth / oauth
+  // ?profile=<name> describes the credentials inside that profile (the dashboard's profile picker uses it for the guides).
   r.get('/auth', async (req, res) => {
-    res.json({
+    const prof = req.query.profile ? ctx.profiles.get(String(req.query.profile)) : null;
+    if (req.query.profile && !prof) throw new HttpError(404, `No profile "${req.query.profile}"`, { code: 'profile-not-found' });
+    const describe = async () => ({
+      profile: prof ? prof.name : null,
+      apiBase: prof ? `${baseUrl.root(req)}/p/${prof.name}` : baseUrl(req),
       mode: settings.get('authMode'),
+      requiredHeaders: settings.get('requiredHeaders'),
       apiKey: { name: settings.get('apiKeyName'), in: settings.get('apiKeyIn'), value: settings.get('apiKey') },
       basic: { user: settings.get('basicUser'), pass: settings.get('basicPass') },
       bearer: settings.get('bearerToken'),
@@ -144,6 +169,7 @@ module.exports = function adminRouter(ctx, { adminAuth, filesApi }) {
       clients: (await oauth.clients()).map(({ registrationTokenHash, ...c }) => c), // eslint-disable-line no-unused-vars
       users: await oauth.users(),
     });
+    res.json(prof ? await settings.runIn(ctx.profiles.store(prof), describe) : await describe());
   });
   // Users for the authorization_code login page, with the roles and attributes that go into their tokens.
   r.get('/oauth/users', async (req, res) => res.json({ items: await oauth.users(), rolesClaim: settings.get('oauthRolesClaim') }));

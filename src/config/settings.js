@@ -2,7 +2,9 @@
 // Settings registry.
 // Effective value = dashboard override (persisted in DB) ?? environment variable ?? built-in default.
 // "Reset to env defaults" deletes overrides (one key, one section, or all).
+// Inside a settings profile (services/profiles.js) the profile's values come first, for that request only.
 const { EventEmitter } = require('node:events');
+const { AsyncLocalStorage } = require('node:async_hooks');
 
 // type: string | int | number | bool | enum | json | headerList | requiredHeaders
 const DEFS = [
@@ -225,6 +227,7 @@ class Settings extends EventEmitter {
     this.overrides = {};
     this.repo = null;
     this.envValues = {};
+    this.scope = new AsyncLocalStorage(); // { name, settings } of the profile the current request runs in
     for (const d of DEFS) {
       if (env[d.env] !== undefined && env[d.env] !== '') {
         try { this.envValues[d.key] = coerce(d, env[d.env]); } catch (e) {
@@ -246,12 +249,20 @@ class Settings extends EventEmitter {
   }
 
   get(key) {
+    const profile = this.scope.getStore()?.settings;
+    if (profile && key in profile) return profile[key];
     if (key in this.overrides) return this.overrides[key];
     if (key in this.envValues) return this.envValues[key];
     const d = BY_KEY[key];
     if (!d) throw new Error(`Unknown setting ${key}`);
     return typeof d.def === 'object' ? JSON.parse(JSON.stringify(d.def)) : d.def;
   }
+
+  // Runs fn (and everything it awaits) with a profile's values on top of the global ones.
+  runIn(store, fn) { return this.scope.run(store, fn); }
+
+  // The profile the current request runs in, or null.
+  profile() { return this.scope.getStore() || null; }
 
   source(key) {
     if (key in this.overrides) return 'override';
@@ -309,4 +320,4 @@ class Settings extends EventEmitter {
   }
 }
 
-module.exports = { Settings, DEFS, parseHeaderList, parseRequiredHeaders };
+module.exports = { Settings, DEFS, BY_KEY, coerce, parseHeaderList, parseRequiredHeaders };

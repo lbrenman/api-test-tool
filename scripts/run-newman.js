@@ -2,6 +2,8 @@
 // npm run postman                 -> boots a fresh server per auth mode and runs the collection with Newman
 // npm run postman -- --mode hmac  -> one mode only
 // npm run postman -- --url https://my-app.fly.dev --mode none   -> run against an existing server (no boot)
+// npm run postman -- --profiles   -> same, but through the settings profile /p/<mode> on a server whose global
+//                                    AUTH_MODE is a different mode (proves profiles isolate auth for every protocol)
 const { spawn } = require('node:child_process');
 const fs = require('node:fs');
 const os = require('node:os');
@@ -25,7 +27,10 @@ async function waitFor(url, ms = 60000) {
   throw new Error(`Server did not become healthy at ${url}`);
 }
 
-function runNewman(baseUrl, mode) {
+// The global mode a --profiles run boots with: never the mode under test, so a request that escapes the profile fails.
+const otherMode = (mode) => (mode === 'bearer' ? 'basic' : 'bearer');
+
+function runNewman(baseUrl, mode, label = mode) {
   const newman = require('newman');
   return new Promise((resolve) => {
     newman.run({
@@ -34,7 +39,7 @@ function runNewman(baseUrl, mode) {
       envVar: [{ key: 'baseUrl', value: baseUrl }, { key: 'authMode', value: mode }],
       workingDir: path.join(root, 'postman'),
       reporters: ['cli', 'junit'],
-      reporter: { junit: { export: path.join(root, `newman-results/${mode}.xml`) } },
+      reporter: { junit: { export: path.join(root, `newman-results/${label}.xml`) } },
       timeoutRequest: 30000,
     }, (err, summary) => {
       if (err) { console.error(err); return resolve(false); }
@@ -46,21 +51,27 @@ function runNewman(baseUrl, mode) {
 (async () => {
   const modes = arg('mode') ? [arg('mode')] : ALL;
   const external = arg('url');
+  const profiles = process.argv.includes('--profiles');
   const results = {};
   for (const mode of modes) {
-    if (external) { results[mode] = await runNewman(external.replace(/\/+$/, ''), mode); continue; }
+    if (external) { results[mode] = await runNewman(`${external.replace(/\/+$/, '')}${profiles ? `/p/${mode}` : ''}`, mode); continue; }
     const port = await freePort();
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), `att-newman-${mode}-`));
     const env = {
-      ...process.env, PORT: String(port), AUTH_MODE: mode, DB_DRIVER: 'sqlite', FILE_STORE: 'local',
+      ...process.env, PORT: String(port), AUTH_MODE: profiles ? otherMode(mode) : mode, DB_DRIVER: 'sqlite', FILE_STORE: 'local',
       SQLITE_PATH: path.join(dir, 'app.db'), FILE_DIR: path.join(dir, 'files'), PUBLIC_BASE_URL: `http://127.0.0.1:${port}`,
       SEED_ON_START: 'always', LOG_LEVEL: 'warn', ADMIN_PASSWORD: '',
     };
     const child = spawn(process.execPath, ['src/server.js'], { cwd: root, env, stdio: ['ignore', 'inherit', 'inherit'] });
     try {
       await waitFor(`http://127.0.0.1:${port}/ready`);
-      console.log(`\n===== Newman · AUTH_MODE=${mode} =====`);
-      results[mode] = await runNewman(`http://127.0.0.1:${port}`, mode);
+      if (profiles) {
+        console.log(`\n===== Newman · profile /p/${mode} (global AUTH_MODE=${otherMode(mode)}) =====`);
+        results[`p/${mode}`] = await runNewman(`http://127.0.0.1:${port}/p/${mode}`, mode, `profile-${mode}`);
+      } else {
+        console.log(`\n===== Newman · AUTH_MODE=${mode} =====`);
+        results[mode] = await runNewman(`http://127.0.0.1:${port}`, mode);
+      }
     } finally {
       child.kill('SIGTERM');
       fs.rmSync(dir, { recursive: true, force: true });

@@ -134,7 +134,7 @@ function render(template, vars) {
 
 function summary(e) {
   return {
-    id: e.id, ts: e.ts, method: e.method, path: e.path, query: e.query, kind: e.kind, ip: e.ip,
+    id: e.id, ts: e.ts, method: e.method, path: e.path, query: e.query, kind: e.kind, ip: e.ip, profile: e.profile || null,
     contentType: e.headers['content-type'] || null, size: e.body?.size || 0,
     status: e.response?.status ?? null, durationMs: e.durationMs ?? null, authScheme: e.auth?.scheme || (e.auth?.apiKey ? 'api-key' : null),
     rule: e.response?.rule ?? null, aborted: e.response?.aborted || false, forwarded: e.forward ? e.forward.status ?? 'error' : null,
@@ -200,6 +200,7 @@ class InspectorService extends EventEmitter {
       auth: detectAuth(headers, Object.fromEntries(url.searchParams)),
       body,
       requestId: req.id,
+      ...(req.profile ? { profile: req.profile.name } : {}),
     };
     // File uploads stream straight to the file store; note the size instead of the bytes.
     const declared = Number(headers['content-length']) || 0;

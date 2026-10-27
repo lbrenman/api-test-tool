@@ -18,15 +18,23 @@ function requestBaseUrl(req) {
   return host ? `${proto}://${host}` : null;
 }
 
+// baseUrl(req) is where the request's APIs live: inside a settings profile it ends in /p/<name>, so links,
+// specs and endpoints stay in the profile. baseUrl.root(req) is the server itself (OAuth server, dashboard).
 function makeBaseUrl(settings, env = process.env) {
-  return function baseUrl(req) {
+  function root(req) {
     const configured = settings.get('publicBaseUrl');
     const url = configured
       || hostBaseUrl(env, settings.get('port'))
       || requestBaseUrl(req)
       || `http://localhost:${settings.get('port')}`;
     return url.replace(/\/+$/, '');
-  };
+  }
+  function baseUrl(req) {
+    const name = req ? req.profile?.name : settings.profile()?.name;
+    return name ? `${root(req)}/p/${name}` : root(req);
+  }
+  baseUrl.root = root;
+  return baseUrl;
 }
 
 module.exports = { makeBaseUrl, hostBaseUrl, requestBaseUrl };

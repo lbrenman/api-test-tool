@@ -19,11 +19,15 @@
 
   /**
    * ctx: {
-   *   base, mode, apiKey: {name, in, value}, basic: {user, pass}, bearer, hmac: {keyId, secret},
+   *   base, root, mode, apiKey: {name, in, value}, basic: {user, pass}, bearer, hmac: {keyId, secret},
    *   tokenUrl, client: {clientId, secret}, required: [{name, value}], adminPasswordRequired
    * }
+   * base is where the mock APIs are: the server itself (root), or root + /p/<name> when the dashboard's profile
+   * picker selects a settings profile. The admin API and the S3 API are always at root.
    */
   function makeCurl(ctx) {
+    const root = ctx.root || ctx.base;
+    const prefix = ctx.base.startsWith(root) ? ctx.base.slice(root.length) : ''; // '/p/<name>' or ''
     const lines = (pre, parts) => {
       const flat = parts.join(' ');
       const cmd = flat.length > 110 ? parts.join(' \\\n  ') : flat;
@@ -79,7 +83,7 @@
               : o.unsigned || o.form || o.file ? 'UNSIGNED-PAYLOAD'
               : hasInlineBody ? '$(printf \'%s\' "$BODY" | openssl dgst -sha256 -r | cut -d\' \' -f1)' : EMPTY_SHA256;
             pre.push('TS=$(date +%s)');
-            pre.push(`SIG=$(printf '%s\\n%s\\n%s\\n%s' ${method} ${q(p)} "$TS" "${hash}" | openssl dgst -sha256 -hmac ${q(ctx.hmac.secret)} -binary | openssl base64 -A)`);
+            pre.push(`SIG=$(printf '%s\\n%s\\n%s\\n%s' ${method} ${q(prefix + p)} "$TS" "${hash}" | openssl dgst -sha256 -hmac ${q(ctx.hmac.secret)} -binary | openssl base64 -A)`);
             parts.push(`-H "Authorization: HMAC ${ctx.hmac.keyId}:$SIG"`, '-H "X-Timestamp: $TS"');
             break;
           }
@@ -102,7 +106,7 @@
     function admin(method, path, o = {}) {
       const parts = [o.include ? 'curl -s -i' : 'curl -s'];
       if (method !== 'GET') parts.push(`-X ${method}`);
-      parts.push(q(`${ctx.base}/admin/api${path}`));
+      parts.push(q(`${root}/admin/api${path}`));
       if (ctx.adminPasswordRequired) parts.push('-u "admin:$ADMIN_PASSWORD"');
       if (o.json !== undefined) parts.push("-H 'Content-Type: application/json'", `-d ${q(JSON.stringify(o.json))}`);
       for (const x of o.extra || []) parts.push(x);
@@ -148,7 +152,7 @@
           break;
         case 'hmac':
           pre.push('TS=$(date +%s)');
-          pre.push(`SIG=$(printf '%s\\n%s\\n%s\\n%s' GET ${q(p)} "$TS" "${EMPTY_SHA256}" | openssl dgst -sha256 -hmac ${q(ctx.hmac.secret)} -binary | openssl base64 -A)`);
+          pre.push(`SIG=$(printf '%s\\n%s\\n%s\\n%s' GET ${q(prefix + p)} "$TS" "${EMPTY_SHA256}" | openssl dgst -sha256 -hmac ${q(ctx.hmac.secret)} -binary | openssl base64 -A)`);
           envs.push('TS="$TS"', 'SIG="$SIG"');
           hdrs.push(['Authorization', `'HMAC ${ctx.hmac.keyId}:'+process.env.SIG`], ['X-Timestamp', 'process.env.TS']);
           break;
@@ -182,17 +186,17 @@
       if (o.upload) parts.push(`-T ${q(o.upload)}`);
       if (o.body !== undefined) parts.push(`--data-binary ${q(o.body)}`);
       if (o.output) parts.push(`-o ${q(o.output)}`);
-      parts.push(q(`${ctx.base}${p}${o.query ? `?${o.query}` : ''}`));
+      parts.push(q(`${root}${p}${o.query ? `?${o.query}` : ''}`));
       return lines([], parts);
     }
 
     /** The same with the AWS CLI (path-style is used automatically with --endpoint-url). */
     function aws(args) {
       const c = ctx.s3 || { bucket: 'files', region: 'us-east-1', accessKeyId: 'demo-access-key', secretAccessKey: 'demo-secret-key' };
-      return `AWS_ACCESS_KEY_ID=${q(c.accessKeyId)} AWS_SECRET_ACCESS_KEY=${q(c.secretAccessKey)} AWS_REGION=${q(c.region)} aws --endpoint-url ${q(ctx.base)} ${args}`;
+      return `AWS_ACCESS_KEY_ID=${q(c.accessKeyId)} AWS_SECRET_ACCESS_KEY=${q(c.secretAccessKey)} AWS_REGION=${q(c.region)} aws --endpoint-url ${q(root)} ${args}`;
     }
 
-    return { curl, admin, plain, ws, s3, aws, tokenLine, ctx, authLabel, base: ctx.base, mode: ctx.mode };
+    return { curl, admin, plain, ws, s3, aws, tokenLine, ctx, authLabel, base: ctx.base, root, prefix, mode: ctx.mode };
   }
 
   /**
@@ -521,6 +525,36 @@
         curls: [
           ['Authenticated call with the active mode', curl('GET', '/v1/employees?limit=1', { include: true })],
           ['Same call without credentials (expect 401)', plain('GET', '/v1/employees?limit=1', { include: true })],
+        ],
+      },
+      'profiles.list': {
+        title: 'Settings profiles',
+        purpose: 'Several auth modes or chaos setups at once on one server: a request to `/p/<name>/…` runs with that profile\'s settings, and nothing global changes.',
+        steps: [
+          `Pick a profile and give its base URL to your integration instead of \`${C.root}\`, e.g. \`${C.root}/p/apikey/v1\` for the REST API or \`${C.root}/p/oauth2/mcp\` for the MCP server.`,
+          'There is one built-in profile per auth mode (`none`, `apikey`, `basic`, `bearer`, `jwt`, `oauth2`, `hmac`) using the credentials configured on the Auth page. Add your own for a person or a demo: auth mode, credentials, chaos, headers, rate limit and formats.',
+          `The OAuth server is shared: get tokens from \`${C.ctx.tokenUrl}\` and use them in any profile. HMAC signs the path as sent, \`/p/<name>\` included.`,
+          'Data, files, OAuth clients and users, webhooks and the inspector are shared by every profile. The inspector tags each request with its profile.',
+          C.prefix ? `The guides are written for \`${C.prefix}\` right now (picker at the bottom of the menu).` : 'Pick a profile at the bottom of the menu to write every guide and curl for it.',
+        ],
+        curls: [
+          ['API key profile: without, then with the key (401, then 200)', `curl -s -i ${q(`${C.root}/p/apikey/v1/employees?limit=1`)}\ncurl -s ${q(`${C.root}/p/apikey/v1/employees?limit=1`)} -H 'X-API-Key: <the API key on the Auth page>'`],
+          ['OAuth2 profile with a token from the shared OAuth server', `${C.tokenLine()}\ncurl -s ${q(`${C.root}/p/oauth2/v1/employees?limit=1`)} -H "Authorization: Bearer $TOKEN"`],
+          ['List the profiles', admin('GET', '/profiles')],
+        ],
+      },
+      'profiles.edit': {
+        title: 'Create or edit a profile',
+        purpose: 'A custom profile holds only the settings that differ from the global ones; everything else follows the global settings.',
+        steps: [
+          'Name it (lowercase letters, digits, hyphens): the name becomes the path `/p/<name>`.',
+          'Add the settings to change, e.g. `authMode` = `oauth2` and `errorRate` = `20` for a flaky OAuth API. Remove a row to fall back to the global value.',
+          'Save, then copy the profile\'s base URL from the table. Changes apply to the next request; the built-in profiles cannot be edited.',
+        ],
+        curls: [
+          ['Create a profile', admin('POST', '/profiles', { json: { name: 'flaky-oauth', description: 'OAuth2 with 20% 503s', settings: { authMode: 'oauth2', errorRate: 20, errorTypes: '503' } } })],
+          ['Change its settings (replaces the whole set)', admin('PATCH', '/profiles/flaky-oauth', { json: { settings: { authMode: 'oauth2', errorRate: 0 } } })],
+          ['Delete it', admin('DELETE', '/profiles/flaky-oauth')],
         ],
       },
       'auth.token': {
@@ -1132,8 +1166,8 @@
         title: 'S3-compatible API',
         purpose: 'The file pool as an S3 bucket, for platforms with an S3 connector. It works the same whether files are stored locally or in an S3 bucket behind the tool. Requests are signed with AWS Signature V4 using the keys on this card (AUTH_MODE does not apply); the rate limit, required headers and chaos apply as on every protocol.',
         steps: [
-          `In your S3 connector set the endpoint (or "custom endpoint" / "service URL") to \`${B}\`, the access key ID to \`${S3.accessKeyId}\`, the secret access key to the one on this card, and the region to \`${S3.region}\`.`,
-          `Turn on path-style addressing ("force path style", "use path-style access"): requests go to \`${B}/${S3.bucket}/<key>\`. Virtual-hosted style needs a DNS name per bucket, which this host does not have.`,
+          `In your S3 connector set the endpoint (or "custom endpoint" / "service URL") to \`${C.root}\`, the access key ID to \`${S3.accessKeyId}\`, the secret access key to the one on this card, and the region to \`${S3.region}\`.`,
+          `Turn on path-style addressing ("force path style", "use path-style access"): requests go to \`${C.root}/${S3.bucket}/<key>\`. Virtual-hosted style needs a DNS name per bucket, which this host does not have.`,
           `The bucket is \`${S3.bucket}\`. Every file in the pool is an object keyed by its file name; uploads through this API can use folder-style keys such as \`in/2026/orders.csv\`.`,
           'Supported: ListBuckets, HeadBucket, GetBucketLocation, ListObjects (v1 and v2, prefix, delimiter, paging), Get/Head (Range, conditional headers), Put (including aws-chunked streaming and checksums), Copy, Delete, DeleteObjects, multipart uploads (parts of at least 5 MiB except the last) and presigned URLs.',
           'Errors use the S3 XML format (`<Error><Code>NoSuchKey</Code>…`). A wrong secret gives SignatureDoesNotMatch, a wrong key InvalidAccessKeyId, a wrong region AuthorizationHeaderMalformed with the expected region. Uploads, downloads and deletes fire the file webhooks with `via: "s3"`.',
@@ -1233,7 +1267,7 @@
         steps: [
           `Integrations: import \`${B}/openapi.json\` (or .yaml) into your platform, Postman or a code generator. It covers /v1 and the OAuth token endpoint only.`,
           'Re-import after changing auth, date format or headers so the definitions match.',
-          `Automation: \`${B}/admin/api/openapi.json\` describes settings, seeding, files, OAuth clients, the inspector, the tester and /health. It needs the dashboard password.`,
+          `Automation: \`${C.root}/admin/api/openapi.json\` describes settings, seeding, files, OAuth clients, the inspector, the tester and /health. It needs the dashboard password.`,
           'Open Swagger UI and switch between the two specs with the tabs at the top.',
         ],
         curls: [

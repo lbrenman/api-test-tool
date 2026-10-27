@@ -421,10 +421,10 @@ module.exports = function mcpRouter(ctx) {
 module.exports.wellKnown = function mcpWellKnown(ctx) {
   const r = express.Router();
   const doc = (req) => {
-    const base = ctx.baseUrl(req);
+    const base = ctx.baseUrl(req); // ends in /p/<name> inside a settings profile; the OAuth server is the root
     return {
       resource: `${base}/mcp`,
-      authorization_servers: [base],
+      authorization_servers: [ctx.baseUrl.root(req)],
       scopes_supported: ['read', 'write'],
       bearer_methods_supported: ['header'],
       resource_name: 'API Test Tool mock MCP server',
@@ -434,6 +434,16 @@ module.exports.wellKnown = function mcpWellKnown(ctx) {
   r.get(['/.well-known/oauth-protected-resource', '/.well-known/oauth-protected-resource/mcp'], (req, res) => {
     if (!ctx.settings.get('mcpEnabled')) return res.status(404).json({ error: 'not_found', error_description: 'The MCP mock is disabled (MCP_ENABLED=false)' });
     return res.json(doc(req));
+  });
+  // RFC 9728 places the metadata of https://host/p/<name>/mcp at /.well-known/oauth-protected-resource/p/<name>/mcp.
+  r.get('/.well-known/oauth-protected-resource/p/:profile/mcp', (req, res) => {
+    const p = ctx.profiles.get(req.params.profile);
+    if (!p) return res.status(404).json({ error: 'not_found', error_description: `No settings profile "${req.params.profile}"` });
+    req.profile = { name: p.name, prefix: `/p/${p.name}`, store: ctx.profiles.store(p) };
+    return ctx.settings.runIn(req.profile.store, () => {
+      if (!ctx.settings.get('mcpEnabled')) return res.status(404).json({ error: 'not_found', error_description: 'The MCP mock is disabled (MCP_ENABLED=false)' });
+      return res.json(doc(req));
+    });
   });
   return r;
 };

@@ -89,7 +89,8 @@ function detect(ctx) {
     const { rawPath, rawQuery } = splitUrl(req);
     const host = String(req.headers.host || '').toLowerCase().replace(/:\d+$/, '');
     const vhost = !!bucketName && host.startsWith(`${bucketName.toLowerCase()}.`);
-    const segs = rawPath.split('/');
+    const local = req.profile ? rawPath.slice(req.profile.prefix.length) || '/' : rawPath; // without /p/<profile>; signatures use rawPath
+    const segs = local.split('/');
     const first = decodePath(segs[1] || '');
     const signed = isSigned(req, rawQuery);
     if (!vhost && !signed && first !== bucketName) return next();
@@ -97,7 +98,7 @@ function detect(ctx) {
     let key = null;
     if (vhost) {
       bucket = bucketName;
-      const rest = rawPath.slice(1);
+      const rest = local.slice(1);
       key = rest ? decodePath(rest) : null;
     } else {
       bucket = first || null;

@@ -185,7 +185,7 @@ module.exports = function oauthRouter(ctx) {
       // The initial access token was checked above, so in token mode the caller is trusted.
       const trusted = settings.get('oauthRegistration') === 'token';
       const { client, registrationAccessToken } = await oauth.registerClient(req.body, { trusted, ip: clientIp(req) });
-      const base = baseUrl(req);
+      const base = baseUrl.root(req);
       res.setHeader('Location', `${base}/oauth/register/${encodeURIComponent(client.clientId)}`);
       return res.status(201).json(oauth.registrationResponse(client, base, registrationAccessToken));
     } catch (e) {
@@ -196,7 +196,7 @@ module.exports = function oauthRouter(ctx) {
     try {
       res.setHeader('Cache-Control', 'no-store');
       const client = await oauth.registeredClientFor(req, req.params.clientId);
-      return res.json(oauth.registrationResponse(client, baseUrl(req)));
+      return res.json(oauth.registrationResponse(client, baseUrl.root(req)));
     } catch (e) {
       return oauthError(res, e);
     }
@@ -221,7 +221,7 @@ module.exports = function oauthRouter(ctx) {
   });
 
   function metadata(req) {
-    const base = baseUrl(req);
+    const base = baseUrl.root(req);
     return {
       issuer: oauth.issuer(req),
       authorization_endpoint: `${base}/oauth/authorize`,

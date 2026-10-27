@@ -47,7 +47,7 @@ const collectionPreBody = [
   "const skip = pm.request.headers.has('X-Skip-Auth');",
   "if (skip) pm.request.headers.remove('X-Skip-Auth');",
   "const resolved = new sdk.Url(pm.variables.replaceIn(pm.request.url.toString()));",
-  "const p = resolved.getPath();",
+  "const p = resolved.getPath().replace(/^\\/p\\/[^/]+(?=\\/)/, ''); // a settings profile prefix (/p/<name>) is not part of the API path",
   "const isApi = (p.indexOf('/v1/') === 0 && p.indexOf('/v1/files/presigned/') !== 0) || (p.indexOf('/soap/') === 0 && pm.request.method === 'POST') || p.indexOf('/sse/') === 0 || p.indexOf('/llm/v1/') === 0 || p === '/mcp' || ((p === '/a2a' || p.indexOf('/a2a/') === 0) && p.indexOf('agent-card.json') < 0) || p === '/graphql' || (p.indexOf('/odata/v4/') === 0 && p !== '/odata/v4/' && p !== '/odata/v4/$metadata');",
   "if (!isApi || skip || mode === 'none') return;",
   "const set = (k, v) => pm.request.headers.upsert({ key: k, value: v });",
@@ -112,7 +112,8 @@ const platform = folder('Platform', [
   req('OpenAPI JSON (admin API)', 'GET', '/admin/api/openapi.json', {
     description: 'The admin / control-plane spec. Needs the dashboard password when ADMIN_PASSWORD is set (401 otherwise).',
     tests: [
-      "pm.test('200 or 401 (password set)', () => pm.expect([200, 401]).to.include(pm.response.code));",
+      "const inProfile = /\\/p\\/[^/]+\\/?$/.test(pm.environment.get('baseUrl'));",
+      "pm.test('200 or 401 (password set); 404 inside a settings profile', () => pm.expect(inProfile ? [404] : [200, 401]).to.include(pm.response.code));",
       "if (pm.response.code === 200) {",
       "  const d = pm.response.json();",
       "  pm.test('admin spec', () => pm.expect(d.info.title).to.include('Admin API'));",
@@ -456,7 +457,7 @@ const s3Folder = folder('S3-compatible API', [
 
 const misc = folder('Headers & inspector', [
   req('Request id echo', 'GET', '/v1/employees/1', { headers: { 'X-Request-Id': 'postman-req-1', 'X-Correlation-Id': 'postman-corr-1' }, tests: [status(200), "pm.test('echoed', () => { pm.expect(pm.response.headers.get('X-Request-Id')).to.eql('postman-req-1'); pm.expect(pm.response.headers.get('X-Correlation-Id')).to.eql('postman-corr-1'); });"] }),
-  req('Inspector catch-all', 'POST', '/hooks/postman?source=newman', { headers: { 'Content-Type': 'application/json' }, body: json({ event: 'order.created', id: 42 }), tests: [status(200), "pm.test('captured with actual path', () => { pm.expect(pm.response.json().status).to.eql('captured'); pm.expect(pm.response.json().path).to.eql('/hooks/postman'); });"] }),
+  req('Inspector catch-all', 'POST', '/hooks/postman?source=newman', { headers: { 'Content-Type': 'application/json' }, body: json({ event: 'order.created', id: 42 }), tests: [status(200), "pm.test('captured with actual path', () => { pm.expect(pm.response.json().status).to.eql('captured'); pm.expect(pm.response.json().path).to.eql((pm.environment.get('baseUrl').match(/^https?:\\/\\/[^/]+(\\/.*?)?\\/?$/)[1] || '') + '/hooks/postman'); });"] }),
 ]);
 
 const collection = {

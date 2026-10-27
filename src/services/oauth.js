@@ -65,7 +65,7 @@ class OAuthService {
 
   close() { clearInterval(this.pruneTimer); }
 
-  issuer(req) { return this.ctx.settings.get('jwtIssuer') || this.ctx.baseUrl(req); }
+  issuer(req) { return this.ctx.settings.get('jwtIssuer') || this.ctx.baseUrl.root(req); } // one server for every profile
 
   audience() { return this.ctx.settings.get('jwtAudience'); }
 
@@ -556,7 +556,7 @@ class OAuthService {
   checkResource(req, resource) {
     if (resource === undefined || resource === null || resource === '') return undefined;
     const r = Array.isArray(resource) ? resource[0] : String(resource);
-    const base = this.ctx.baseUrl(req);
+    const base = this.ctx.baseUrl.root(req); // any resource on this server, including inside a profile (/p/<name>/mcp)
     let ok = false;
     try { const u = new URL(r); ok = !u.hash && (r === base || r.startsWith(`${base}/`)); } catch { ok = false; }
     if (!ok) throw new OAuthError('invalid_target', `resource must be an absolute URL on this server (${base}/…)`);

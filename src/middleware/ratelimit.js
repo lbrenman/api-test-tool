@@ -1,5 +1,5 @@
 'use strict';
-// Fixed-window rate limiter (per client IP + credential) emitting IETF RateLimit-* headers.
+// Fixed-window rate limiter (per settings profile + client IP + credential) emitting IETF RateLimit-* headers.
 const { sendProblem } = require('../util/problem');
 
 module.exports = function rateLimit(settings) {
@@ -13,7 +13,7 @@ module.exports = function rateLimit(settings) {
     const limit = settings.get('rateLimitRpm');
     if (!limit) return next();
     const now = Date.now();
-    const key = `${req.ip}|${(req.get('authorization') || req.get(settings.get('apiKeyName')) || '').slice(0, 64)}`;
+    const key = `${req.profile?.name || ''}|${req.ip}|${(req.get('authorization') || req.get(settings.get('apiKeyName')) || '').slice(0, 64)}`;
     let w = windows.get(key);
     if (!w || w.reset <= now) {
       w = { count: 0, reset: now + 60000 };

@@ -193,3 +193,17 @@ test('a request the tester sent can be copied as curl', () => {
   assert.doesNotMatch(cmd, /Content-Length/);
   assert.match(cmd, /--data-binary '\{"a":"it'\\''s"\}'/);
 });
+
+test('inside a settings profile the guides call /p/<name>, sign the full path, and keep admin and S3 at the root', { skip: !hasOpenssl && 'openssl not available' }, () => {
+  const C = makeCurl({ ...BASE_CTX, mode: 'hmac', base: 'https://att.example.dev/p/hmac', root: 'https://att.example.dev' });
+  const cmd = C.curl('GET', '/v1/employees?limit=2');
+  assert.match(cmd, /'https:\/\/att\.example\.dev\/p\/hmac\/v1\/employees\?limit=2'/);
+  const ts = '1700000000';
+  const script = cmd.split('\n').filter((l) => /^(TS|SIG)=/.test(l)).join('\n').replace('TS=$(date +%s)', `TS=${ts}`);
+  const sig = execFileSync('bash', ['-c', `${script}\nprintf %s "$SIG"`]).toString();
+  const expected = crypto.createHmac('sha256', BASE_CTX.hmac.secret).update(['GET', '/p/hmac/v1/employees?limit=2', ts, crypto.createHash('sha256').update('').digest('hex')].join('\n')).digest('base64');
+  assert.equal(sig, expected);
+  assert.match(C.admin('GET', '/settings'), /'https:\/\/att\.example\.dev\/admin\/api\/settings'/);
+  assert.match(C.s3('GET', ''), /'https:\/\/att\.example\.dev\/files'/);
+  assert.match(C.ws('/ws/echo', 'hi'), /wss:\/\/att\.example\.dev\/p\/hmac\/ws\/echo/);
+});

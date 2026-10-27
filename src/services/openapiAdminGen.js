@@ -108,9 +108,29 @@ async function generateAdminOpenApi(ctx, req) {
     responses: { 200: { description: 'File content', content: { '*/*': { schema: { type: 'string', format: 'binary' } } } }, ...AUTHED, ...NF },
   }));
 
+  // ---- Settings profiles
+  const profName = pathParam('name', 'Profile name (built-in: one per auth mode)', 'hmac');
+  const profExample = { name: 'flaky-oauth', description: 'OAuth2 with 20% 503s', settings: { authMode: 'oauth2', errorRate: 20, errorTypes: '503' } };
+  add(`${A}/profiles`, 'get', op('Profiles', 'listProfiles', 'Built-in and custom settings profiles, the settings a profile may set, and their current global values', {
+    responses: { ...ok('Profiles', obj({ profiles: { type: 'array', items: S('Profile') }, keys: { type: 'array', items: { type: 'string' } }, settings: anyObj('Setting descriptions (as in GET /admin/api/settings) keyed by name') }, ['profiles', 'keys'])), ...AUTHED },
+  }));
+  add(`${A}/profiles`, 'post', op('Profiles', 'createProfile', 'Add a custom profile. Its settings apply to requests under /p/<name>/…; everything else stays global', {
+    requestBody: body(S('ProfileInput'), profExample),
+    responses: { ...created('Profile created', S('Profile')), ...BAD, ...AUTHED, 409: { description: 'The name is taken or built in', content: json(S('Problem')) } },
+  }));
+  add(`${A}/profiles/{name}`, 'get', op('Profiles', 'getProfile', 'One profile', { parameters: [profName], responses: { ...ok('Profile', S('Profile')), ...AUTHED, ...NF } }));
+  add(`${A}/profiles/{name}`, 'patch', op('Profiles', 'updateProfile', 'Change a custom profile\'s description or settings (settings replace the profile\'s whole set)', {
+    parameters: [profName], requestBody: body(S('ProfileInput'), { settings: { authMode: 'oauth2', errorRate: 0 } }),
+    responses: { ...ok('Profile', S('Profile')), ...BAD, ...AUTHED, ...NF, 409: { description: 'Built-in profiles cannot be changed', content: json(S('Problem')) } },
+  }));
+  add(`${A}/profiles/{name}`, 'delete', op('Profiles', 'deleteProfile', 'Delete a custom profile', {
+    parameters: [profName], responses: { ...noContent('Deleted'), ...AUTHED, ...NF, 409: { description: 'Built-in profiles cannot be deleted', content: json(S('Problem')) } },
+  }));
+
   // ---- Auth
-  add(`${A}/auth`, 'get', op('Auth', 'getAuthConfig', 'Active /v1 auth mode, every mode\'s credentials, the S3 API keys, OAuth endpoints and clients', {
-    responses: { ...ok('Auth configuration', anyObj('mode, apiKey, basic, bearer, jwt, hmac, s3 (S3 API endpoint, bucket, region and keys), oauth, clients, users')), ...AUTHED },
+  add(`${A}/auth`, 'get', op('Auth', 'getAuthConfig', 'Active /v1 auth mode, every mode\'s credentials, the S3 API keys, OAuth endpoints and clients. With ?profile=<name>, the values inside that settings profile', {
+    parameters: [{ name: 'profile', in: 'query', required: false, description: 'Describe the auth settings inside this profile (apiBase then ends in /p/<name>)', schema: { type: 'string' }, example: 'hmac' }],
+    responses: { ...ok('Auth configuration', anyObj('profile, apiBase (where the mock APIs are), mode, apiKey, basic, bearer, jwt, hmac, s3 (S3 API endpoint, bucket, region and keys), oauth, clients, users')), ...AUTHED, ...NF },
   }));
   add(`${A}/oauth/clients`, 'post', op('Auth', 'createOAuthClient', 'Add an OAuth client (stored in the DB)', {
     requestBody: body(obj({ clientId: { type: 'string' }, secret: { type: 'string' }, scopes: { description: 'Space/comma-separated string or array', anyOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }] }, redirectUris: { anyOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }] } }), { clientId: 'fusion', secret: 's3cret', scopes: 'read write' }),
@@ -353,6 +373,7 @@ async function generateAdminOpenApi(ctx, req) {
       { name: 'Data', description: 'Seed, clear and preview the mock data' },
       { name: 'Files', description: 'Manage the shared file pool' },
       { name: 'Auth', description: '/v1 auth configuration and OAuth clients' },
+      { name: 'Profiles', description: 'Settings profiles: /p/<name>/… runs a request with the profile\'s auth mode, chaos, headers, rate limit and formats, so several setups can be used side by side' },
       { name: 'Inspector', description: 'Captured requests (webhook-style catch-all)' },
       { name: 'Webhooks', description: 'Outgoing webhooks: POST to your URL when mock data is created, updated or deleted, or a file is uploaded, downloaded or deleted, through any protocol' },
       { name: 'Tester', description: 'Contract tester for APIs you implemented (OpenAPI, WSDL/SOAP, AsyncAPI/WebSocket)' },
@@ -387,6 +408,14 @@ async function generateAdminOpenApi(ctx, req) {
         }, ['id', 'name']),
         OAuthUser: obj({ username: { type: 'string' }, password: { type: 'string' }, roles: { type: 'array', items: { type: 'string' } }, attributes: { type: 'object', additionalProperties: true }, source: { type: 'string', enum: ['env', 'dashboard'] }, overridesEnv: { type: 'boolean' } }, ['username'], { additionalProperties: true }),
         OAuthClient: obj({ clientId: { type: 'string' }, secret: { type: 'string' }, scopes: {}, redirectUris: { type: 'array', items: { type: 'string' } }, source: { type: 'string' } }, ['clientId'], { additionalProperties: true }),
+        ProfileInput: obj({
+          name: { type: 'string', pattern: '^[a-z0-9][a-z0-9-]{0,39}$', description: 'Only when creating' }, description: { type: 'string', maxLength: 200 },
+          settings: anyObj('Setting values by key (see GET /admin/api/profiles for the allowed keys); unset keys use the global value'),
+        }),
+        Profile: obj({
+          name: { type: 'string' }, builtIn: { type: 'boolean' }, description: { type: 'string' }, settings: anyObj('The profile\'s values; every other setting is global'),
+          url: { type: 'string', format: 'uri', description: 'Base URL of the mock APIs inside this profile' }, createdAt: { type: 'string', format: 'date-time' }, updatedAt: { type: 'string', format: 'date-time' },
+        }, ['name', 'settings', 'url']),
         WebhookInput: obj({
           name: { type: 'string', maxLength: 120 },
           url: { type: 'string', format: 'uri', description: 'http(s) URL that receives the POST' },
