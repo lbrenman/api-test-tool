@@ -242,6 +242,14 @@ All mocks share one request pipeline (required headers → rate limit → auth �
 - [ ] Inspector: filter by source (SOAP, WebSocket, SSE, GraphQL, OData, LLM, MCP, A2A, S3 API) and check each call your platform made, with its real response.
 - [ ] Cross-protocol: create a record through one protocol and read it through another (for example OData create, GraphQL read, SSE change event, or an A2A question about it).
 
+## API security: profiles, signed assertions, CIMD, mTLS
+
+- [ ] Profiles: point one connector at `$B/p/apikey` and another at `$B/p/oauth2` at the same time; each works with its own credentials and fails with the other's, whatever the global `AUTH_MODE`.
+- [ ] `private_key_jwt`: on the Auth page, give a client a key pair (or your platform's JWKS / `jwks_uri`) and set your platform's OAuth connector to sign client assertions. A token comes back; a replayed or wrongly addressed assertion is `invalid_client`.
+- [ ] CIMD: give your platform's MCP client `$B/mcp`. If it supports CIMD, the sign-in page shows its metadata host and `client_id` is an https URL (Auth page → "URL client_ids seen"). With `OAUTH_REGISTRATION=off` it must still connect.
+- [ ] mTLS (`MTLS_ENABLED=true`, port open): issue a certificate on the Auth page, load the `.p12` (or PEMs) and the lab CA into your platform. `/p/mtls/v1/employees` answers 200 with it and 401 without.
+- [ ] RFC 8705: create a `tls_client_auth` client for that certificate ("OAuth client" button), get a token over mTLS without a secret, and call `/p/oauth2/v1` with it over mTLS (200) and over the plain URL (401 `certificate-mismatch`).
+
 ## Not covered yet, and what to report back
 
 - OData v2 (`d.results`, `__count`, `__next`, `/Date(ms)/`) is not built. Open an issue if your platform's OData connector needs v2.
@@ -251,6 +259,7 @@ All mocks share one request pipeline (required headers → rate limit → auth �
 - Mock LLM: chat completions, embeddings and models only (no Responses API, legacy completions, images, audio or files). Tested with curl, Postman and Node's fetch; the official OpenAI SDKs and your platform's LLM connector have not been checked yet.
 - MCP server: no HTTP+SSE transport (2024-11-05), batches, server-to-client requests (sampling, elicitation, roots, or 2026-07-28 input requests), tasks or client ID metadata documents. Checked with the official MCP SDK clients (`@modelcontextprotocol/sdk` 1.32.1 and `@modelcontextprotocol/client` 2.3.1, both speaking 2025-11-25); the 2026-07-28 path is covered by the tool's own tests only, and your platform's MCP client has not been checked yet.
 - A2A agent: rule-based answers (no LLM), no gRPC binding, file parts (`url`, `raw`) are accepted but not read, tasks kept in memory (lost on restart), extensions not implemented. Checked with the official SDKs (Python `a2a-sdk` 1.2.2 over JSON-RPC and HTTP+JSON, `@a2a-js/sdk` 1.3.0, and `a2a-sdk` 0.3.26 against `/a2a/v0.3`); your platform's A2A client has not been checked yet.
+- mTLS: checked with curl (PEM and P12), Node, Newman (`--ssl-client-cert-list`), OpenSSL, Java keytool and Python `cryptography`; your platform's certificate store and the API Lab (which needs the mTLS port opened) have not been checked yet. SPIFFE SVIDs and trust bundles are not built.
 - GraphiQL (`B/graphql` in a browser) and Swagger UI load from a CDN and have not been checked on your deployment.
 
 For anything that fails, open a GitHub issue with the protocol, the auth mode, the request your platform sent (from the Inspector) and what it expected.

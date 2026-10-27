@@ -53,12 +53,15 @@ function security(mode, apiKeyName, apiKeyIn, base) {
         description: 'Authorization: HMAC <keyId>:<base64(HMAC-SHA256(secret, METHOD\\nPATH+QUERY\\nX-Timestamp\\nhex(SHA-256(body))))>. Send X-Timestamp (epoch seconds or HTTP-date). Streamed /v1/files uploads use the literal UNSIGNED-PAYLOAD instead of the body hash.',
       },
     };
+    case 'mtls': return {
+      MutualTLS: { type: 'mutualTLS', description: 'A client certificate from the lab CA (or a CA in MTLS_TRUSTED_CAS), presented on the mTLS listener (MTLS_PORT). The dashboard\'s Auth page issues them.' },
+    };
     default: return {};
   }
 }
 
 function opSecurity(mode, method) {
-  const names = { apikey: 'ApiKeyAuth', basic: 'BasicAuth', bearer: 'BearerAuth', jwt: 'JwtAuth', oauth2: 'OAuth2', hmac: 'HmacAuth' };
+  const names = { apikey: 'ApiKeyAuth', basic: 'BasicAuth', bearer: 'BearerAuth', jwt: 'JwtAuth', oauth2: 'OAuth2', hmac: 'HmacAuth', mtls: 'MutualTLS' };
   if (!names[mode]) return undefined;
   if (mode === 'oauth2') return [{ OAuth2: [method === 'get' ? 'read' : 'write'] }];
   return [{ [names[mode]]: [] }];
@@ -442,7 +445,7 @@ async function generateOpenApi(ctx, req) {
   paths['/oauth/token'] = {
     post: {
       tags: ['OAuth'], operationId: 'oauthToken', summary: 'Token endpoint (client_credentials, authorization_code + PKCE, refresh_token)', security: [],
-      requestBody: { required: true, content: { 'application/x-www-form-urlencoded': { schema: { type: 'object', required: ['grant_type'], properties: { grant_type: { type: 'string', enum: ['client_credentials', 'authorization_code', 'refresh_token'] }, client_id: { type: 'string' }, client_secret: { type: 'string' }, scope: { type: 'string' }, code: { type: 'string' }, redirect_uri: { type: 'string' }, code_verifier: { type: 'string' }, refresh_token: { type: 'string' } } } } } },
+      requestBody: { required: true, content: { 'application/x-www-form-urlencoded': { schema: { type: 'object', required: ['grant_type'], properties: { grant_type: { type: 'string', enum: ['client_credentials', 'authorization_code', 'refresh_token'] }, client_id: { type: 'string' }, client_secret: { type: 'string' }, client_assertion_type: { type: 'string', const: 'urn:ietf:params:oauth:client-assertion-type:jwt-bearer', description: 'With client_assertion: client authentication with a signed JWT (RFC 7523), instead of a secret' }, client_assertion: { type: 'string', description: 'JWT with iss = sub = client_id, aud = the token endpoint (or issuer), exp at most 1 h away and a unique jti. Asymmetric algs (private_key_jwt) are checked against the client\'s jwks / jwks_uri; HS256/384/512 (client_secret_jwt) against its secret' }, scope: { type: 'string' }, code: { type: 'string' }, redirect_uri: { type: 'string' }, code_verifier: { type: 'string' }, refresh_token: { type: 'string' } } } } } },
       responses: {
         200: { description: 'Token', content: { 'application/json': { schema: { type: 'object', required: ['access_token', 'token_type', 'expires_in'], properties: { access_token: { type: 'string' }, token_type: { type: 'string' }, expires_in: { type: 'integer' }, scope: { type: 'string' }, refresh_token: { type: 'string' } } } } } },
         400: { description: 'OAuth error', content: { 'application/json': { schema: S('OAuthError') } } },
@@ -450,6 +453,22 @@ async function generateOpenApi(ctx, req) {
       },
     },
   };
+
+  // Client ID metadata documents the server hosts for demos (a URL client_id, CIMD), when OAUTH_CIMD is on.
+  if (settings.get('oauthCimd')) {
+    paths['/oauth/client-metadata/{file}'] = {
+      get: {
+        tags: ['OAuth'], operationId: 'oauthClientMetadataDocument', security: [],
+        summary: 'A client ID metadata document hosted by this server (use its URL as client_id)',
+        description: 'Any https URL serving client metadata can be a client_id (the server fetches it); these are the documents managed on the dashboard\'s Auth page, such as demo.json. Each one\'s client_id is its own URL.',
+        parameters: [{ name: 'file', in: 'path', required: true, schema: { type: 'string', pattern: '^[a-z0-9][a-z0-9-]{0,39}\\.json$' }, example: 'demo.json' }],
+        responses: {
+          200: { description: 'Client metadata', content: { 'application/json': { schema: { allOf: [S('ClientMetadata'), { type: 'object', required: ['client_id', 'redirect_uris'], properties: { client_id: { type: 'string', format: 'uri', description: 'The document\'s own URL' } } }] } } } },
+          404: { description: 'No such document', content: { 'application/json': { schema: S('OAuthError') } } },
+        },
+      },
+    };
+  }
 
   // Dynamic client registration (RFC 7591) and read/delete management (RFC 7592), when OAUTH_REGISTRATION is not off.
   if (settings.get('oauthRegistration') !== 'off') {
@@ -587,7 +606,10 @@ async function generateOpenApi(ctx, req) {
           type: 'object', description: 'RFC 7591 client metadata',
           properties: {
             redirect_uris: { type: 'array', items: { type: 'string', format: 'uri' }, description: 'Required for authorization_code. Loopback http redirects match on any port (RFC 8252); custom schemes are allowed.' },
-            token_endpoint_auth_method: { type: 'string', enum: ['client_secret_basic', 'client_secret_post', 'none'], default: 'client_secret_basic' },
+            token_endpoint_auth_method: { type: 'string', enum: ['client_secret_basic', 'client_secret_post', 'client_secret_jwt', 'private_key_jwt', 'tls_client_auth', 'self_signed_tls_client_auth', 'none'], default: 'client_secret_basic', description: 'private_key_jwt needs jwks or jwks_uri and gets no client_secret; tls_client_auth needs one tls_client_auth_* field, self_signed_tls_client_auth the certificate in jwks (x5c); both authenticate on the mTLS listener (RFC 8705)' },
+            tls_client_auth_subject_dn: { type: 'string' }, tls_client_auth_san_dns: { type: 'string' }, tls_client_auth_san_uri: { type: 'string' }, tls_client_auth_san_ip: { type: 'string' }, tls_client_auth_san_email: { type: 'string' },
+            jwks: { type: 'object', description: 'JWK Set with the client\'s public keys (private_key_jwt)', properties: { keys: { type: 'array', items: { type: 'object', additionalProperties: true } } } },
+            jwks_uri: { type: 'string', format: 'uri', description: 'https URL of the client\'s JWK Set (instead of jwks)' },
             grant_types: { type: 'array', items: { type: 'string', enum: ['authorization_code', 'refresh_token', 'client_credentials'] }, default: ['authorization_code'] },
             response_types: { type: 'array', items: { type: 'string', enum: ['code'] } },
             scope: { type: 'string', description: 'Space-separated; must be within OAUTH_REGISTRATION_SCOPES (default: all of them)' },
@@ -605,6 +627,7 @@ async function generateOpenApi(ctx, req) {
             redirect_uris: { type: 'array', items: { type: 'string' } }, scope: { type: 'string' },
             client_name: { type: 'string' }, client_uri: { type: 'string' }, logo_uri: { type: 'string' },
             contacts: { type: 'array', items: { type: 'string' } }, software_id: { type: 'string' }, software_version: { type: 'string' },
+            jwks: { type: 'object', additionalProperties: true }, jwks_uri: { type: 'string', format: 'uri' },
           },
         },
       },

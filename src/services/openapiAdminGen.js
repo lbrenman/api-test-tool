@@ -108,22 +108,92 @@ async function generateAdminOpenApi(ctx, req) {
     responses: { 200: { description: 'File content', content: { '*/*': { schema: { type: 'string', format: 'binary' } } } }, ...AUTHED, ...NF },
   }));
 
-  // ---- Auth
-  add(`${A}/auth`, 'get', op('Auth', 'getAuthConfig', 'Active /v1 auth mode, every mode\'s credentials, the S3 API keys, OAuth endpoints and clients', {
-    responses: { ...ok('Auth configuration', anyObj('mode, apiKey, basic, bearer, jwt, hmac, s3 (S3 API endpoint, bucket, region and keys), oauth, clients, users')), ...AUTHED },
+  // ---- Settings profiles
+  const profName = pathParam('name', 'Profile name (built-in: one per auth mode)', 'hmac');
+  const profExample = { name: 'flaky-oauth', description: 'OAuth2 with 20% 503s', settings: { authMode: 'oauth2', errorRate: 20, errorTypes: '503' } };
+  add(`${A}/profiles`, 'get', op('Profiles', 'listProfiles', 'Built-in and custom settings profiles, the settings a profile may set, and their current global values', {
+    responses: { ...ok('Profiles', obj({ profiles: { type: 'array', items: S('Profile') }, keys: { type: 'array', items: { type: 'string' } }, settings: anyObj('Setting descriptions (as in GET /admin/api/settings) keyed by name') }, ['profiles', 'keys'])), ...AUTHED },
   }));
+  add(`${A}/profiles`, 'post', op('Profiles', 'createProfile', 'Add a custom profile. Its settings apply to requests under /p/<name>/…; everything else stays global', {
+    requestBody: body(S('ProfileInput'), profExample),
+    responses: { ...created('Profile created', S('Profile')), ...BAD, ...AUTHED, 409: { description: 'The name is taken or built in', content: json(S('Problem')) } },
+  }));
+  add(`${A}/profiles/{name}`, 'get', op('Profiles', 'getProfile', 'One profile', { parameters: [profName], responses: { ...ok('Profile', S('Profile')), ...AUTHED, ...NF } }));
+  add(`${A}/profiles/{name}`, 'patch', op('Profiles', 'updateProfile', 'Change a custom profile\'s description or settings (settings replace the profile\'s whole set)', {
+    parameters: [profName], requestBody: body(S('ProfileInput'), { settings: { authMode: 'oauth2', errorRate: 0 } }),
+    responses: { ...ok('Profile', S('Profile')), ...BAD, ...AUTHED, ...NF, 409: { description: 'Built-in profiles cannot be changed', content: json(S('Problem')) } },
+  }));
+  add(`${A}/profiles/{name}`, 'delete', op('Profiles', 'deleteProfile', 'Delete a custom profile', {
+    parameters: [profName], responses: { ...noContent('Deleted'), ...AUTHED, ...NF, 409: { description: 'Built-in profiles cannot be deleted', content: json(S('Problem')) } },
+  }));
+
+  // ---- Auth
+  add(`${A}/auth`, 'get', op('Auth', 'getAuthConfig', 'Active /v1 auth mode, every mode\'s credentials, the S3 API keys, OAuth endpoints and clients. With ?profile=<name>, the values inside that settings profile', {
+    parameters: [{ name: 'profile', in: 'query', required: false, description: 'Describe the auth settings inside this profile (apiBase then ends in /p/<name>)', schema: { type: 'string' }, example: 'hmac' }],
+    responses: { ...ok('Auth configuration', anyObj('profile, apiBase (where the mock APIs are), mode, apiKey, basic, bearer, jwt, hmac, s3 (S3 API endpoint, bucket, region and keys), oauth, clients, users')), ...AUTHED, ...NF },
+  }));
+  const keyFields = {
+    tokenEndpointAuthMethod: { type: 'string', enum: ['client_secret_basic', 'client_secret_post', 'client_secret_jwt', 'private_key_jwt', 'tls_client_auth', 'self_signed_tls_client_auth'], description: 'Pin how the client authenticates. Unset = secret (Basic or form) or a signed assertion. private_key_jwt needs jwks or jwksUri; tls_client_auth needs tlsClientAuth; self_signed_tls_client_auth needs the certificate in jwks (both on the mTLS listener)' },
+    tlsClientAuth: { type: ['object', 'null'], description: 'tls_client_auth (RFC 8705): the client certificate to expect. null removes it', properties: { type: { type: 'string', enum: ['subject_dn', 'san_dns', 'san_uri', 'san_ip', 'san_email'] }, value: { type: 'string' } } },
+    jwks: { description: 'Public keys for private_key_jwt: a JWK Set, a JWK, or a PEM public key or certificate. Private key material is refused. "" removes them', anyOf: [{ type: 'object', additionalProperties: true }, { type: 'string' }] },
+    jwksUri: { type: 'string', format: 'uri', description: 'Where to fetch the public keys instead (https; private addresses only with OAUTH_FETCH_PRIVATE). "" removes it' },
+  };
   add(`${A}/oauth/clients`, 'post', op('Auth', 'createOAuthClient', 'Add an OAuth client (stored in the DB)', {
-    requestBody: body(obj({ clientId: { type: 'string' }, secret: { type: 'string' }, scopes: { description: 'Space/comma-separated string or array', anyOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }] }, redirectUris: { anyOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }] } }), { clientId: 'fusion', secret: 's3cret', scopes: 'read write' }),
+    requestBody: body(obj({ clientId: { type: 'string' }, secret: { type: 'string' }, scopes: { description: 'Space/comma-separated string or array', anyOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }] }, redirectUris: { anyOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }] }, ...keyFields }), { clientId: 'fusion', secret: 's3cret', scopes: 'read write' }),
     responses: { ...created('Client created', S('OAuthClient')), ...BAD, ...AUTHED },
   }));
   add(`${A}/oauth/clients/{id}`, 'patch', op('Auth', 'updateOAuthClient', 'Edit a client: secret ("" = generate a new one), scopes, redirect URIs, grant types, name. Omitted fields are kept. Editing an env client stores a copy that overrides OAUTH_CLIENTS; deleting the copy reverts it.', {
     parameters: [pathParam('id', 'Client id')],
-    requestBody: body(obj({ secret: { type: 'string' }, scopes: { anyOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }] }, redirectUris: { anyOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }] }, grantTypes: { anyOf: [{ type: 'string' }, { type: 'array', items: { type: 'string', enum: ['authorization_code', 'refresh_token', 'client_credentials'] } }] }, clientName: { type: 'string' } }), { redirectUris: ['https://oauth.pstmn.io/v1/callback', 'http://localhost:8080/callback'] }),
+    requestBody: body(obj({ secret: { type: 'string' }, scopes: { anyOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }] }, redirectUris: { anyOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }] }, grantTypes: { anyOf: [{ type: 'string' }, { type: 'array', items: { type: 'string', enum: ['authorization_code', 'refresh_token', 'client_credentials'] } }] }, clientName: { type: 'string' }, ...keyFields }), { redirectUris: ['https://oauth.pstmn.io/v1/callback', 'http://localhost:8080/callback'] }),
     responses: { ...ok('Updated client', S('OAuthClient')), ...BAD, ...AUTHED, ...NF },
   }));
   add(`${A}/oauth/clients/{id}`, 'delete', op('Auth', 'deleteOAuthClient', 'Delete a dashboard-added, edited or registered OAuth client (deleting an edited env client reverts it to OAUTH_CLIENTS)', {
     parameters: [pathParam('id', 'Client id')],
     responses: { ...noContent('Deleted'), ...AUTHED, ...NF },
+  }));
+  add(`${A}/oauth/clients/{id}/keypair`, 'post', op('Auth', 'generateClientKeyPair', 'Generate a key pair for private_key_jwt. The public key joins the client\'s jwks and the client is pinned to private_key_jwt (use: false leaves the method alone). The private key is returned and kept, like a secret, so /auth/client-assertion can sign with it.', {
+    parameters: [pathParam('id', 'Client id')],
+    requestBody: body(obj({ alg: { type: 'string', enum: ['RS256', 'PS256', 'ES256', 'EdDSA'], default: 'RS256' }, use: { type: 'boolean', default: true } }), { alg: 'ES256' }, false),
+    responses: { ...created('Key pair', obj({ kid: { type: 'string' }, alg: { type: 'string' }, publicJwk: { type: 'object', additionalProperties: true }, privateKeyPem: { type: 'string' } })), ...BAD, ...AUTHED, ...NF },
+  }));
+  add(`${A}/auth/client-assertion`, 'post', op('Auth', 'makeClientAssertion', 'A signed client_assertion (RFC 7523) for the token, introspection or revocation endpoint: private_key_jwt with the client\'s generated key, or client_secret_jwt (HS256 over its secret). Valid once, for lifetime seconds.', {
+    requestBody: body(obj({ clientId: { type: 'string' }, method: { type: 'string', enum: ['private_key_jwt', 'client_secret_jwt'], description: 'Default: the client\'s pinned JWT method, else private_key_jwt when it has a generated key' }, audience: { type: 'string', description: 'Default <server>/oauth/token' }, lifetime: { type: 'integer', minimum: 30, maximum: 3600, default: 300 } }, ['clientId']), { clientId: 'demo-client', method: 'client_secret_jwt' }),
+    responses: { ...ok('Assertion', anyObj('method, assertion, clientAssertionType, tokenEndpoint, decoded {header, payload}')), ...BAD, ...AUTHED, ...NF },
+  }));
+  add(`${A}/oauth/client-metadata`, 'get', op('Auth', 'listClientMetadata', 'Client ID metadata documents (CIMD): whether URL client_ids are accepted (OAUTH_CIMD), the documents this server hosts at /oauth/client-metadata/<name>.json, and the URL client_ids seen recently (with the last fetch error)', {
+    responses: { ...ok('CIMD state', obj({ enabled: { type: 'boolean' }, registration: { type: 'string' }, documents: { type: 'array', items: obj({ name: { type: 'string' }, builtIn: { type: 'boolean' }, url: { type: 'string', format: 'uri' }, document: { type: 'object', additionalProperties: true } }) }, seen: { type: 'array', items: { type: 'object', additionalProperties: true } } })), ...AUTHED },
+  }));
+  add(`${A}/oauth/client-metadata/{name}`, 'put', op('Auth', 'saveClientMetadata', 'Create or replace a hosted metadata document. Its client_id is always its own URL; token_endpoint_auth_method is none (default) or private_key_jwt (with jwks or jwks_uri). Saving the built-in "demo" stores an edited copy.', {
+    parameters: [pathParam('name', 'Document name (lowercase letters, digits, hyphens); served as <name>.json')],
+    requestBody: body({ type: 'object', additionalProperties: true, description: 'RFC 7591 client metadata: client_name, redirect_uris, grant_types, response_types, token_endpoint_auth_method, scope, jwks / jwks_uri, client_uri, logo_uri' }, { client_name: 'My demo agent', redirect_uris: ['https://oauth.pstmn.io/v1/callback'], grant_types: ['authorization_code', 'refresh_token'], token_endpoint_auth_method: 'none', scope: 'read' }),
+    responses: { ...ok('Saved document', anyObj('name, builtIn, url, document')), ...BAD, ...AUTHED },
+  }));
+  add(`${A}/oauth/client-metadata/{name}`, 'delete', op('Auth', 'deleteClientMetadata', 'Delete a stored hosted document (an edited "demo" reverts to the built-in one)', {
+    parameters: [pathParam('name', 'Document name')], responses: { ...noContent('Deleted'), ...AUTHED, ...NF },
+  }));
+  add(`${A}/oauth/client-metadata-cache`, 'delete', op('Auth', 'clearClientMetadataCache', 'Forget the cached fetched metadata documents, so the next use of each URL client_id fetches it again', {
+    responses: { ...noContent('Cleared'), ...AUTHED },
+  }));
+  // ---- mutual TLS
+  const certId = pathParam('id', 'Certificate id (its serial number)');
+  const certOut = anyObj('id, cn, subject, issuer, serialNumber, validFrom, validTo, subjectAltName, fingerprint256, x5t#S256, keyType, certPem (and keyPem when issued or fetched one by one)');
+  add(`${A}/mtls`, 'get', op('mTLS', 'getMtls', 'The mTLS listener (enabled, listening, URL), the lab CA, the listener\'s certificate and the client certificates issued (without private keys)', {
+    responses: { ...ok('mTLS state', anyObj('enabled, listening, port, url, customServerCert, trustedCas, allowedSubjects, ca {pem, subject, …}, server, certs')), ...AUTHED },
+  }));
+  add(`${A}/mtls/ca.pem`, 'get', op('mTLS', 'getLabCa', 'The lab CA certificate (PEM): trust it for the listener\'s certificate; it issues the client certificates', {
+    responses: { 200: { description: 'PEM', content: { 'application/x-pem-file': { schema: { type: 'string' } } } }, ...AUTHED },
+  }));
+  add(`${A}/mtls/certs`, 'post', op('mTLS', 'issueClientCert', 'Issue a client certificate from the lab CA (key pair generated here). The reply includes certPem and keyPem.', {
+    requestBody: body(obj({ cn: { type: 'string', maxLength: 64 }, o: { type: 'string' }, ou: { type: 'string' }, san: obj({ dns: { type: 'array', items: { type: 'string' } }, uri: { type: 'array', items: { type: 'string' } }, email: { type: 'array', items: { type: 'string' } }, ip: { type: 'array', items: { type: 'string' } } }), days: { type: 'integer', minimum: 1, maximum: 825, default: 365 }, keyType: { type: 'string', enum: ['ec', 'rsa'], default: 'ec' }, label: { type: 'string' } }, ['cn']), { cn: 'fusion-client', san: { uri: ['spiffe://lab/fusion'] } }),
+    responses: { ...created('Issued certificate', certOut), ...BAD, ...AUTHED },
+  }));
+  add(`${A}/mtls/certs/{id}`, 'get', op('mTLS', 'getClientCert', 'One issued certificate, with its private key', { parameters: [certId], responses: { ...ok('Certificate', certOut), ...AUTHED, ...NF } }));
+  add(`${A}/mtls/certs/{id}`, 'delete', op('mTLS', 'deleteClientCert', 'Forget an issued certificate (it stays valid until it expires: there is no revocation list)', { parameters: [certId], responses: { ...noContent('Deleted'), ...AUTHED, ...NF } }));
+  add(`${A}/mtls/certs/{id}/cert.pem`, 'get', op('mTLS', 'downloadClientCert', 'The certificate (PEM)', { parameters: [certId], responses: { 200: { description: 'PEM', content: { 'application/x-pem-file': { schema: { type: 'string' } } } }, ...AUTHED, ...NF } }));
+  add(`${A}/mtls/certs/{id}/key.pem`, 'get', op('mTLS', 'downloadClientKey', 'The private key (PKCS#8 PEM)', { parameters: [certId], responses: { 200: { description: 'PEM', content: { 'application/x-pem-file': { schema: { type: 'string' } } } }, ...AUTHED, ...NF } }));
+  add(`${A}/mtls/certs/{id}/p12`, 'post', op('mTLS', 'downloadClientP12', 'Key, certificate and lab CA as a PKCS#12 (.p12) file protected by the password (AES-256, HMAC-SHA256)', {
+    parameters: [certId], requestBody: body(obj({ password: { type: 'string', minLength: 4 } }, ['password']), { password: 'changeit' }),
+    responses: { 200: { description: 'PKCS#12', content: { 'application/x-pkcs12': { schema: { type: 'string', format: 'binary' } } } }, ...BAD, ...AUTHED, ...NF },
   }));
   add(`${A}/oauth/registered`, 'delete', op('Auth', 'deleteRegisteredClients', 'Delete the clients that registered themselves through /oauth/register (all of them, or with unused=true only those that never obtained a token)', {
     parameters: [{ name: 'unused', in: 'query', schema: { type: 'boolean' }, description: 'Only delete registrations that never obtained a token' }],
@@ -353,6 +423,8 @@ async function generateAdminOpenApi(ctx, req) {
       { name: 'Data', description: 'Seed, clear and preview the mock data' },
       { name: 'Files', description: 'Manage the shared file pool' },
       { name: 'Auth', description: '/v1 auth configuration and OAuth clients' },
+      { name: 'Profiles', description: 'Settings profiles: /p/<name>/… runs a request with the profile\'s auth mode, chaos, headers, rate limit and formats, so several setups can be used side by side' },
+      { name: 'mTLS', description: 'Mutual TLS: the lab CA, client certificates (PEM and PKCS#12) and the mTLS listener (MTLS_ENABLED)' },
       { name: 'Inspector', description: 'Captured requests (webhook-style catch-all)' },
       { name: 'Webhooks', description: 'Outgoing webhooks: POST to your URL when mock data is created, updated or deleted, or a file is uploaded, downloaded or deleted, through any protocol' },
       { name: 'Tester', description: 'Contract tester for APIs you implemented (OpenAPI, WSDL/SOAP, AsyncAPI/WebSocket)' },
@@ -387,6 +459,14 @@ async function generateAdminOpenApi(ctx, req) {
         }, ['id', 'name']),
         OAuthUser: obj({ username: { type: 'string' }, password: { type: 'string' }, roles: { type: 'array', items: { type: 'string' } }, attributes: { type: 'object', additionalProperties: true }, source: { type: 'string', enum: ['env', 'dashboard'] }, overridesEnv: { type: 'boolean' } }, ['username'], { additionalProperties: true }),
         OAuthClient: obj({ clientId: { type: 'string' }, secret: { type: 'string' }, scopes: {}, redirectUris: { type: 'array', items: { type: 'string' } }, source: { type: 'string' } }, ['clientId'], { additionalProperties: true }),
+        ProfileInput: obj({
+          name: { type: 'string', pattern: '^[a-z0-9][a-z0-9-]{0,39}$', description: 'Only when creating' }, description: { type: 'string', maxLength: 200 },
+          settings: anyObj('Setting values by key (see GET /admin/api/profiles for the allowed keys); unset keys use the global value'),
+        }),
+        Profile: obj({
+          name: { type: 'string' }, builtIn: { type: 'boolean' }, description: { type: 'string' }, settings: anyObj('The profile\'s values; every other setting is global'),
+          url: { type: 'string', format: 'uri', description: 'Base URL of the mock APIs inside this profile' }, createdAt: { type: 'string', format: 'date-time' }, updatedAt: { type: 'string', format: 'date-time' },
+        }, ['name', 'settings', 'url']),
         WebhookInput: obj({
           name: { type: 'string', maxLength: 120 },
           url: { type: 'string', format: 'uri', description: 'http(s) URL that receives the POST' },

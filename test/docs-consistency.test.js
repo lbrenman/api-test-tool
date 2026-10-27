@@ -38,7 +38,7 @@ const PROTOCOLS = {
   a2a: { name: 'A2A', kind: 'a2a', samplePath: '/a2a', reserved: '/a2a', readme: '## A2A agent' },
   s3: { name: 'S3', kind: 's3', reserved: '(the S3 bucket name)', readme: '## S3-compatible API' },
 };
-const NOT_PROTOCOLS = ['authMode', 'dateFormat', 'errorRate', 'errorTypes', 'latencyMs', 'rateLimitRpm', 'requiredHeaders', 'responseHeaders', 'inspectorLogAll', 'maxFileSizeMb', 'dashboardProtected', 'webhooks'];
+const NOT_PROTOCOLS = ['authMode', 'dateFormat', 'errorRate', 'errorTypes', 'latencyMs', 'rateLimitRpm', 'requiredHeaders', 'responseHeaders', 'inspectorLogAll', 'maxFileSizeMb', 'dashboardProtected', 'webhooks', 'profiles', 'mtls'];
 
 test('every protocol in /health is described in the help, the Inspector filter, reserved paths and the README', async () => {
   const t = await makeApp({ SEED_SAMPLE_FILES: 'false' });

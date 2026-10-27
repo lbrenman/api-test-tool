@@ -24,7 +24,7 @@ const BASE_CTX = {
   required: [],
   adminPasswordRequired: false,
 };
-const MODES = ['none', 'apikey', 'basic', 'bearer', 'jwt', 'oauth2', 'hmac'];
+const MODES = ['none', 'apikey', 'basic', 'bearer', 'jwt', 'oauth2', 'hmac', 'mtls'];
 const hasBash = spawnSync('bash', ['-c', 'true']).status === 0;
 const hasOpenssl = hasBash && spawnSync('bash', ['-c', 'command -v openssl']).status === 0;
 
@@ -192,4 +192,58 @@ test('a request the tester sent can be copied as curl', () => {
   assert.match(cmd, /-H 'X-API-Key: k'/);
   assert.doesNotMatch(cmd, /Content-Length/);
   assert.match(cmd, /--data-binary '\{"a":"it'\\''s"\}'/);
+});
+
+test('inside a settings profile the guides call /p/<name>, sign the full path, and keep admin and S3 at the root', { skip: !hasOpenssl && 'openssl not available' }, () => {
+  const C = makeCurl({ ...BASE_CTX, mode: 'hmac', base: 'https://att.example.dev/p/hmac', root: 'https://att.example.dev' });
+  const cmd = C.curl('GET', '/v1/employees?limit=2');
+  assert.match(cmd, /'https:\/\/att\.example\.dev\/p\/hmac\/v1\/employees\?limit=2'/);
+  const ts = '1700000000';
+  const script = cmd.split('\n').filter((l) => /^(TS|SIG)=/.test(l)).join('\n').replace('TS=$(date +%s)', `TS=${ts}`);
+  const sig = execFileSync('bash', ['-c', `${script}\nprintf %s "$SIG"`]).toString();
+  const expected = crypto.createHmac('sha256', BASE_CTX.hmac.secret).update(['GET', '/p/hmac/v1/employees?limit=2', ts, crypto.createHash('sha256').update('').digest('hex')].join('\n')).digest('base64');
+  assert.equal(sig, expected);
+  assert.match(C.admin('GET', '/settings'), /'https:\/\/att\.example\.dev\/admin\/api\/settings'/);
+  assert.match(C.s3('GET', ''), /'https:\/\/att\.example\.dev\/files'/);
+  assert.match(C.ws('/ws/echo', 'hi'), /wss:\/\/att\.example\.dev\/p\/hmac\/ws\/echo/);
+});
+
+test('the client assertion snippets build JWTs the server accepts (HS256 and RS256)', { skip: !hasOpenssl && 'openssl not available' }, () => {
+  const g = build(makeCurl({ ...BASE_CTX, mode: 'none' }), {});
+  const a = g['auth.assertions'];
+  assert.ok(a, 'auth.assertions guide');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'att-assert-'));
+  const { privateKey, publicKey } = crypto.generateKeyPairSync('rsa', { modulusLength: 2048 });
+  fs.writeFileSync(path.join(dir, 'key.pem'), privateKey.export({ type: 'pkcs8', format: 'pem' }));
+  const dec = (s) => Buffer.from(s, 'base64url');
+  for (const [label, alg] of [['client_secret_jwt', 'HS256'], ['private_key_jwt', 'RS256']]) {
+    const cmd = a.curls.find(([l]) => l.startsWith(label))[1];
+    const script = cmd.split('\n').filter((l) => !/^curl /.test(l)).join('\n').replace('KID=YOUR_KEY_ID', 'KID=k1');
+    const jwt = execFileSync('bash', ['-c', `${script}\nprintf %s "$HEADER.$PAYLOAD.$SIG"`], { cwd: dir }).toString();
+    const [h, p, sig] = jwt.split('.');
+    const header = JSON.parse(dec(h));
+    const payload = JSON.parse(dec(p));
+    assert.equal(header.alg, alg);
+    assert.equal(payload.iss, 'demo-client');
+    assert.equal(payload.sub, 'demo-client');
+    assert.equal(payload.aud, BASE_CTX.tokenUrl);
+    assert.equal(payload.exp - payload.iat, 300);
+    assert.match(payload.jti, /^[0-9a-f]{32}$/);
+    const ok = alg === 'HS256'
+      ? crypto.createHmac('sha256', 'demo-secret').update(`${h}.${p}`).digest('base64url') === sig
+      : crypto.verify('sha256', Buffer.from(`${h}.${p}`), publicKey, dec(sig));
+    assert.ok(ok, `${alg} signature verifies`);
+    if (alg === 'RS256') assert.equal(header.kid, 'k1');
+  }
+});
+
+test('mtls mode: API calls go to the mTLS listener with the client certificate; the mtls guide exists', () => {
+  const C = makeCurl({ ...BASE_CTX, mode: 'mtls', mtls: { url: 'https://att.example.dev:8443' } });
+  const cmd = C.curl('GET', '/v1/employees?limit=1');
+  assert.match(cmd, /'https:\/\/att\.example\.dev:8443\/v1\/employees\?limit=1'/);
+  assert.match(cmd, /--cert client\.pem[\s\\]+--key client-key\.pem[\s\\]+--cacert lab-ca\.pem/);
+  assert.doesNotMatch(C.curl('GET', '/health'), /--cert|8443/);
+  const g = build(C, {})['auth.mtls'];
+  assert.ok(g, 'auth.mtls guide');
+  assert.ok(g.curls.some(([, c]) => /8443\/p\/mtls\/v1\/employees/.test(c)));
 });

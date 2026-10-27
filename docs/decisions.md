@@ -46,16 +46,32 @@ The app was first built from a written spec (not in the repo). These choices dif
   PKCE and cannot use client_credentials; registered clients may use only their registered grants; loopback
   redirects match on any port; RFC 7592 GET/DELETE only (no PUT). Admin bulk delete:
   `DELETE /admin/api/oauth/registered[?unused=true]`.
+- **Settings profiles** (`/p/<name>/…`) are a path prefix, not subdomains or tenants: one built-in per auth mode plus
+  custom ones in the DB. They isolate per-request behaviour (auth, chaos, headers, protocol options) and share data,
+  OAuth clients and tokens, webhooks, sessions and the rate-limit budget. The dashboard and admin API are global only.
+- **Signed client assertions (RFC 7523):** `private_key_jwt` (RS/PS/ES/EdDSA, `jwks` or `jwks_uri`) and
+  `client_secret_jwt` (HS*). `aud` may be the issuer or any token URL the server answers on (plain, profile, mTLS),
+  `exp` at most 1 hour ahead, `jti` single use (in memory). The admin API keeps generated private keys (like client
+  secrets) so the dashboard can sign demo assertions.
+- **CIMD:** URL client_ids follow the IETF draft / MCP 2025-11-25: `client_id` must equal the URL; only `none` or
+  `private_key_jwt`; cached by `Cache-Control` up to 1 hour. Documents at `/oauth/client-metadata/<name>.json` are
+  resolved locally (no HTTP call). Fetches refuse private addresses, http and redirects unless `OAUTH_FETCH_PRIVATE`.
+- **mTLS** runs on a second listener where the app terminates TLS itself, because a TLS-terminating proxy (Caddy, the
+  Fly edge) can't pass the client certificate on. It requests but doesn't require a certificate, so errors are
+  readable 401s. The lab CA (EC P-256) and the certificates are built in-house (`util/der.js`, `util/pkcs12.js`) rather
+  than with a dependency or openssl. RFC 8705: `tls_client_auth`, `self_signed_tls_client_auth`, `cnf.x5t#S256` on
+  every token issued to a request that presented a certificate (not only for TLS-authenticated clients), and
+  `mtls_endpoint_aliases`; the issuer stays the plain base URL. SPIFFE is not built beyond `spiffe://` URI SANs.
 - **Webhooks** send one attempt per event (no automatic retries). With `FILE_STORE=s3`, presigned uploads fire when
   the tool next sees the object, and presigned downloads cannot be seen.
 - **Mock LLM:** chat completions, embeddings and models only (no Responses API, legacy completions, images, audio or
   files). Answers are deliberately vague prose.
 - **MCP:** no HTTP+SSE transport (2024-11-05), no batches, no server-to-client requests (sampling, elicitation,
-  roots, 2026-07-28 input requests), no tasks, no client ID metadata documents.
+  roots, 2026-07-28 input requests), no tasks. (Client ID metadata documents are supported by the OAuth server.)
 - **A2A:** rule-based agent (no LLM, no outside calls — it answers about the mock data only); no gRPC binding; file
   parts (`url`, `raw`) accepted but not read; extensions not implemented; tasks in memory (`A2A_TASK_RETENTION`).
 
-Out of scope: HSM/PKCS#11, mTLS, FTP/SFTP, multi-user dashboard, Hookdeck-style retries, TypeScript.
+Out of scope: HSM/PKCS#11, FTP/SFTP, multi-user dashboard, Hookdeck-style retries, TypeScript.
 
 ## Deployments
 

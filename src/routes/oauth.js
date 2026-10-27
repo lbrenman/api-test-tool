@@ -3,8 +3,9 @@
 // authorize (login/consent page), introspect (RFC 7662), revoke (RFC 7009), metadata (RFC 8414), JWKS, and
 // dynamic client registration (RFC 7591, with read/delete from RFC 7592) at /oauth/register.
 const express = require('express');
-const { OAuthError, OAuthService, clientIp } = require('../services/oauth');
+const { OAuthError, OAuthService, clientIp, ASSERTION_ALGS, TLS_METHODS } = require('../services/oauth');
 const { verify } = require('../middleware/body');
+const { CIMD_PREFIX } = require('../services/cimd');
 
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
@@ -31,7 +32,8 @@ input[type=text],input[type=password]{width:100%;padding:10px 12px;border:1px so
 .row{display:flex;gap:8px;margin-top:20px}button{flex:1;padding:10px;border-radius:8px;border:1px solid var(--border);font:inherit;cursor:pointer;background:transparent;color:inherit}
 button.primary{background:var(--accent);border-color:var(--accent);color:#fff}.err{color:var(--err);margin-top:10px}.hint{font-size:12px;color:var(--muted);margin-top:14px}
 </style></head><body><form class="card" method="post" action="/oauth/authorize">
-<h1>Sign in</h1><p><strong>${esc(client.clientId)}</strong> is requesting access.</p>
+<h1>Sign in</h1><p><strong>${esc(client.clientName || client.clientId)}</strong> is requesting access.</p>
+${client.source === 'cimd' ? `<p class="hint">Identified by its metadata document on <strong>${esc(client.metadataHost)}</strong> (CIMD)${client.hostedHere ? ', hosted by this server' : ''}. Only continue if you trust that site.</p>` : ''}
 ${hidden}
 <label for="u">Username</label><input id="u" type="text" name="username" autocomplete="username" required autofocus>
 <label for="p">Password</label><input id="p" type="password" name="password" autocomplete="current-password" required>
@@ -64,7 +66,7 @@ module.exports = function oauthRouter(ctx) {
 
   async function validateAuthorize(q, req) {
     if (q.response_type !== 'code') throw new OAuthError('unsupported_response_type', 'response_type must be "code"');
-    const client = await oauth.client(q.client_id);
+    const client = await oauth.client(q.client_id, req);
     if (!client) throw new OAuthError('invalid_client', 'Unknown client_id');
     if (!q.redirect_uri) throw new OAuthError('invalid_request', 'redirect_uri is required');
     if (!OAuthService.redirectAllowed(client, q.redirect_uri)) {
@@ -185,7 +187,7 @@ module.exports = function oauthRouter(ctx) {
       // The initial access token was checked above, so in token mode the caller is trusted.
       const trusted = settings.get('oauthRegistration') === 'token';
       const { client, registrationAccessToken } = await oauth.registerClient(req.body, { trusted, ip: clientIp(req) });
-      const base = baseUrl(req);
+      const base = baseUrl.root(req);
       res.setHeader('Location', `${base}/oauth/register/${encodeURIComponent(client.clientId)}`);
       return res.status(201).json(oauth.registrationResponse(client, base, registrationAccessToken));
     } catch (e) {
@@ -196,7 +198,7 @@ module.exports = function oauthRouter(ctx) {
     try {
       res.setHeader('Cache-Control', 'no-store');
       const client = await oauth.registeredClientFor(req, req.params.clientId);
-      return res.json(oauth.registrationResponse(client, baseUrl(req)));
+      return res.json(oauth.registrationResponse(client, baseUrl.root(req)));
     } catch (e) {
       return oauthError(res, e);
     }
@@ -220,8 +222,18 @@ module.exports = function oauthRouter(ctx) {
     return next(err);
   });
 
+  // Client ID metadata documents this server hosts for demos (services/cimd.js); a document's client_id is its own URL.
+  r.get(`${CIMD_PREFIX}:file`, async (req, res) => {
+    const m = /^([a-z0-9][a-z0-9-]{0,39})\.json$/.exec(req.params.file);
+    const d = m && await oauth.cimd.hostedDoc(baseUrl.root(req), m[1]);
+    if (!d) return res.status(404).json({ error: 'not_found', error_description: `No hosted client metadata document ${req.params.file}` });
+    res.setHeader('Cache-Control', 'public, max-age=60');
+    return res.json(d.document);
+  });
+
   function metadata(req) {
-    const base = baseUrl(req);
+    const base = baseUrl.root(req);
+    const tls = settings.get('mtlsEnabled') ? TLS_METHODS : [];
     return {
       issuer: oauth.issuer(req),
       authorization_endpoint: `${base}/oauth/authorize`,
@@ -231,11 +243,20 @@ module.exports = function oauthRouter(ctx) {
       jwks_uri: `${base}/.well-known/jwks.json`,
       response_types_supported: ['code'],
       grant_types_supported: ['client_credentials', 'authorization_code', 'refresh_token'],
-      token_endpoint_auth_methods_supported: ['client_secret_basic', 'client_secret_post', 'none'],
-      introspection_endpoint_auth_methods_supported: ['client_secret_basic', 'client_secret_post'],
-      revocation_endpoint_auth_methods_supported: ['client_secret_basic', 'client_secret_post', 'none'],
+      token_endpoint_auth_methods_supported: ['client_secret_basic', 'client_secret_post', 'client_secret_jwt', 'private_key_jwt', ...tls, 'none'],
+      token_endpoint_auth_signing_alg_values_supported: ASSERTION_ALGS,
+      introspection_endpoint_auth_methods_supported: ['client_secret_basic', 'client_secret_post', 'client_secret_jwt', 'private_key_jwt', ...tls],
+      introspection_endpoint_auth_signing_alg_values_supported: ASSERTION_ALGS,
+      revocation_endpoint_auth_methods_supported: ['client_secret_basic', 'client_secret_post', 'client_secret_jwt', 'private_key_jwt', ...tls, 'none'],
+      revocation_endpoint_auth_signing_alg_values_supported: ASSERTION_ALGS,
       code_challenge_methods_supported: ['S256', 'plain'],
       ...(settings.get('oauthRegistration') !== 'off' ? { registration_endpoint: `${base}/oauth/register` } : {}),
+      ...(settings.get('oauthCimd') ? { client_id_metadata_document_supported: true } : {}),
+      // RFC 8705: client certificate authentication and certificate-bound tokens, on the mTLS listener's endpoints.
+      ...(settings.get('mtlsEnabled') ? {
+        tls_client_certificate_bound_access_tokens: true,
+        mtls_endpoint_aliases: { token_endpoint: `${baseUrl.mtls(req)}/oauth/token`, introspection_endpoint: `${baseUrl.mtls(req)}/oauth/introspect`, revocation_endpoint: `${baseUrl.mtls(req)}/oauth/revoke` },
+      } : {}),
       scopes_supported: [...new Set(['read', 'write', ...oauth.envClients().flatMap((c) => c.scopes), ...oauth.registrationScopes()])],
       id_token_signing_alg_values_supported: [settings.get('jwtAlg')],
       subject_types_supported: ['public'],

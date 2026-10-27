@@ -3,6 +3,7 @@
 const crypto = require('node:crypto');
 const { sendProblem } = require('../util/problem');
 const { safeEq } = require('../services/oauth');
+const { clientCert, certNames } = require('../util/clientCert');
 
 const EMPTY_SHA = crypto.createHash('sha256').update('').digest('hex');
 
@@ -89,6 +90,15 @@ function makeAuth(ctx) {
           } catch (e) {
             return fail(req, res, `Invalid token: ${e.message}`, `Bearer realm="api-test-tool", error="invalid_token", error_description="${String(e.message).replace(/"/g, "'")}"`);
           }
+          // RFC 8705 certificate-bound token: only usable with the client certificate it was issued to.
+          const bound = payload.cnf?.['x5t#S256'];
+          if (bound) {
+            const cert = clientCert(req);
+            if (!cert || cert.x5tS256 !== bound) {
+              const why = cert ? 'the client certificate is not the one this token is bound to' : `this token is bound to a client certificate (cnf.x5t#S256); call the mTLS endpoint ${ctx.baseUrl.mtls(req)} with that certificate`;
+              return fail(req, res, `Invalid token: ${why}`, `Bearer realm="api-test-tool", error="invalid_token", error_description="certificate-bound token"`, 401, 'certificate-mismatch');
+            }
+          }
           req.auth.principal = payload.sub;
           req.auth.claims = payload;
           if (mode === 'oauth2') {
@@ -123,6 +133,21 @@ function makeAuth(ctx) {
             });
           }
           req.auth.principal = m[1];
+          return next();
+        }
+
+        case 'mtls': {
+          const cert = clientCert(req);
+          const challenge = 'MutualTLS realm="api-test-tool"';
+          if (!req.socket?.encrypted) return fail(req, res, `A client certificate is required: call the mTLS endpoint ${ctx.baseUrl.mtls(req)}${req.originalUrl} with a certificate from the lab CA (Auth page)`, challenge, 401, 'client-certificate-required');
+          if (!cert) return fail(req, res, 'A client certificate is required: the TLS handshake carried none', challenge, 401, 'client-certificate-required');
+          if (!cert.authorized) return fail(req, res, `The client certificate (${cert.subject}) is not trusted: ${cert.error}. Use one issued by the lab CA or a CA in MTLS_TRUSTED_CAS`, challenge, 401, 'client-certificate-untrusted');
+          const allowed = String(settings.get('mtlsAllowedSubjects') || '').split(',').map((x) => x.trim()).filter(Boolean);
+          if (allowed.length && !certNames(cert).some((n) => allowed.includes(n))) {
+            return fail(req, res, `The client certificate (${cert.subject}) is trusted but not allowed here (MTLS_ALLOWED_SUBJECTS: ${allowed.join(', ')})`, challenge, 403, 'client-certificate-not-allowed');
+          }
+          req.auth.principal = cert.cn || cert.subject;
+          req.auth.certificate = { subject: cert.subject, issuer: cert.issuer, sans: cert.sans, 'x5t#S256': cert.x5tS256 };
           return next();
         }
 

@@ -24,7 +24,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        auth: [none, apikey, basic, bearer, jwt, oauth2, hmac]
+        auth: [none, apikey, basic, bearer, jwt, oauth2, hmac, mtls]
+    # mtls: the whole collection runs on the mTLS listener (8443) with a lab CA client certificate. Every run also gets
+    # two client certificates for the collection's "Mutual TLS" folder (scripts/mtls-newman-setup.js).
+    env:
+      API_URL: ${{ matrix.auth == 'mtls' && 'https://127.0.0.1:8443' || 'http://127.0.0.1:3000' }}
+      PROFILE_API_URL: ${{ matrix.auth == 'mtls' && 'https://127.0.0.1:8444' || 'http://127.0.0.1:3001' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -41,20 +46,53 @@ jobs:
           SEED_ON_START: always
           PUBLIC_BASE_URL: http://127.0.0.1:3000
           LOG_LEVEL: warn
+          MTLS_ENABLED: 'true'
+          MTLS_PORT: '8443'
         run: |
           nohup node src/server.js > server.log 2>&1 &
           for i in $(seq 1 60); do curl -fsS http://127.0.0.1:3000/ready && break; sleep 1; done
+          echo "MTLS_FLAGS=$(node scripts/mtls-newman-setup.js http://127.0.0.1:3000 8443 mtls-run)" >> "$GITHUB_ENV"
       - name: Run Postman collection with Newman
         run: |
           npx newman run postman/API-Test-Tool.postman_collection.json \
             -e postman/API-Test-Tool.postman_environment.json \
-            --env-var baseUrl=http://127.0.0.1:3000 \
+            --env-var baseUrl=$API_URL $MTLS_FLAGS \
             --env-var authMode=${{ matrix.auth }} \
             --working-dir postman \
             --reporters cli,junit --reporter-junit-export newman-results/${{ matrix.auth }}.xml
+      # Settings profiles: the same collection through /p/<mode> on a fresh server whose global AUTH_MODE is a
+      # different mode, so any request that escapes the profile fails (same as npm run postman -- --profiles).
+      - name: Start a second server (another global auth mode)
+        if: ${{ !cancelled() }}
+        env:
+          PORT: '3001'
+          AUTH_MODE: ${{ matrix.auth == 'bearer' && 'basic' || 'bearer' }}
+          DB_DRIVER: sqlite
+          SQLITE_PATH: ./profile-run/app.db
+          FILE_STORE: local
+          FILE_DIR: ./profile-run/files
+          SEED_ON_START: always
+          PUBLIC_BASE_URL: http://127.0.0.1:3001
+          LOG_LEVEL: warn
+          MTLS_ENABLED: 'true'
+          MTLS_PORT: '8444'
+        run: |
+          mkdir -p profile-run
+          nohup node src/server.js > server-profile.log 2>&1 &
+          for i in $(seq 1 60); do curl -fsS http://127.0.0.1:3001/ready && break; sleep 1; done
+          echo "MTLS_PROFILE_FLAGS=$(node scripts/mtls-newman-setup.js http://127.0.0.1:3001 8444 mtls-profile-run)" >> "$GITHUB_ENV"
+      - name: Run Postman collection through settings profile /p/${{ matrix.auth }}
+        if: ${{ !cancelled() }}
+        run: |
+          npx newman run postman/API-Test-Tool.postman_collection.json \
+            -e postman/API-Test-Tool.postman_environment.json \
+            --env-var baseUrl=$PROFILE_API_URL/p/${{ matrix.auth }} $MTLS_PROFILE_FLAGS \
+            --env-var authMode=${{ matrix.auth }} \
+            --working-dir postman \
+            --reporters cli,junit --reporter-junit-export newman-results/profile-${{ matrix.auth }}.xml
       - name: Server log
         if: failure()
-        run: cat server.log
+        run: cat server.log; echo '--- profile run ---'; cat server-profile.log 2>/dev/null || true
       - name: Report Newman failures as annotations
         if: failure()
         run: |

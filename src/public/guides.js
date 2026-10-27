@@ -19,11 +19,18 @@
 
   /**
    * ctx: {
-   *   base, mode, apiKey: {name, in, value}, basic: {user, pass}, bearer, hmac: {keyId, secret},
-   *   tokenUrl, client: {clientId, secret}, required: [{name, value}], adminPasswordRequired
+   *   base, root, mode, apiKey: {name, in, value}, basic: {user, pass}, bearer, hmac: {keyId, secret},
+   *   tokenUrl, client: {clientId, secret}, required: [{name, value}], adminPasswordRequired, mtls: {url}
    * }
+   * base is where the mock APIs are: the server itself (root), or root + /p/<name> when the dashboard's profile
+   * picker selects a settings profile. The admin API and the S3 API are always at root.
    */
   function makeCurl(ctx) {
+    const root = ctx.root || ctx.base;
+    const prefix = ctx.base.startsWith(root) ? ctx.base.slice(root.length) : ''; // '/p/<name>' or ''
+    // AUTH_MODE=mtls: API calls go to the mTLS listener with a lab CA client certificate (files from the Auth page).
+    const mtlsBase = `${ctx.mtls?.url || root.replace(/^http:/, 'https:')}${prefix}`;
+    const CERT_FLAGS = ['--cert client.pem', '--key client-key.pem', '--cacert lab-ca.pem'];
     const lines = (pre, parts) => {
       const flat = parts.join(' ');
       const cmd = flat.length > 110 ? parts.join(' \\\n  ') : flat;
@@ -51,7 +58,7 @@
         p += `${p.includes('?') ? '&' : '?'}${encodeURIComponent(ctx.apiKey.name)}=${encodeURIComponent(ctx.apiKey.value)}`;
       }
       if (method !== 'GET') parts.push(`-X ${method}`);
-      parts.push(q(ctx.base + p));
+      parts.push(q((api && ctx.mode === 'mtls' ? mtlsBase : ctx.base) + p));
 
       const bodyStr = o.json !== undefined ? JSON.stringify(o.json) : o.body;
       const hasInlineBody = bodyStr !== undefined;
@@ -79,10 +86,13 @@
               : o.unsigned || o.form || o.file ? 'UNSIGNED-PAYLOAD'
               : hasInlineBody ? '$(printf \'%s\' "$BODY" | openssl dgst -sha256 -r | cut -d\' \' -f1)' : EMPTY_SHA256;
             pre.push('TS=$(date +%s)');
-            pre.push(`SIG=$(printf '%s\\n%s\\n%s\\n%s' ${method} ${q(p)} "$TS" "${hash}" | openssl dgst -sha256 -hmac ${q(ctx.hmac.secret)} -binary | openssl base64 -A)`);
+            pre.push(`SIG=$(printf '%s\\n%s\\n%s\\n%s' ${method} ${q(prefix + p)} "$TS" "${hash}" | openssl dgst -sha256 -hmac ${q(ctx.hmac.secret)} -binary | openssl base64 -A)`);
             parts.push(`-H "Authorization: HMAC ${ctx.hmac.keyId}:$SIG"`, '-H "X-Timestamp: $TS"');
             break;
           }
+          case 'mtls':
+            parts.push(...CERT_FLAGS);
+            break;
           default: break;
         }
         for (const r of ctx.required || []) parts.push(`-H ${q(`${r.name}: ${r.value ?? 'test'}`)}`);
@@ -102,7 +112,7 @@
     function admin(method, path, o = {}) {
       const parts = [o.include ? 'curl -s -i' : 'curl -s'];
       if (method !== 'GET') parts.push(`-X ${method}`);
-      parts.push(q(`${ctx.base}/admin/api${path}`));
+      parts.push(q(`${root}/admin/api${path}`));
       if (ctx.adminPasswordRequired) parts.push('-u "admin:$ADMIN_PASSWORD"');
       if (o.json !== undefined) parts.push("-H 'Content-Type: application/json'", `-d ${q(JSON.stringify(o.json))}`);
       for (const x of o.extra || []) parts.push(x);
@@ -121,6 +131,7 @@
       jwt: 'a JWT Bearer token (fetched from the built-in OAuth server on the first line)',
       oauth2: 'an OAuth 2.0 access token (fetched with client credentials on the first line)',
       hmac: `an HMAC signature (key id "${ctx.hmac.keyId}", computed with openssl on the first lines)`,
+      mtls: `a client certificate from the lab CA (client.pem and client-key.pem, issued on the Auth page) on the mTLS listener ${mtlsBase}`,
     }[ctx.mode] || ctx.mode;
 
     /**
@@ -148,9 +159,12 @@
           break;
         case 'hmac':
           pre.push('TS=$(date +%s)');
-          pre.push(`SIG=$(printf '%s\\n%s\\n%s\\n%s' GET ${q(p)} "$TS" "${EMPTY_SHA256}" | openssl dgst -sha256 -hmac ${q(ctx.hmac.secret)} -binary | openssl base64 -A)`);
+          pre.push(`SIG=$(printf '%s\\n%s\\n%s\\n%s' GET ${q(prefix + p)} "$TS" "${EMPTY_SHA256}" | openssl dgst -sha256 -hmac ${q(ctx.hmac.secret)} -binary | openssl base64 -A)`);
           envs.push('TS="$TS"', 'SIG="$SIG"');
           hdrs.push(['Authorization', `'HMAC ${ctx.hmac.keyId}:'+process.env.SIG`], ['X-Timestamp', 'process.env.TS']);
+          break;
+        case 'mtls':
+          pre.push('# Node\'s built-in WebSocket client cannot present a client certificate: pick a profile with another auth mode for WebSocket guides.');
           break;
         default: break;
       }
@@ -182,17 +196,17 @@
       if (o.upload) parts.push(`-T ${q(o.upload)}`);
       if (o.body !== undefined) parts.push(`--data-binary ${q(o.body)}`);
       if (o.output) parts.push(`-o ${q(o.output)}`);
-      parts.push(q(`${ctx.base}${p}${o.query ? `?${o.query}` : ''}`));
+      parts.push(q(`${root}${p}${o.query ? `?${o.query}` : ''}`));
       return lines([], parts);
     }
 
     /** The same with the AWS CLI (path-style is used automatically with --endpoint-url). */
     function aws(args) {
       const c = ctx.s3 || { bucket: 'files', region: 'us-east-1', accessKeyId: 'demo-access-key', secretAccessKey: 'demo-secret-key' };
-      return `AWS_ACCESS_KEY_ID=${q(c.accessKeyId)} AWS_SECRET_ACCESS_KEY=${q(c.secretAccessKey)} AWS_REGION=${q(c.region)} aws --endpoint-url ${q(ctx.base)} ${args}`;
+      return `AWS_ACCESS_KEY_ID=${q(c.accessKeyId)} AWS_SECRET_ACCESS_KEY=${q(c.secretAccessKey)} AWS_REGION=${q(c.region)} aws --endpoint-url ${q(root)} ${args}`;
     }
 
-    return { curl, admin, plain, ws, s3, aws, tokenLine, ctx, authLabel, base: ctx.base, mode: ctx.mode };
+    return { curl, admin, plain, ws, s3, aws, tokenLine, ctx, authLabel, base: ctx.base, root, prefix, mtlsBase, mode: ctx.mode };
   }
 
   /**
@@ -206,6 +220,20 @@
     const c = C.ctx.client || { clientId: 'demo-client', secret: 'demo-secret' };
     const fileId = extra.fileId || 'FILE_ID';
     const specId = extra.specId || 'SPEC_ID';
+    const mtlsRoot = C.ctx.mtls?.url || C.root.replace(/^http:/, 'https:');
+    const CERT_FLAGS_TEXT = '--cert client.pem --key client-key.pem --cacert lab-ca.pem';
+    // A JWT client assertion built with openssl (RFC 7523), then the client_credentials grant with it.
+    const assertionScript = (alg) => [
+      `CLIENT_ID=${q(c.clientId)}`,
+      alg === 'HS256' ? `SECRET=${q(c.secret)}` : 'KEY=key.pem; KID=YOUR_KEY_ID',
+      `AUD=${q(C.ctx.tokenUrl)}`,
+      'b64() { openssl base64 -A | tr \'+/\' \'-_\' | tr -d \'=\'; }',
+      'NOW=$(date +%s)',
+      alg === 'HS256' ? 'HEADER=$(printf \'{"alg":"HS256","typ":"JWT"}\' | b64)' : 'HEADER=$(printf \'{"alg":"RS256","typ":"JWT","kid":"%s"}\' "$KID" | b64)',
+      'PAYLOAD=$(printf \'{"iss":"%s","sub":"%s","aud":"%s","iat":%s,"exp":%s,"jti":"%s"}\' "$CLIENT_ID" "$CLIENT_ID" "$AUD" "$NOW" "$((NOW + 300))" "$(openssl rand -hex 16)" | b64)',
+      alg === 'HS256' ? 'SIG=$(printf \'%s.%s\' "$HEADER" "$PAYLOAD" | openssl dgst -sha256 -hmac "$SECRET" -binary | b64)' : 'SIG=$(printf \'%s.%s\' "$HEADER" "$PAYLOAD" | openssl dgst -sha256 -sign "$KEY" -binary | b64)',
+      'curl -s -d grant_type=client_credentials -d client_assertion_type=urn:ietf:params:oauth:client-assertion-type:jwt-bearer -d "client_assertion=$HEADER.$PAYLOAD.$SIG" "$AUD"',
+    ].join('\n');
     const pw = C.ctx.adminPasswordRequired ? ['Admin API calls use the dashboard password: run `export ADMIN_PASSWORD=…` first.'] : [];
     const EMP_NS = 'urn:api-test-tool:soap:EmployeeService';
     const PROD_NS = 'urn:api-test-tool:soap:ProductService';
@@ -523,6 +551,36 @@
           ['Same call without credentials (expect 401)', plain('GET', '/v1/employees?limit=1', { include: true })],
         ],
       },
+      'profiles.list': {
+        title: 'Settings profiles',
+        purpose: 'Several auth modes or chaos setups at once on one server: a request to `/p/<name>/…` runs with that profile\'s settings, and nothing global changes.',
+        steps: [
+          `Pick a profile and give its base URL to your integration instead of \`${C.root}\`, e.g. \`${C.root}/p/apikey/v1\` for the REST API or \`${C.root}/p/oauth2/mcp\` for the MCP server.`,
+          'There is one built-in profile per auth mode (`none`, `apikey`, `basic`, `bearer`, `jwt`, `oauth2`, `hmac`) using the credentials configured on the Auth page. Add your own for a person or a demo: auth mode, credentials, chaos, headers, rate limit and formats.',
+          `The OAuth server is shared: get tokens from \`${C.ctx.tokenUrl}\` and use them in any profile. HMAC signs the path as sent, \`/p/<name>\` included.`,
+          'Data, files, OAuth clients and users, webhooks and the inspector are shared by every profile. The inspector tags each request with its profile.',
+          C.prefix ? `The guides are written for \`${C.prefix}\` right now (picker at the bottom of the menu).` : 'Pick a profile at the bottom of the menu to write every guide and curl for it.',
+        ],
+        curls: [
+          ['API key profile: without, then with the key (401, then 200)', `curl -s -i ${q(`${C.root}/p/apikey/v1/employees?limit=1`)}\ncurl -s ${q(`${C.root}/p/apikey/v1/employees?limit=1`)} -H 'X-API-Key: <the API key on the Auth page>'`],
+          ['OAuth2 profile with a token from the shared OAuth server', `${C.tokenLine()}\ncurl -s ${q(`${C.root}/p/oauth2/v1/employees?limit=1`)} -H "Authorization: Bearer $TOKEN"`],
+          ['List the profiles', admin('GET', '/profiles')],
+        ],
+      },
+      'profiles.edit': {
+        title: 'Create or edit a profile',
+        purpose: 'A custom profile holds only the settings that differ from the global ones; everything else follows the global settings.',
+        steps: [
+          'Name it (lowercase letters, digits, hyphens): the name becomes the path `/p/<name>`.',
+          'Add the settings to change, e.g. `authMode` = `oauth2` and `errorRate` = `20` for a flaky OAuth API. Remove a row to fall back to the global value.',
+          'Save, then copy the profile\'s base URL from the table. Changes apply to the next request; the built-in profiles cannot be edited.',
+        ],
+        curls: [
+          ['Create a profile', admin('POST', '/profiles', { json: { name: 'flaky-oauth', description: 'OAuth2 with 20% 503s', settings: { authMode: 'oauth2', errorRate: 20, errorTypes: '503' } } })],
+          ['Change its settings (replaces the whole set)', admin('PATCH', '/profiles/flaky-oauth', { json: { settings: { authMode: 'oauth2', errorRate: 0 } } })],
+          ['Delete it', admin('DELETE', '/profiles/flaky-oauth')],
+        ],
+      },
       'auth.token': {
         title: 'Get a test token',
         purpose: 'Issue an access token from the built-in OAuth server. Tokens are signed JWTs and are accepted in both `jwt` and `oauth2` modes.',
@@ -571,6 +629,65 @@
           ['Get a token for it', `curl -s -u 'read-only-app:SECRET' -d grant_type=client_credentials ${q(C.ctx.tokenUrl)}`],
           ['Add a redirect URI to an existing client', admin('PATCH', `/oauth/clients/${encodeURIComponent(c.clientId)}`, { json: { redirectUris: ['https://oauth.pstmn.io/v1/callback', 'http://localhost:8080/callback'] } })],
           ['Regenerate its secret', admin('PATCH', `/oauth/clients/${encodeURIComponent(c.clientId)}`, { json: { secret: '' } })],
+        ],
+      },
+      'auth.assertions': {
+        title: 'Signed client assertions (private_key_jwt)',
+        purpose: 'Client authentication with a signed JWT instead of a secret on the wire (RFC 7523): `private_key_jwt` signs with the client\'s private key and the server checks it against the client\'s public keys (`jwks` or `jwks_uri`); `client_secret_jwt` signs with HS256 over the client secret. Works at the token, introspection and revocation endpoints, inside any profile.',
+        steps: [
+          'Edit a client and press "Generate key pair" (or paste your own public key, a JWKS or a PEM, or a `jwks_uri`). Generating pins the client to `private_key_jwt`, so its secret stops working.',
+          'Download or copy the private key into your platform\'s OAuth connection (choose "private key JWT" / "JWT bearer client assertion"), with the token URL as audience.',
+          'Or press "Make assertion" here and paste the result as `client_assertion` (it is valid once, for 5 minutes).',
+          'The assertion needs `iss` = `sub` = client id, `aud` = the token URL (or the issuer), `exp` at most an hour away and a unique `jti`. The error description names what is wrong: audience, expiry, a replayed `jti`, an unknown `kid`, or the wrong method for the client.',
+          'A `jwks_uri` must be https on a public address; set `OAUTH_FETCH_PRIVATE` to allow private or loopback hosts in a lab.',
+          ...pw,
+        ],
+        curls: [
+          ['Generate a key pair for a client (keeps the private key for the helper below)', admin('POST', `/oauth/clients/${encodeURIComponent(c.clientId)}/keypair`, { json: { alg: 'RS256' } })],
+          ['Let the server sign an assertion for you', admin('POST', '/auth/client-assertion', { json: { clientId: c.clientId } })],
+          ['client_secret_jwt: build an HS256 assertion with openssl and get a token', assertionScript('HS256')],
+          ['private_key_jwt: sign an RS256 assertion with your key.pem and get a token', assertionScript('RS256')],
+        ],
+      },
+      'auth.cimd': {
+        title: 'Client ID metadata documents (CIMD)',
+        purpose: 'A client identifies itself with an https URL as its `client_id`; the server fetches the JSON metadata at that URL (name, redirect URIs, auth method) instead of a registration step. This is how newer MCP clients connect (MCP authorization 2025-11-25). Discovery says `client_id_metadata_document_supported: true`.',
+        steps: [
+          'Use a hosted document\'s URL (for example `demo.json`) as the client id in your platform\'s OAuth or MCP connection, with one of its redirect URIs. "Try sign-in" opens the login page as that client.',
+          'Or host your own document anywhere on https: its `client_id` must be exactly its own URL, `token_endpoint_auth_method` is `none` (public, PKCE) or `private_key_jwt` (with `jwks` or `jwks_uri`), never a secret.',
+          'To prove the client really uses CIMD, set Dynamic client registration to `off`: a client that tries to register gets a 404, and the URL client ids it uses appear under "URL client_ids seen" with any error.',
+          'Fetched documents are cached for their Cache-Control max-age (5 minutes by default, at most an hour); "Forget cached documents" reloads them. Hosted documents apply at once.',
+          'The server only fetches https URLs on public addresses; `OAUTH_FETCH_PRIVATE` allows http and private hosts for a lab network.',
+          ...pw,
+        ],
+        curls: [
+          ['The hosted demo document', plain('GET', '/oauth/client-metadata/demo.json')],
+          ['Discovery says CIMD is supported', plain('GET', '/.well-known/oauth-authorization-server')],
+          ['Sign-in page for the demo document (open in a browser)', `${C.root}/oauth/authorize?response_type=code&client_id=${encodeURIComponent(`${C.root}/oauth/client-metadata/demo.json`)}&redirect_uri=${encodeURIComponent('https://oauth.pstmn.io/v1/callback')}&scope=read&state=xyz&code_challenge=CHALLENGE&code_challenge_method=S256`],
+          ['Exchange the code (public client: client_id and PKCE verifier, no secret)', `curl -s -d grant_type=authorization_code -d code=CODE -d redirect_uri=https://oauth.pstmn.io/v1/callback -d code_verifier=VERIFIER --data-urlencode ${q(`client_id=${C.root}/oauth/client-metadata/demo.json`)} ${q(C.ctx.tokenUrl)}`],
+          ['Host your own document on this server', admin('PUT', '/oauth/client-metadata/my-agent', { json: { client_name: 'My agent', redirect_uris: ['http://127.0.0.1:33418/callback'], grant_types: ['authorization_code', 'refresh_token'], token_endpoint_auth_method: 'none', scope: 'read' } })],
+          ['Turn dynamic registration off (CIMD only)', admin('PUT', '/settings', { json: { oauthRegistration: 'off' } })],
+        ],
+      },
+      'auth.mtls': {
+        title: 'Mutual TLS (client certificates)',
+        purpose: 'A second, TLS listener that asks every caller for a client certificate. Use it for `AUTH_MODE=mtls` (or the `mtls` profile), where the certificate is the credential, and for OAuth with certificates (RFC 8705): `tls_client_auth` / `self_signed_tls_client_auth` client authentication and certificate-bound access tokens. The lab CA issues the certificates, so nothing else is needed.',
+        steps: [
+          'Issue a client certificate here (common name, and optional SANs such as `spiffe://lab/agent`). Download the certificate and key as PEM for curl and most tools, or as a password-protected .p12 for Java keystores, Postman and browsers. Download the lab CA too.',
+          `Call the APIs on the mTLS listener (${C.ctx.mtls?.url || 'https://<host>:8443'}) with \`/p/mtls\` in front of the path (or set AUTH_MODE=mtls). No certificate, an untrusted one, or one not in MTLS_ALLOWED_SUBJECTS gives a 401 or 403 that says why.`,
+          'The listener\'s own certificate is issued by the lab CA: trust `lab-ca.pem` in your client (or skip server verification for a quick test). Set MTLS_CERT_FILE / MTLS_KEY_FILE to present a publicly trusted certificate instead.',
+          'OAuth with certificates: edit a client, set its auth method to `tls_client_auth` and the expected subject DN or SAN (or `self_signed_tls_client_auth` with the certificate pasted as its public key), then request tokens at the mTLS token endpoint with `client_id` and no secret.',
+          'Every token issued over the mTLS listener with a client certificate is bound to it (`cnf.x5t#S256`): it only works on the mTLS listener with the same certificate, and gets a 401 anywhere else. That is the sender-constrained token demo.',
+          'The listener is off by default (MTLS_ENABLED=true, MTLS_PORT, restart). In the lab the port must also be open to the internet.',
+          ...pw,
+        ],
+        curls: [
+          ['Issue a client certificate (save certPem and keyPem from the reply)', admin('POST', '/mtls/certs', { json: { cn: 'my-client', san: { uri: ['spiffe://lab/my-client'] } } })],
+          ['Download the lab CA', admin('GET', '/mtls/ca.pem', { output: 'lab-ca.pem' })],
+          ['Call the API with the certificate (profile /p/mtls)', `curl -s ${CERT_FLAGS_TEXT} ${q(`${mtlsRoot}/p/mtls/v1/employees?limit=1`)}`],
+          ['Without a certificate: 401 with the reason', `curl -s --cacert lab-ca.pem ${q(`${mtlsRoot}/p/mtls/v1/employees?limit=1`)}`],
+          ['Token with tls_client_auth (no secret), bound to the certificate', `curl -s ${CERT_FLAGS_TEXT} -d grant_type=client_credentials -d client_id=MY_TLS_CLIENT ${q(`${mtlsRoot}/oauth/token`)}`],
+          ['Use the bound token: works with the certificate on the mTLS listener', `TOKEN=$(curl -s ${CERT_FLAGS_TEXT} -d grant_type=client_credentials -d client_id=MY_TLS_CLIENT ${q(`${mtlsRoot}/oauth/token`)} | sed -E 's/.*"access_token":"([^"]+)".*/\\1/')\ncurl -s ${CERT_FLAGS_TEXT} -H "Authorization: Bearer $TOKEN" ${q(`${mtlsRoot}/p/oauth2/v1/employees?limit=1`)}\ncurl -s -H "Authorization: Bearer $TOKEN" ${q(`${C.root}/p/oauth2/v1/employees?limit=1`)}   # 401: no certificate`],
         ],
       },
       'auth.users': {
@@ -1132,8 +1249,8 @@
         title: 'S3-compatible API',
         purpose: 'The file pool as an S3 bucket, for platforms with an S3 connector. It works the same whether files are stored locally or in an S3 bucket behind the tool. Requests are signed with AWS Signature V4 using the keys on this card (AUTH_MODE does not apply); the rate limit, required headers and chaos apply as on every protocol.',
         steps: [
-          `In your S3 connector set the endpoint (or "custom endpoint" / "service URL") to \`${B}\`, the access key ID to \`${S3.accessKeyId}\`, the secret access key to the one on this card, and the region to \`${S3.region}\`.`,
-          `Turn on path-style addressing ("force path style", "use path-style access"): requests go to \`${B}/${S3.bucket}/<key>\`. Virtual-hosted style needs a DNS name per bucket, which this host does not have.`,
+          `In your S3 connector set the endpoint (or "custom endpoint" / "service URL") to \`${C.root}\`, the access key ID to \`${S3.accessKeyId}\`, the secret access key to the one on this card, and the region to \`${S3.region}\`.`,
+          `Turn on path-style addressing ("force path style", "use path-style access"): requests go to \`${C.root}/${S3.bucket}/<key>\`. Virtual-hosted style needs a DNS name per bucket, which this host does not have.`,
           `The bucket is \`${S3.bucket}\`. Every file in the pool is an object keyed by its file name; uploads through this API can use folder-style keys such as \`in/2026/orders.csv\`.`,
           'Supported: ListBuckets, HeadBucket, GetBucketLocation, ListObjects (v1 and v2, prefix, delimiter, paging), Get/Head (Range, conditional headers), Put (including aws-chunked streaming and checksums), Copy, Delete, DeleteObjects, multipart uploads (parts of at least 5 MiB except the last) and presigned URLs.',
           'Errors use the S3 XML format (`<Error><Code>NoSuchKey</Code>…`). A wrong secret gives SignatureDoesNotMatch, a wrong key InvalidAccessKeyId, a wrong region AuthorizationHeaderMalformed with the expected region. Uploads, downloads and deletes fire the file webhooks with `via: "s3"`.',
@@ -1233,7 +1350,7 @@
         steps: [
           `Integrations: import \`${B}/openapi.json\` (or .yaml) into your platform, Postman or a code generator. It covers /v1 and the OAuth token endpoint only.`,
           'Re-import after changing auth, date format or headers so the definitions match.',
-          `Automation: \`${B}/admin/api/openapi.json\` describes settings, seeding, files, OAuth clients, the inspector, the tester and /health. It needs the dashboard password.`,
+          `Automation: \`${C.root}/admin/api/openapi.json\` describes settings, seeding, files, OAuth clients, the inspector, the tester and /health. It needs the dashboard password.`,
           'Open Swagger UI and switch between the two specs with the tabs at the top.',
         ],
         curls: [

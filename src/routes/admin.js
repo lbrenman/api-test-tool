@@ -10,6 +10,7 @@ const yaml = require('js-yaml');
 const testerRouter = require('./tester');
 const appApiRouter = require('./appApi');
 const { generateAdminOpenApi } = require('../services/openapiAdminGen');
+const { ProfileService } = require('../services/profiles');
 const pkg = require('../../package.json');
 const { commit } = require('../util/build');
 
@@ -63,7 +64,7 @@ module.exports = function adminRouter(ctx, { adminAuth, filesApi }) {
       version: pkg.version,
       commit,
       baseUrl: base,
-      urls: { api: `${base}/v1`, docs: `${base}/docs`, openapi: `${base}/openapi.json`, adminOpenapi: `${base}/admin/api/openapi.json`, app: `${base}/app/`, health: `${base}/health`, inspector: `${base}/<any-other-path>`, token: `${base}/oauth/token`, ...(settings.get('soapEnabled') ? { soap: `${base}/soap`, soapWsdl: `${base}/soap/EmployeeService?wsdl` } : {}), ...(settings.get('wsEnabled') ? { websocket: `${base.replace(/^http/, 'ws')}/ws/rpc`, asyncapi: `${base}/ws/asyncapi.json` } : {}), ...(settings.get('sseEnabled') ? { sse: `${base}/sse/changes` } : {}), ...(settings.get('odataEnabled') ? { odata: `${base}/odata/v4`, odataMetadata: `${base}/odata/v4/$metadata` } : {}), ...(settings.get('graphqlEnabled') ? { graphql: `${base}/graphql`, graphqlSchema: `${base}/graphql/schema.graphql` } : {}), ...(settings.get('llmEnabled') ? { llm: `${base}/llm/v1` } : {}), ...(settings.get('mcpEnabled') ? { mcp: `${base}/mcp` } : {}), ...(settings.get('a2aEnabled') ? { a2a: `${base}/a2a`, agentCard: `${base}/.well-known/agent-card.json` } : {}), ...(settings.get('s3ApiEnabled') ? { s3Endpoint: base, s3Bucket: `${base}/${settings.get('s3ApiBucket')}` } : {}) },
+      urls: { api: `${base}/v1`, profiles: `${base}/p/<profile>/v1`, ...(settings.get('mtlsEnabled') ? { mtls: `${baseUrl.mtls(req)}/p/mtls/v1` } : {}), docs: `${base}/docs`, openapi: `${base}/openapi.json`, adminOpenapi: `${base}/admin/api/openapi.json`, app: `${base}/app/`, health: `${base}/health`, inspector: `${base}/<any-other-path>`, token: `${base}/oauth/token`, ...(settings.get('soapEnabled') ? { soap: `${base}/soap`, soapWsdl: `${base}/soap/EmployeeService?wsdl` } : {}), ...(settings.get('wsEnabled') ? { websocket: `${base.replace(/^http/, 'ws')}/ws/rpc`, asyncapi: `${base}/ws/asyncapi.json` } : {}), ...(settings.get('sseEnabled') ? { sse: `${base}/sse/changes` } : {}), ...(settings.get('odataEnabled') ? { odata: `${base}/odata/v4`, odataMetadata: `${base}/odata/v4/$metadata` } : {}), ...(settings.get('graphqlEnabled') ? { graphql: `${base}/graphql`, graphqlSchema: `${base}/graphql/schema.graphql` } : {}), ...(settings.get('llmEnabled') ? { llm: `${base}/llm/v1` } : {}), ...(settings.get('mcpEnabled') ? { mcp: `${base}/mcp` } : {}), ...(settings.get('a2aEnabled') ? { a2a: `${base}/a2a`, agentCard: `${base}/.well-known/agent-card.json` } : {}), ...(settings.get('s3ApiEnabled') ? { s3Endpoint: base, s3Bucket: `${base}/${settings.get('s3ApiBucket')}` } : {}) },
       authMode: mode,
       dateFormat: settings.get('dateFormat'),
       chaos: { errorRate: settings.get('errorRate'), errorTypes: settings.get('errorTypes'), latency: [settings.get('latencyMinMs'), settings.get('latencyMaxMs')] },
@@ -127,10 +128,34 @@ module.exports = function adminRouter(ctx, { adminAuth, filesApi }) {
   });
   r.get('/files/:id/download', async (req, res) => filesApi.sendFile(req, res, await files.mustGet(req.params.id), { inline: req.query.inline === 'true', via: 'dashboard' }));
 
+  // ---- settings profiles (/p/<name>/…)
+  const presentProfile = (req, p) => ({ ...p, url: `${baseUrl.root(req)}/p/${p.name}` });
+  r.get('/profiles', (req, res) => {
+    const defs = Object.fromEntries(settings.describe().filter((d) => ProfileService.keys().includes(d.key)).map((d) => [d.key, d]));
+    res.json({ profiles: ctx.profiles.list().map((p) => presentProfile(req, p)), keys: ProfileService.keys(), settings: defs });
+  });
+  r.post('/profiles', async (req, res) => {
+    const b = req.body || {};
+    res.status(201).json(presentProfile(req, await ctx.profiles.save(b.name, b, { create: true })));
+  });
+  r.get('/profiles/:name', (req, res) => {
+    const p = ctx.profiles.get(req.params.name);
+    if (!p) throw new HttpError(404, `No profile "${req.params.name}"`, { code: 'profile-not-found' });
+    res.json(presentProfile(req, p));
+  });
+  r.patch('/profiles/:name', async (req, res) => res.json(presentProfile(req, await ctx.profiles.save(req.params.name, req.body || {}))));
+  r.delete('/profiles/:name', async (req, res) => { await ctx.profiles.remove(req.params.name); res.status(204).end(); });
+
   // ---- auth / oauth
+  // ?profile=<name> describes the credentials inside that profile (the dashboard's profile picker uses it for the guides).
   r.get('/auth', async (req, res) => {
-    res.json({
+    const prof = req.query.profile ? ctx.profiles.get(String(req.query.profile)) : null;
+    if (req.query.profile && !prof) throw new HttpError(404, `No profile "${req.query.profile}"`, { code: 'profile-not-found' });
+    const describe = async () => ({
+      profile: prof ? prof.name : null,
+      apiBase: prof ? `${baseUrl.root(req)}/p/${prof.name}` : baseUrl(req),
       mode: settings.get('authMode'),
+      requiredHeaders: settings.get('requiredHeaders'),
       apiKey: { name: settings.get('apiKeyName'), in: settings.get('apiKeyIn'), value: settings.get('apiKey') },
       basic: { user: settings.get('basicUser'), pass: settings.get('basicPass') },
       bearer: settings.get('bearerToken'),
@@ -143,7 +168,9 @@ module.exports = function adminRouter(ctx, { adminAuth, filesApi }) {
       },
       clients: (await oauth.clients()).map(({ registrationTokenHash, ...c }) => c), // eslint-disable-line no-unused-vars
       users: await oauth.users(),
+      mtls: { enabled: settings.get('mtlsEnabled'), url: baseUrl.mtls(req) },
     });
+    res.json(prof ? await settings.runIn(ctx.profiles.store(prof), describe) : await describe());
   });
   // Users for the authorization_code login page, with the roles and attributes that go into their tokens.
   r.get('/oauth/users', async (req, res) => res.json({ items: await oauth.users(), rolesClaim: settings.get('oauthRolesClaim') }));
@@ -163,6 +190,62 @@ module.exports = function adminRouter(ctx, { adminAuth, filesApi }) {
     if (!doc) throw new HttpError(404, `No OAuth client ${req.params.id}`);
     const { registrationTokenHash, ...c } = doc; // eslint-disable-line no-unused-vars
     res.json(c);
+  });
+  // A key pair for private_key_jwt: the public key joins the client's jwks; the private key is kept (and shown here,
+  // like client secrets) so the assertion helper below and a demo client can sign with it.
+  r.post('/oauth/clients/:id/keypair', async (req, res) => {
+    const out = await oauth.generateClientKey(req.params.id, req.body?.alg || 'RS256');
+    if (!out) throw new HttpError(404, `No OAuth client ${req.params.id}`);
+    if (req.body?.use !== false) await oauth.updateClient(req.params.id, { tokenEndpointAuthMethod: 'private_key_jwt' });
+    res.status(201).json(out);
+  });
+  // A signed client_assertion (RFC 7523) for a client, ready for the token endpoint: private_key_jwt with the
+  // generated key pair, or client_secret_jwt (HS256 over the secret).
+  r.post('/auth/client-assertion', async (req, res) => {
+    const b = req.body || {};
+    const out = await oauth.makeAssertion(req, b.clientId, { method: b.method, audience: b.audience, lifetime: b.lifetime });
+    if (!out) throw new HttpError(404, `No OAuth client ${b.clientId}`);
+    res.json({ ...out, tokenEndpoint: `${baseUrl.root(req)}/oauth/token` });
+  });
+  // Client ID metadata documents (CIMD): the ones this server hosts (editable), and URL client_ids seen recently.
+  r.get('/oauth/client-metadata', async (req, res) => res.json({
+    enabled: settings.get('oauthCimd'), registration: settings.get('oauthRegistration'),
+    documents: await oauth.cimd.hostedDocs(baseUrl.root(req)), seen: oauth.cimd.seenList(),
+  }));
+  r.put('/oauth/client-metadata/:name', async (req, res) => res.json(await oauth.cimd.saveDoc(baseUrl.root(req), req.params.name, req.body)));
+  r.delete('/oauth/client-metadata/:name', async (req, res) => {
+    if (!(await oauth.cimd.removeDoc(baseUrl.root(req), req.params.name))) throw new HttpError(404, `No stored metadata document ${req.params.name} (built-in documents cannot be deleted)`);
+    res.status(204).end();
+  });
+  r.delete('/oauth/client-metadata-cache', (req, res) => { oauth.cimd.clearCache(); res.status(204).end(); });
+  // ---- mutual TLS: the lab CA, the client certificates it issued, and the listener
+  const certView = ({ keyPem, ...c }) => c; // eslint-disable-line no-unused-vars
+  r.get('/mtls', async (req, res) => {
+    const server = ctx.mtlsServer?.listening ? (await repo.get('mtls', 'server')) : null;
+    res.json({
+      enabled: settings.get('mtlsEnabled'), listening: !!ctx.mtlsServer?.listening, port: settings.get('mtlsPort'), url: baseUrl.mtls(req),
+      customServerCert: !!settings.get('mtlsCertFile'), trustedCas: (String(settings.get('mtlsTrustedCas') || '').match(/BEGIN CERTIFICATE/g) || []).length,
+      allowedSubjects: settings.get('mtlsAllowedSubjects'),
+      ca: ctx.ca.caInfo(), server: server ? certView(server) : null,
+      certs: (await ctx.ca.list()).map(certView),
+    });
+  });
+  r.get('/mtls/ca.pem', (req, res) => res.type('application/x-pem-file').attachment('lab-ca.pem').send(ctx.ca.caPem));
+  r.post('/mtls/certs', async (req, res) => res.status(201).json(await ctx.ca.create(req.body || {})));
+  const issued = async (req) => { const c = await ctx.ca.get(req.params.id); if (!c) throw new HttpError(404, `No client certificate ${req.params.id}`); return c; };
+  r.get('/mtls/certs/:id', async (req, res) => res.json(await issued(req)));
+  r.get('/mtls/certs/:id/cert.pem', async (req, res) => { const c = await issued(req); res.type('application/x-pem-file').attachment(`${c.cn}.pem`).send(c.certPem); });
+  r.get('/mtls/certs/:id/key.pem', async (req, res) => { const c = await issued(req); res.type('application/x-pem-file').attachment(`${c.cn}-key.pem`).send(c.keyPem); });
+  // PKCS#12 bundle (key, certificate and the lab CA), protected by the password in the body.
+  r.post('/mtls/certs/:id/p12', async (req, res) => {
+    const c = await issued(req);
+    const password = String(req.body?.password || '');
+    if (password.length < 4) throw new HttpError(400, 'password (at least 4 characters) is required for a PKCS#12 file', { code: 'invalid-certificate-request' });
+    res.type('application/x-pkcs12').attachment(`${c.cn}.p12`).send(ctx.ca.pkcs12(c, password, c.cn));
+  });
+  r.delete('/mtls/certs/:id', async (req, res) => {
+    if (!(await ctx.ca.remove(req.params.id))) throw new HttpError(404, `No client certificate ${req.params.id}`);
+    res.status(204).end();
   });
   // Bulk delete of dynamically registered clients (?unused=true: only those that never obtained a token).
   r.delete('/oauth/registered', async (req, res) => res.json({ deleted: await oauth.removeRegisteredClients({ unusedOnly: req.query.unused === 'true' }) }));

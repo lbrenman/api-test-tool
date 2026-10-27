@@ -19,7 +19,7 @@
           "  const skip = pm.request.headers.has('X-Skip-Auth');",
           "  if (skip) pm.request.headers.remove('X-Skip-Auth');",
           "  const resolved = new sdk.Url(pm.variables.replaceIn(pm.request.url.toString()));",
-          "  const p = resolved.getPath();",
+          "  const p = resolved.getPath().replace(/^\\/p\\/[^/]+(?=\\/)/, ''); // a settings profile prefix (/p/<name>) is not part of the API path",
           "  const isApi = (p.indexOf('/v1/') === 0 && p.indexOf('/v1/files/presigned/') !== 0) || (p.indexOf('/soap/') === 0 && pm.request.method === 'POST') || p.indexOf('/sse/') === 0 || p.indexOf('/llm/v1/') === 0 || p === '/mcp' || ((p === '/a2a' || p.indexOf('/a2a/') === 0) && p.indexOf('agent-card.json') < 0) || p === '/graphql' || (p.indexOf('/odata/v4/') === 0 && p !== '/odata/v4/' && p !== '/odata/v4/$metadata');",
           "  if (!isApi || skip || mode === 'none') return;",
           "  const set = (k, v) => pm.request.headers.upsert({ key: k, value: v });",
@@ -234,7 +234,8 @@
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "pm.test('200 or 401 (password set)', () => pm.expect([200, 401]).to.include(pm.response.code));",
+                  "const inProfile = /\\/p\\/[^/]+\\/?$/.test(pm.environment.get('baseUrl'));",
+                  "pm.test('200 or 401 (password set); 404 inside a settings profile', () => pm.expect(inProfile ? [404] : [200, 401]).to.include(pm.response.code));",
                   "if (pm.response.code === 200) {",
                   "  const d = pm.response.json();",
                   "  pm.test('admin spec', () => pm.expect(d.info.title).to.include('Admin API'));",
@@ -1035,11 +1036,1345 @@
       ]
     },
     {
-      "id": "att-000s",
-      "name": "Auth mode",
+      "id": "att-0011",
+      "name": "Client assertions (RFC 7523)",
       "item": [
         {
           "id": "att-000q",
+          "name": "Discovery advertises private_key_jwt and client_secret_jwt",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/.well-known/oauth-authorization-server",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                ".well-known",
+                "oauth-authorization-server"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.environment.set('rootUrl', pm.environment.get('baseUrl').replace(/\\/p\\/[^/]+\\/?$/, '')); // admin API and OAuth server live at the root"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "const m = pm.response.json();",
+                  "pm.test('methods', () => pm.expect(m.token_endpoint_auth_methods_supported).to.include.members(['client_secret_jwt', 'private_key_jwt']));",
+                  "pm.test('algs', () => pm.expect(m.token_endpoint_auth_signing_alg_values_supported).to.include.members(['RS256', 'ES256', 'HS256']));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "att-000r",
+          "name": "client_secret_jwt — HS256 assertion signed in the pre-request script",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/oauth/token",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "oauth",
+                "token"
+              ]
+            },
+            "body": {
+              "mode": "urlencoded",
+              "urlencoded": [
+                {
+                  "key": "grant_type",
+                  "value": "client_credentials"
+                },
+                {
+                  "key": "client_assertion_type",
+                  "value": "urn:ietf:params:oauth:client-assertion-type:jwt-bearer"
+                },
+                {
+                  "key": "client_assertion",
+                  "value": "{{clientAssertion}}"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const CJ = require('crypto-js');",
+                  "const b64 = (w) => CJ.enc.Base64.stringify(w).replace(/=+$/, '').replace(/\\+/g, '-').replace(/\\//g, '_');",
+                  "const now = Math.floor(Date.now() / 1000);",
+                  "const id = pm.environment.get('clientId');",
+                  "const claims = { iss: id, sub: id, aud: pm.environment.get('baseUrl') + '/oauth/token', iat: now, exp: now + 300, jti: pm.variables.replaceIn('{{$guid}}') };",
+                  "const input = b64(CJ.enc.Utf8.parse(JSON.stringify({ alg: 'HS256', typ: 'JWT' }))) + '.' + b64(CJ.enc.Utf8.parse(JSON.stringify(claims)));",
+                  "pm.environment.set('clientAssertion', input + '.' + b64(CJ.HmacSHA256(input, pm.environment.get('clientSecret'))));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('token for the client', () => pm.expect(JSON.parse(atob(pm.response.json().access_token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/'))).client_id).to.eql(pm.environment.get('clientId')));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "att-000s",
+          "name": "Replay the same assertion → 401",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/oauth/token",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "oauth",
+                "token"
+              ]
+            },
+            "body": {
+              "mode": "urlencoded",
+              "urlencoded": [
+                {
+                  "key": "grant_type",
+                  "value": "client_credentials"
+                },
+                {
+                  "key": "client_assertion_type",
+                  "value": "urn:ietf:params:oauth:client-assertion-type:jwt-bearer"
+                },
+                {
+                  "key": "client_assertion",
+                  "value": "{{clientAssertion}}"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 401', () => pm.response.to.have.status(401));",
+                  "pm.test('jti already used', () => { pm.expect(pm.response.json().error).to.eql('invalid_client'); pm.expect(pm.response.json().error_description).to.match(/already used/); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "att-000t",
+          "name": "Wrong audience → 401",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/oauth/token",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "oauth",
+                "token"
+              ]
+            },
+            "body": {
+              "mode": "urlencoded",
+              "urlencoded": [
+                {
+                  "key": "grant_type",
+                  "value": "client_credentials"
+                },
+                {
+                  "key": "client_assertion_type",
+                  "value": "urn:ietf:params:oauth:client-assertion-type:jwt-bearer"
+                },
+                {
+                  "key": "client_assertion",
+                  "value": "{{clientAssertion}}"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const CJ = require('crypto-js');",
+                  "const b64 = (w) => CJ.enc.Base64.stringify(w).replace(/=+$/, '').replace(/\\+/g, '-').replace(/\\//g, '_');",
+                  "const now = Math.floor(Date.now() / 1000);",
+                  "const id = pm.environment.get('clientId');",
+                  "const claims = { iss: id, sub: id, aud: 'https://elsewhere.example/token', iat: now, exp: now + 300, jti: pm.variables.replaceIn('{{$guid}}') };",
+                  "const input = b64(CJ.enc.Utf8.parse(JSON.stringify({ alg: 'HS256', typ: 'JWT' }))) + '.' + b64(CJ.enc.Utf8.parse(JSON.stringify(claims)));",
+                  "pm.environment.set('clientAssertion', input + '.' + b64(CJ.HmacSHA256(input, pm.environment.get('clientSecret'))));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 401', () => pm.response.to.have.status(401));",
+                  "pm.test('aud named', () => pm.expect(pm.response.json().error_description).to.match(/aud must be one of/));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "att-000u",
+          "name": "Assertion plus a client secret → 400",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/oauth/token",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "oauth",
+                "token"
+              ]
+            },
+            "body": {
+              "mode": "urlencoded",
+              "urlencoded": [
+                {
+                  "key": "grant_type",
+                  "value": "client_credentials"
+                },
+                {
+                  "key": "client_assertion_type",
+                  "value": "urn:ietf:params:oauth:client-assertion-type:jwt-bearer"
+                },
+                {
+                  "key": "client_assertion",
+                  "value": "{{clientAssertion}}"
+                },
+                {
+                  "key": "client_secret",
+                  "value": "{{clientSecret}}"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const CJ = require('crypto-js');",
+                  "const b64 = (w) => CJ.enc.Base64.stringify(w).replace(/=+$/, '').replace(/\\+/g, '-').replace(/\\//g, '_');",
+                  "const now = Math.floor(Date.now() / 1000);",
+                  "const id = pm.environment.get('clientId');",
+                  "const claims = { iss: id, sub: id, aud: pm.environment.get('baseUrl') + '/oauth/token', iat: now, exp: now + 300, jti: pm.variables.replaceIn('{{$guid}}') };",
+                  "const input = b64(CJ.enc.Utf8.parse(JSON.stringify({ alg: 'HS256', typ: 'JWT' }))) + '.' + b64(CJ.enc.Utf8.parse(JSON.stringify(claims)));",
+                  "pm.environment.set('clientAssertion', input + '.' + b64(CJ.HmacSHA256(input, pm.environment.get('clientSecret'))));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 400', () => pm.response.to.have.status(400));",
+                  "pm.test('invalid_request', () => pm.expect(pm.response.json().error).to.eql('invalid_request'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "att-000v",
+          "name": "Add a client for private_key_jwt (admin API)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{rootUrl}}/admin/api/oauth/clients",
+              "host": [
+                "{{rootUrl}}/admin/api/oauth/clients"
+              ]
+            },
+            "description": "Needs the admin API: when ADMIN_PASSWORD is set this returns 401 and the private_key_jwt requests below are skipped.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"clientId\": \"postman-pkj\",\n  \"scopes\": \"read\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201, or 401 when the admin API needs a password', () => pm.expect([201, 401]).to.include(pm.response.code));",
+                  "pm.environment.set('adminOpen', pm.response.code === 201 ? 'yes' : 'no');",
+                  "if (pm.response.code === 201) pm.environment.set('pkjSecret', pm.response.json().secret);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "att-000w",
+          "name": "Generate its key pair (ES256)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{rootUrl}}/admin/api/oauth/clients/postman-pkj/keypair",
+              "host": [
+                "{{rootUrl}}/admin/api/oauth/clients/postman-pkj/keypair"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"alg\": \"ES256\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.environment.get('adminOpen') !== 'yes') pm.execution.skipRequest();"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 201', () => pm.response.to.have.status(201));",
+                  "const k = pm.response.json();",
+                  "pm.test('public JWK and private key', () => { pm.expect(k.publicJwk.kty).to.eql('EC'); pm.expect(k.publicJwk.d).to.eql(undefined); pm.expect(k.privateKeyPem).to.include('PRIVATE KEY'); });",
+                  "pm.environment.set('pkjKid', k.kid);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "att-000x",
+          "name": "Server-signed assertion (admin helper)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{rootUrl}}/admin/api/auth/client-assertion",
+              "host": [
+                "{{rootUrl}}/admin/api/auth/client-assertion"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"clientId\": \"postman-pkj\",\n  \"audience\": \"{{baseUrl}}/oauth/token\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.environment.get('adminOpen') !== 'yes') pm.execution.skipRequest();"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "const a = pm.response.json();",
+                  "pm.test('private_key_jwt, ES256, our kid', () => { pm.expect(a.method).to.eql('private_key_jwt'); pm.expect(a.decoded.header.alg).to.eql('ES256'); pm.expect(a.decoded.header.kid).to.eql(pm.environment.get('pkjKid')); });",
+                  "pm.environment.set('clientAssertion', a.assertion);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "att-000y",
+          "name": "private_key_jwt — token with the assertion",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/oauth/token",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "oauth",
+                "token"
+              ]
+            },
+            "body": {
+              "mode": "urlencoded",
+              "urlencoded": [
+                {
+                  "key": "grant_type",
+                  "value": "client_credentials"
+                },
+                {
+                  "key": "client_assertion_type",
+                  "value": "urn:ietf:params:oauth:client-assertion-type:jwt-bearer"
+                },
+                {
+                  "key": "client_assertion",
+                  "value": "{{clientAssertion}}"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.environment.get('adminOpen') !== 'yes') pm.execution.skipRequest();"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('read scope', () => pm.expect(pm.response.json().scope).to.eql('read'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "att-000z",
+          "name": "Its secret no longer works (pinned to private_key_jwt) → 401",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/oauth/token",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "oauth",
+                "token"
+              ]
+            },
+            "body": {
+              "mode": "urlencoded",
+              "urlencoded": [
+                {
+                  "key": "grant_type",
+                  "value": "client_credentials"
+                }
+              ]
+            },
+            "auth": {
+              "type": "basic",
+              "basic": [
+                {
+                  "key": "username",
+                  "value": "postman-pkj"
+                },
+                {
+                  "key": "password",
+                  "value": "{{pkjSecret}}"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.environment.get('adminOpen') !== 'yes') pm.execution.skipRequest();"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 401', () => pm.response.to.have.status(401));",
+                  "pm.test('names the method', () => pm.expect(pm.response.json().error_description).to.match(/signed JWT/));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "att-0010",
+          "name": "Delete the client",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{rootUrl}}/admin/api/oauth/clients/postman-pkj",
+              "host": [
+                "{{rootUrl}}/admin/api/oauth/clients/postman-pkj"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.environment.get('adminOpen') !== 'yes') pm.execution.skipRequest();"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 204', () => pm.response.to.have.status(204));"
+                ]
+              }
+            }
+          ]
+        }
+      ],
+      "description": "Client authentication with signed JWTs instead of a secret on the wire: client_secret_jwt (HS256 over the secret) and private_key_jwt (the client's key pair)."
+    },
+    {
+      "id": "att-0019",
+      "name": "Client ID metadata documents (CIMD)",
+      "item": [
+        {
+          "id": "att-0012",
+          "name": "Discovery says CIMD is supported",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/.well-known/oauth-authorization-server",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                ".well-known",
+                "oauth-authorization-server"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.environment.set('rootUrl', pm.environment.get('baseUrl').replace(/\\/p\\/[^/]+\\/?$/, ''));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('client_id_metadata_document_supported', () => pm.expect(pm.response.json().client_id_metadata_document_supported).to.eql(true));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "att-0013",
+          "name": "The hosted demo document",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{rootUrl}}/oauth/client-metadata/demo.json",
+              "host": [
+                "{{rootUrl}}/oauth/client-metadata/demo.json"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "const d = pm.response.json();",
+                  "pm.test('client_id is its own URL', () => pm.expect(d.client_id).to.match(/^https?:\\/\\/[^/]+\\/oauth\\/client-metadata\\/demo\\.json$/));",
+                  "pm.test('public client', () => pm.expect(d.token_endpoint_auth_method).to.eql('none'));",
+                  "pm.environment.set('cimdId', d.client_id); pm.environment.set('cimdRedirect', d.redirect_uris[0]);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "att-0014",
+          "name": "Sign-in page for the URL client_id",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/oauth/authorize?response_type=code&client_id={{cimdIdEnc}}&redirect_uri={{cimdRedirectEnc}}&scope=read",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "oauth",
+                "authorize"
+              ],
+              "query": [
+                {
+                  "key": "response_type",
+                  "value": "code"
+                },
+                {
+                  "key": "client_id",
+                  "value": "{{cimdIdEnc}}"
+                },
+                {
+                  "key": "redirect_uri",
+                  "value": "{{cimdRedirectEnc}}"
+                },
+                {
+                  "key": "scope",
+                  "value": "read"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.environment.set('cimdIdEnc', encodeURIComponent(pm.environment.get('cimdId'))); pm.environment.set('cimdRedirectEnc', encodeURIComponent(pm.environment.get('cimdRedirect')));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('names the document host', () => pm.expect(pm.response.text()).to.include('(CIMD)'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "att-0015",
+          "name": "Sign in and allow (PKCE S256) → 302 with a code",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/oauth/authorize",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "oauth",
+                "authorize"
+              ]
+            },
+            "body": {
+              "mode": "urlencoded",
+              "urlencoded": [
+                {
+                  "key": "response_type",
+                  "value": "code"
+                },
+                {
+                  "key": "client_id",
+                  "value": "{{cimdId}}"
+                },
+                {
+                  "key": "redirect_uri",
+                  "value": "{{cimdRedirect}}"
+                },
+                {
+                  "key": "scope",
+                  "value": "read"
+                },
+                {
+                  "key": "state",
+                  "value": "cimd"
+                },
+                {
+                  "key": "code_challenge",
+                  "value": "{{cimdChallenge}}"
+                },
+                {
+                  "key": "code_challenge_method",
+                  "value": "S256"
+                },
+                {
+                  "key": "username",
+                  "value": "demo"
+                },
+                {
+                  "key": "password",
+                  "value": "demo"
+                },
+                {
+                  "key": "decision",
+                  "value": "allow"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const CJ = require('crypto-js');",
+                  "const verifier = CJ.lib.WordArray.random(32).toString(CJ.enc.Hex);",
+                  "pm.environment.set('cimdVerifier', verifier);",
+                  "pm.environment.set('cimdChallenge', CJ.enc.Base64.stringify(CJ.SHA256(verifier)).replace(/=+$/, '').replace(/\\+/g, '-').replace(/\\//g, '_'));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 302', () => pm.response.to.have.status(302));",
+                  "const loc = pm.response.headers.get('Location');",
+                  "pm.test('code in the redirect', () => pm.expect(loc).to.match(/[?&]code=/));",
+                  "pm.environment.set('cimdCode', decodeURIComponent(/[?&]code=([^&]+)/.exec(loc)[1]));"
+                ]
+              }
+            }
+          ],
+          "protocolProfileBehavior": {
+            "followRedirects": false
+          }
+        },
+        {
+          "id": "att-0016",
+          "name": "Exchange the code: client_id is the URL, no secret",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/oauth/token",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "oauth",
+                "token"
+              ]
+            },
+            "body": {
+              "mode": "urlencoded",
+              "urlencoded": [
+                {
+                  "key": "grant_type",
+                  "value": "authorization_code"
+                },
+                {
+                  "key": "code",
+                  "value": "{{cimdCode}}"
+                },
+                {
+                  "key": "redirect_uri",
+                  "value": "{{cimdRedirect}}"
+                },
+                {
+                  "key": "client_id",
+                  "value": "{{cimdId}}"
+                },
+                {
+                  "key": "code_verifier",
+                  "value": "{{cimdVerifier}}"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "const t = pm.response.json();",
+                  "pm.test('token for the URL client', () => pm.expect(JSON.parse(atob(t.access_token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/'))).client_id).to.eql(pm.environment.get('cimdId')));",
+                  "pm.test('refresh token', () => pm.expect(t.refresh_token).to.be.a('string'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "att-0017",
+          "name": "A redirect URI not in the document → 400",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/oauth/authorize?response_type=code&client_id={{cimdIdEnc}}&redirect_uri=https%3A%2F%2Fevil.example%2Fcb",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "oauth",
+                "authorize"
+              ],
+              "query": [
+                {
+                  "key": "response_type",
+                  "value": "code"
+                },
+                {
+                  "key": "client_id",
+                  "value": "{{cimdIdEnc}}"
+                },
+                {
+                  "key": "redirect_uri",
+                  "value": "https%3A%2F%2Fevil.example%2Fcb"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 400', () => pm.response.to.have.status(400));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "att-0018",
+          "name": "A client_id URL on a private address → 400",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/oauth/authorize?response_type=code&client_id=https%3A%2F%2F127.0.0.1%2Fclient.json&redirect_uri=https%3A%2F%2Fx.example%2Fcb",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "oauth",
+                "authorize"
+              ],
+              "query": [
+                {
+                  "key": "response_type",
+                  "value": "code"
+                },
+                {
+                  "key": "client_id",
+                  "value": "https%3A%2F%2F127.0.0.1%2Fclient.json"
+                },
+                {
+                  "key": "redirect_uri",
+                  "value": "https%3A%2F%2Fx.example%2Fcb"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 400', () => pm.response.to.have.status(400));",
+                  "pm.test('names the client metadata document', () => pm.expect(pm.response.text()).to.include('Client metadata document'));"
+                ]
+              }
+            }
+          ]
+        }
+      ],
+      "description": "An https URL as client_id: the server fetches the client's metadata there instead of a registration (MCP authorization 2025-11-25). Uses the demo document this server hosts."
+    },
+    {
+      "id": "att-001i",
+      "name": "Mutual TLS (RFC 8705)",
+      "item": [
+        {
+          "id": "att-001a",
+          "name": "Discovery lists the mTLS endpoint aliases",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/.well-known/oauth-authorization-server",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                ".well-known",
+                "oauth-authorization-server"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (!pm.environment.get('mtlsUrl')) pm.execution.skipRequest();",
+                  "pm.environment.set('rootUrl', pm.environment.get('baseUrl').replace(/\\/p\\/[^/]+\\/?$/, ''));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "const m = pm.response.json();",
+                  "pm.test('bound tokens', () => pm.expect(m.tls_client_certificate_bound_access_tokens).to.eql(true));",
+                  "pm.test('mTLS token endpoint', () => pm.expect(m.mtls_endpoint_aliases.token_endpoint).to.eql(pm.environment.get('mtlsUrl') + '/oauth/token'));",
+                  "pm.test('tls_client_auth', () => pm.expect(m.token_endpoint_auth_methods_supported).to.include('tls_client_auth'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "att-001b",
+          "name": "Profile /p/mtls with a lab CA certificate",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-Skip-Auth",
+                "value": "1"
+              }
+            ],
+            "url": {
+              "raw": "{{mtlsUrl}}/p/mtls/v1/employees?limit=1",
+              "host": [
+                "{{mtlsUrl}}/p/mtls/v1/employees?limit=1"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (!pm.environment.get('mtlsUrl')) pm.execution.skipRequest();"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('data', () => pm.expect(pm.response.json().data).to.have.length(1));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "att-001c",
+          "name": "Register a tls_client_auth client (by SAN URI)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/oauth/register",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "oauth",
+                "register"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"client_name\": \"Postman mTLS\",\n  \"grant_types\": [\n    \"client_credentials\"\n  ],\n  \"token_endpoint_auth_method\": \"tls_client_auth\",\n  \"tls_client_auth_san_uri\": \"{{mtlsSanUri}}\",\n  \"scope\": \"read\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (!pm.environment.get('mtlsUrl')) pm.execution.skipRequest();"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 201', () => pm.response.to.have.status(201));",
+                  "const c = pm.response.json();",
+                  "pm.test('no secret', () => pm.expect(c.client_secret).to.eql(undefined));",
+                  "pm.environment.set('tlsClientId', c.client_id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "att-001d",
+          "name": "Token with the client certificate, no secret",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "X-Skip-Auth",
+                "value": "1"
+              }
+            ],
+            "url": {
+              "raw": "{{mtlsUrl}}/oauth/token",
+              "host": [
+                "{{mtlsUrl}}/oauth/token"
+              ]
+            },
+            "body": {
+              "mode": "urlencoded",
+              "urlencoded": [
+                {
+                  "key": "grant_type",
+                  "value": "client_credentials"
+                },
+                {
+                  "key": "client_id",
+                  "value": "{{tlsClientId}}"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (!pm.environment.get('mtlsUrl')) pm.execution.skipRequest();"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "const t = pm.response.json();",
+                  "const claims = JSON.parse(atob(t.access_token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')));",
+                  "pm.test('bound to the certificate (cnf.x5t#S256)', () => pm.expect(claims.cnf['x5t#S256']).to.be.a('string'));",
+                  "pm.environment.set('tlsToken', t.access_token);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "att-001e",
+          "name": "Bound token with the same certificate → 200",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-Skip-Auth",
+                "value": "1"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tlsToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{mtlsUrl}}/p/oauth2/v1/employees?limit=1",
+              "host": [
+                "{{mtlsUrl}}/p/oauth2/v1/employees?limit=1"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (!pm.environment.get('mtlsUrl')) pm.execution.skipRequest();"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "att-001f",
+          "name": "Bound token with another certificate → 401",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-Skip-Auth",
+                "value": "1"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tlsToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{mtlsUrlOther}}/p/oauth2/v1/employees?limit=1",
+              "host": [
+                "{{mtlsUrlOther}}/p/oauth2/v1/employees?limit=1"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (!pm.environment.get('mtlsUrl')) pm.execution.skipRequest();"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 401', () => pm.response.to.have.status(401));",
+                  "pm.test('certificate-mismatch', () => pm.expect(pm.response.json().code).to.eql('certificate-mismatch'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "att-001g",
+          "name": "Bound token without a certificate (plain listener) → 401",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-Skip-Auth",
+                "value": "1"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tlsToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{rootUrl}}/p/oauth2/v1/employees?limit=1",
+              "host": [
+                "{{rootUrl}}/p/oauth2/v1/employees?limit=1"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (!pm.environment.get('mtlsUrl')) pm.execution.skipRequest();",
+                  "if (pm.environment.get('rootUrl').indexOf('https://') === 0) pm.execution.skipRequest(); // this run is on the mTLS listener"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 401', () => pm.response.to.have.status(401));",
+                  "pm.test('says where to go', () => pm.expect(pm.response.json().detail).to.include('bound to a client certificate'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "att-001h",
+          "name": "Token with a certificate that does not match the client → 401",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "X-Skip-Auth",
+                "value": "1"
+              }
+            ],
+            "url": {
+              "raw": "{{mtlsUrlOther}}/oauth/token",
+              "host": [
+                "{{mtlsUrlOther}}/oauth/token"
+              ]
+            },
+            "body": {
+              "mode": "urlencoded",
+              "urlencoded": [
+                {
+                  "key": "grant_type",
+                  "value": "client_credentials"
+                },
+                {
+                  "key": "client_id",
+                  "value": "{{tlsClientId}}"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (!pm.environment.get('mtlsUrl')) pm.execution.skipRequest();"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 401', () => pm.response.to.have.status(401));",
+                  "pm.test('invalid_client', () => pm.expect(pm.response.json().error).to.eql('invalid_client'));"
+                ]
+              }
+            }
+          ]
+        }
+      ],
+      "description": "Client certificates on the mTLS listener: the mtls profile, tls_client_auth and certificate-bound tokens. Needs a server with MTLS_ENABLED and Newman client certificates (npm run postman sets both up); skipped otherwise."
+    },
+    {
+      "id": "att-001l",
+      "name": "Auth mode",
+      "item": [
+        {
+          "id": "att-001j",
           "name": "Without credentials",
           "request": {
             "method": "GET",
@@ -1068,15 +2403,17 @@
                 "type": "text/javascript",
                 "exec": [
                   "const m = pm.environment.get('authMode');",
-                  "pm.test('401 unless auth mode is none', () => pm.response.to.have.status(m === 'none' ? 200 : 401));",
-                  "if (m !== 'none') pm.test('WWW-Authenticate', () => pm.expect(pm.response.headers.get('WWW-Authenticate')).to.be.a('string'));"
+                  "// mtls: the client certificate is part of the TLS connection, so a header cannot leave it out (npm test covers that case).",
+                  "const open = m === 'none' || m === 'mtls';",
+                  "pm.test('401 unless auth mode is none (or mtls)', () => pm.response.to.have.status(open ? 200 : 401));",
+                  "if (!open) pm.test('WWW-Authenticate', () => pm.expect(pm.response.headers.get('WWW-Authenticate')).to.be.a('string'));"
                 ]
               }
             }
           ]
         },
         {
-          "id": "att-000r",
+          "id": "att-001k",
           "name": "With credentials",
           "request": {
             "method": "GET",
@@ -1109,11 +2446,11 @@
       "description": "The collection pre-request script authenticates /v1 calls according to {{authMode}}."
     },
     {
-      "id": "att-0019",
+      "id": "att-0022",
       "name": "Employees CRUD",
       "item": [
         {
-          "id": "att-000t",
+          "id": "att-001m",
           "name": "Create (201 + Location + ETag)",
           "request": {
             "method": "POST",
@@ -1159,7 +2496,7 @@
           ]
         },
         {
-          "id": "att-000u",
+          "id": "att-001n",
           "name": "Get (ETag)",
           "request": {
             "method": "GET",
@@ -1192,7 +2529,7 @@
           ]
         },
         {
-          "id": "att-000v",
+          "id": "att-001o",
           "name": "Get with If-None-Match → 304",
           "request": {
             "method": "GET",
@@ -1227,7 +2564,7 @@
           ]
         },
         {
-          "id": "att-000w",
+          "id": "att-001p",
           "name": "Patch with stale If-Match → 412",
           "request": {
             "method": "PATCH",
@@ -1272,7 +2609,7 @@
           ]
         },
         {
-          "id": "att-000x",
+          "id": "att-001q",
           "name": "Patch (merge patch, If-Match)",
           "request": {
             "method": "PATCH",
@@ -1316,7 +2653,7 @@
           ]
         },
         {
-          "id": "att-000y",
+          "id": "att-001r",
           "name": "Put (full replace)",
           "request": {
             "method": "PUT",
@@ -1361,7 +2698,7 @@
           ]
         },
         {
-          "id": "att-000z",
+          "id": "att-001s",
           "name": "Create with Idempotency-Key",
           "request": {
             "method": "POST",
@@ -1418,7 +2755,7 @@
           ]
         },
         {
-          "id": "att-0010",
+          "id": "att-001t",
           "name": "Replay same key → original response",
           "request": {
             "method": "POST",
@@ -1467,7 +2804,7 @@
           ]
         },
         {
-          "id": "att-0011",
+          "id": "att-001u",
           "name": "Same key, different body → 409",
           "request": {
             "method": "POST",
@@ -1516,7 +2853,7 @@
           ]
         },
         {
-          "id": "att-0012",
+          "id": "att-001v",
           "name": "Validation → 422",
           "request": {
             "method": "POST",
@@ -1562,7 +2899,7 @@
           ]
         },
         {
-          "id": "att-0013",
+          "id": "att-001w",
           "name": "Malformed JSON → 400",
           "request": {
             "method": "POST",
@@ -1602,7 +2939,7 @@
           ]
         },
         {
-          "id": "att-0014",
+          "id": "att-001x",
           "name": "Delete → 204",
           "request": {
             "method": "DELETE",
@@ -1632,7 +2969,7 @@
           ]
         },
         {
-          "id": "att-0015",
+          "id": "att-001y",
           "name": "Get deleted → 404",
           "request": {
             "method": "GET",
@@ -1664,7 +3001,7 @@
           ]
         },
         {
-          "id": "att-0016",
+          "id": "att-001z",
           "name": "Delete department in use → 409",
           "request": {
             "method": "DELETE",
@@ -1696,7 +3033,7 @@
           ]
         },
         {
-          "id": "att-0017",
+          "id": "att-0020",
           "name": "Nested: department employees",
           "request": {
             "method": "GET",
@@ -1734,7 +3071,7 @@
           ]
         },
         {
-          "id": "att-0018",
+          "id": "att-0021",
           "name": "Nested: category products",
           "request": {
             "method": "GET",
@@ -1774,11 +3111,11 @@
       ]
     },
     {
-      "id": "att-001f",
+      "id": "att-0028",
       "name": "Query: fields / filter / sort",
       "item": [
         {
-          "id": "att-001a",
+          "id": "att-0023",
           "name": "Sparse fieldset",
           "request": {
             "method": "GET",
@@ -1818,7 +3155,7 @@
           ]
         },
         {
-          "id": "att-001b",
+          "id": "att-0024",
           "name": "Range filter + sort",
           "request": {
             "method": "GET",
@@ -1868,7 +3205,7 @@
           ]
         },
         {
-          "id": "att-001c",
+          "id": "att-0025",
           "name": "Equality / list filter",
           "request": {
             "method": "GET",
@@ -1912,7 +3249,7 @@
           ]
         },
         {
-          "id": "att-001d",
+          "id": "att-0026",
           "name": "Text search",
           "request": {
             "method": "GET",
@@ -1952,7 +3289,7 @@
           ]
         },
         {
-          "id": "att-001e",
+          "id": "att-0027",
           "name": "Unknown filter field → 400",
           "request": {
             "method": "GET",
@@ -1991,11 +3328,11 @@
       ]
     },
     {
-      "id": "att-001o",
+      "id": "att-002h",
       "name": "Pagination (follow to the end)",
       "item": [
         {
-          "id": "att-001g",
+          "id": "att-0029",
           "name": "Reset walkers",
           "request": {
             "method": "GET",
@@ -2028,7 +3365,7 @@
           ]
         },
         {
-          "id": "att-001h",
+          "id": "att-002a",
           "name": "offset",
           "request": {
             "method": "GET",
@@ -2079,7 +3416,7 @@
           ]
         },
         {
-          "id": "att-001i",
+          "id": "att-002b",
           "name": "page",
           "request": {
             "method": "GET",
@@ -2130,7 +3467,7 @@
           ]
         },
         {
-          "id": "att-001j",
+          "id": "att-002c",
           "name": "cursor",
           "request": {
             "method": "GET",
@@ -2181,7 +3518,7 @@
           ]
         },
         {
-          "id": "att-001k",
+          "id": "att-002d",
           "name": "keyset",
           "request": {
             "method": "GET",
@@ -2232,7 +3569,7 @@
           ]
         },
         {
-          "id": "att-001l",
+          "id": "att-002e",
           "name": "link (RFC 8288)",
           "request": {
             "method": "GET",
@@ -2269,7 +3606,7 @@
           ]
         },
         {
-          "id": "att-001m",
+          "id": "att-002f",
           "name": "HAL",
           "request": {
             "method": "GET",
@@ -2304,7 +3641,7 @@
           ]
         },
         {
-          "id": "att-001n",
+          "id": "att-002g",
           "name": "token (nextPageToken)",
           "request": {
             "method": "GET",
@@ -2357,11 +3694,11 @@
       ]
     },
     {
-      "id": "att-001x",
+      "id": "att-002q",
       "name": "Chaos forcing headers",
       "item": [
         {
-          "id": "att-001p",
+          "id": "att-002i",
           "name": "X-Force-Error: 503",
           "request": {
             "method": "GET",
@@ -2400,7 +3737,7 @@
           ]
         },
         {
-          "id": "att-001q",
+          "id": "att-002j",
           "name": "X-Force-Error: 429",
           "request": {
             "method": "GET",
@@ -2437,7 +3774,7 @@
           ]
         },
         {
-          "id": "att-001r",
+          "id": "att-002k",
           "name": "X-Force-Status: 202",
           "request": {
             "method": "GET",
@@ -2473,7 +3810,7 @@
           ]
         },
         {
-          "id": "att-001s",
+          "id": "att-002l",
           "name": "X-Force-Latency: 300",
           "request": {
             "method": "GET",
@@ -2509,7 +3846,7 @@
           ]
         },
         {
-          "id": "att-001t",
+          "id": "att-002m",
           "name": "X-Force-Error: malformed-json",
           "request": {
             "method": "GET",
@@ -2545,7 +3882,7 @@
           ]
         },
         {
-          "id": "att-001u",
+          "id": "att-002n",
           "name": "X-Force-Error: wrong-content-type",
           "request": {
             "method": "GET",
@@ -2580,7 +3917,7 @@
           ]
         },
         {
-          "id": "att-001v",
+          "id": "att-002o",
           "name": "X-Force-Error: empty-body",
           "request": {
             "method": "GET",
@@ -2615,7 +3952,7 @@
           ]
         },
         {
-          "id": "att-001w",
+          "id": "att-002p",
           "name": "Unknown chaos type → 400",
           "request": {
             "method": "GET",
@@ -2654,11 +3991,11 @@
       ]
     },
     {
-      "id": "att-002h",
+      "id": "att-003a",
       "name": "Files",
       "item": [
         {
-          "id": "att-001y",
+          "id": "att-002r",
           "name": "List",
           "request": {
             "method": "GET",
@@ -2694,7 +4031,7 @@
           ]
         },
         {
-          "id": "att-001z",
+          "id": "att-002s",
           "name": "Multipart upload",
           "request": {
             "method": "POST",
@@ -2742,7 +4079,7 @@
           ]
         },
         {
-          "id": "att-0020",
+          "id": "att-002t",
           "name": "Download multipart file",
           "request": {
             "method": "GET",
@@ -2775,7 +4112,7 @@
           ]
         },
         {
-          "id": "att-0021",
+          "id": "att-002u",
           "name": "Raw PUT",
           "request": {
             "method": "PUT",
@@ -2817,7 +4154,7 @@
           ]
         },
         {
-          "id": "att-0022",
+          "id": "att-002v",
           "name": "Base64 upload",
           "request": {
             "method": "POST",
@@ -2862,7 +4199,7 @@
           ]
         },
         {
-          "id": "att-0023",
+          "id": "att-002w",
           "name": "Base64 download",
           "request": {
             "method": "GET",
@@ -2894,7 +4231,7 @@
           ]
         },
         {
-          "id": "att-0024",
+          "id": "att-002x",
           "name": "Presign PUT",
           "request": {
             "method": "POST",
@@ -2939,7 +4276,7 @@
           ]
         },
         {
-          "id": "att-0025",
+          "id": "att-002y",
           "name": "Upload to presigned URL",
           "request": {
             "method": "PUT",
@@ -2973,7 +4310,7 @@
           ]
         },
         {
-          "id": "att-0026",
+          "id": "att-002z",
           "name": "Presign GET",
           "request": {
             "method": "POST",
@@ -3018,7 +4355,7 @@
           ]
         },
         {
-          "id": "att-0027",
+          "id": "att-0030",
           "name": "Download from presigned URL",
           "request": {
             "method": "GET",
@@ -3044,7 +4381,7 @@
           ]
         },
         {
-          "id": "att-0028",
+          "id": "att-0031",
           "name": "Range download → 206",
           "request": {
             "method": "GET",
@@ -3082,7 +4419,7 @@
           ]
         },
         {
-          "id": "att-0029",
+          "id": "att-0032",
           "name": "Range not satisfiable → 416",
           "request": {
             "method": "GET",
@@ -3120,7 +4457,7 @@
           ]
         },
         {
-          "id": "att-002a",
+          "id": "att-0033",
           "name": "Chunked download",
           "request": {
             "method": "GET",
@@ -3152,7 +4489,7 @@
           ]
         },
         {
-          "id": "att-002b",
+          "id": "att-0034",
           "name": "tus: create",
           "request": {
             "method": "POST",
@@ -3196,7 +4533,7 @@
           ]
         },
         {
-          "id": "att-002c",
+          "id": "att-0035",
           "name": "tus: patch chunk 1",
           "request": {
             "method": "PATCH",
@@ -3239,7 +4576,7 @@
           ]
         },
         {
-          "id": "att-002d",
+          "id": "att-0036",
           "name": "tus: head",
           "request": {
             "method": "HEAD",
@@ -3270,7 +4607,7 @@
           ]
         },
         {
-          "id": "att-002e",
+          "id": "att-0037",
           "name": "tus: patch chunk 2 (completes)",
           "request": {
             "method": "PATCH",
@@ -3314,7 +4651,7 @@
           ]
         },
         {
-          "id": "att-002f",
+          "id": "att-0038",
           "name": "tus file in the shared pool (range)",
           "request": {
             "method": "GET",
@@ -3351,7 +4688,7 @@
           ]
         },
         {
-          "id": "att-002g",
+          "id": "att-0039",
           "name": "Delete raw file",
           "request": {
             "method": "DELETE",
@@ -3383,11 +4720,11 @@
       ]
     },
     {
-      "id": "att-002u",
+      "id": "att-003n",
       "name": "SOAP",
       "item": [
         {
-          "id": "att-002i",
+          "id": "att-003b",
           "name": "List services",
           "request": {
             "method": "GET",
@@ -3416,7 +4753,7 @@
           ]
         },
         {
-          "id": "att-002j",
+          "id": "att-003c",
           "name": "EmployeeService WSDL (always open)",
           "request": {
             "method": "GET",
@@ -3454,7 +4791,7 @@
           ]
         },
         {
-          "id": "att-002k",
+          "id": "att-003d",
           "name": "GetEmployee (SOAP 1.1)",
           "request": {
             "method": "POST",
@@ -3499,7 +4836,7 @@
           ]
         },
         {
-          "id": "att-002l",
+          "id": "att-003e",
           "name": "ListProducts page 2 (SOAP 1.2)",
           "request": {
             "method": "POST",
@@ -3540,7 +4877,7 @@
           ]
         },
         {
-          "id": "att-002m",
+          "id": "att-003f",
           "name": "CreateEmployee",
           "request": {
             "method": "POST",
@@ -3583,7 +4920,7 @@
           ]
         },
         {
-          "id": "att-002n",
+          "id": "att-003g",
           "name": "UpdateEmployee",
           "request": {
             "method": "POST",
@@ -3627,7 +4964,7 @@
           ]
         },
         {
-          "id": "att-002o",
+          "id": "att-003h",
           "name": "DeleteEmployee",
           "request": {
             "method": "POST",
@@ -3670,7 +5007,7 @@
           ]
         },
         {
-          "id": "att-002p",
+          "id": "att-003i",
           "name": "Not found → SOAP 1.1 Client fault (HTTP 500)",
           "request": {
             "method": "POST",
@@ -3714,7 +5051,7 @@
           ]
         },
         {
-          "id": "att-002q",
+          "id": "att-003j",
           "name": "Not found → SOAP 1.2 Sender fault (HTTP 400)",
           "request": {
             "method": "POST",
@@ -3754,7 +5091,7 @@
           ]
         },
         {
-          "id": "att-002r",
+          "id": "att-003k",
           "name": "Validation errors in the fault detail",
           "request": {
             "method": "POST",
@@ -3798,7 +5135,7 @@
           ]
         },
         {
-          "id": "att-002s",
+          "id": "att-003l",
           "name": "Wrong SOAPAction → fault",
           "request": {
             "method": "POST",
@@ -3841,7 +5178,7 @@
           ]
         },
         {
-          "id": "att-002t",
+          "id": "att-003m",
           "name": "X-Force-Error: 503 → fault with the real status",
           "request": {
             "method": "POST",
@@ -3891,11 +5228,11 @@
       ]
     },
     {
-      "id": "att-0031",
+      "id": "att-003u",
       "name": "Server-Sent Events",
       "item": [
         {
-          "id": "att-002v",
+          "id": "att-003o",
           "name": "List streams",
           "request": {
             "method": "GET",
@@ -3924,7 +5261,7 @@
           ]
         },
         {
-          "id": "att-002w",
+          "id": "att-003p",
           "name": "Ticks: three events then end",
           "request": {
             "method": "GET",
@@ -3968,7 +5305,7 @@
           ]
         },
         {
-          "id": "att-002x",
+          "id": "att-003q",
           "name": "Ticks resume after Last-Event-ID",
           "request": {
             "method": "GET",
@@ -4014,7 +5351,7 @@
           ]
         },
         {
-          "id": "att-002y",
+          "id": "att-003r",
           "name": "Stream (event format)",
           "request": {
             "method": "POST",
@@ -4060,7 +5397,7 @@
           ]
         },
         {
-          "id": "att-002z",
+          "id": "att-003s",
           "name": "Stream (OpenAI chunk format)",
           "request": {
             "method": "POST",
@@ -4105,7 +5442,7 @@
           ]
         },
         {
-          "id": "att-0030",
+          "id": "att-003t",
           "name": "Unknown resource → 400 before the stream starts",
           "request": {
             "method": "GET",
@@ -4144,11 +5481,11 @@
       ]
     },
     {
-      "id": "att-003f",
+      "id": "att-0048",
       "name": "Mock LLM (OpenAI-compatible)",
       "item": [
         {
-          "id": "att-0032",
+          "id": "att-003v",
           "name": "List models",
           "request": {
             "method": "GET",
@@ -4179,7 +5516,7 @@
           ]
         },
         {
-          "id": "att-0033",
+          "id": "att-003w",
           "name": "Chat completion",
           "request": {
             "method": "POST",
@@ -4226,7 +5563,7 @@
           ]
         },
         {
-          "id": "att-0034",
+          "id": "att-003x",
           "name": "Same seed → same answer (1 of 2)",
           "request": {
             "method": "POST",
@@ -4272,7 +5609,7 @@
           ]
         },
         {
-          "id": "att-0035",
+          "id": "att-003y",
           "name": "Same seed → same answer (2 of 2)",
           "request": {
             "method": "POST",
@@ -4318,7 +5655,7 @@
           ]
         },
         {
-          "id": "att-0036",
+          "id": "att-003z",
           "name": "max_tokens → finish_reason length",
           "request": {
             "method": "POST",
@@ -4364,7 +5701,7 @@
           ]
         },
         {
-          "id": "att-0037",
+          "id": "att-0040",
           "name": "Tool call (required)",
           "request": {
             "method": "POST",
@@ -4410,7 +5747,7 @@
           ]
         },
         {
-          "id": "att-0038",
+          "id": "att-0041",
           "name": "Reply to a tool result is text",
           "request": {
             "method": "POST",
@@ -4456,7 +5793,7 @@
           ]
         },
         {
-          "id": "att-0039",
+          "id": "att-0042",
           "name": "JSON output",
           "request": {
             "method": "POST",
@@ -4502,7 +5839,7 @@
           ]
         },
         {
-          "id": "att-003a",
+          "id": "att-0043",
           "name": "Streamed, with usage chunk",
           "request": {
             "method": "POST",
@@ -4551,7 +5888,7 @@
           ]
         },
         {
-          "id": "att-003b",
+          "id": "att-0044",
           "name": "Embeddings",
           "request": {
             "method": "POST",
@@ -4596,7 +5933,7 @@
           ]
         },
         {
-          "id": "att-003c",
+          "id": "att-0045",
           "name": "Missing messages → 400",
           "request": {
             "method": "POST",
@@ -4643,7 +5980,7 @@
           ]
         },
         {
-          "id": "att-003d",
+          "id": "att-0046",
           "name": "Unknown model → 404",
           "request": {
             "method": "GET",
@@ -4676,7 +6013,7 @@
           ]
         },
         {
-          "id": "att-003e",
+          "id": "att-0047",
           "name": "Injected 429 → OpenAI rate-limit error",
           "request": {
             "method": "GET",
@@ -4717,11 +6054,11 @@
       "description": "OpenAI-compatible mock LLM at /llm/v1. Uses the active auth mode; errors are OpenAI-shaped."
     },
     {
-      "id": "att-003x",
+      "id": "att-004q",
       "name": "MCP server",
       "item": [
         {
-          "id": "att-003g",
+          "id": "att-0049",
           "name": "server/discover",
           "request": {
             "method": "POST",
@@ -4776,7 +6113,7 @@
           ]
         },
         {
-          "id": "att-003h",
+          "id": "att-004a",
           "name": "tools/list",
           "request": {
             "method": "POST",
@@ -4831,7 +6168,7 @@
           ]
         },
         {
-          "id": "att-003i",
+          "id": "att-004b",
           "name": "tools/call get_employee",
           "request": {
             "method": "POST",
@@ -4890,7 +6227,7 @@
           ]
         },
         {
-          "id": "att-003j",
+          "id": "att-004c",
           "name": "tools/call with x-mcp-header argument",
           "request": {
             "method": "POST",
@@ -4953,7 +6290,7 @@
           ]
         },
         {
-          "id": "att-003k",
+          "id": "att-004d",
           "name": "Missing Mcp-Param header → 400 HeaderMismatch",
           "request": {
             "method": "POST",
@@ -5012,7 +6349,7 @@
           ]
         },
         {
-          "id": "att-003l",
+          "id": "att-004e",
           "name": "Missing record → tool error",
           "request": {
             "method": "POST",
@@ -5071,7 +6408,7 @@
           ]
         },
         {
-          "id": "att-003m",
+          "id": "att-004f",
           "name": "Unknown tool → -32602",
           "request": {
             "method": "POST",
@@ -5130,7 +6467,7 @@
           ]
         },
         {
-          "id": "att-003n",
+          "id": "att-004g",
           "name": "Unsupported protocol version → 400 -32022",
           "request": {
             "method": "POST",
@@ -5186,7 +6523,7 @@
           ]
         },
         {
-          "id": "att-003o",
+          "id": "att-004h",
           "name": "resources/read",
           "request": {
             "method": "POST",
@@ -5245,7 +6582,7 @@
           ]
         },
         {
-          "id": "att-003p",
+          "id": "att-004i",
           "name": "prompts/get",
           "request": {
             "method": "POST",
@@ -5304,7 +6641,7 @@
           ]
         },
         {
-          "id": "att-003q",
+          "id": "att-004j",
           "name": "Streamed progress (SSE)",
           "request": {
             "method": "POST",
@@ -5365,7 +6702,7 @@
           ]
         },
         {
-          "id": "att-003r",
+          "id": "att-004k",
           "name": "Protected resource metadata",
           "request": {
             "method": "GET",
@@ -5396,7 +6733,7 @@
           ]
         },
         {
-          "id": "att-003s",
+          "id": "att-004l",
           "name": "Legacy: initialize (session)",
           "request": {
             "method": "POST",
@@ -5444,7 +6781,7 @@
           ]
         },
         {
-          "id": "att-003t",
+          "id": "att-004m",
           "name": "Legacy: notifications/initialized → 202",
           "request": {
             "method": "POST",
@@ -5498,7 +6835,7 @@
           ]
         },
         {
-          "id": "att-003u",
+          "id": "att-004n",
           "name": "Legacy: tools/list in the session",
           "request": {
             "method": "POST",
@@ -5553,7 +6890,7 @@
           ]
         },
         {
-          "id": "att-003v",
+          "id": "att-004o",
           "name": "Legacy: DELETE ends the session",
           "request": {
             "method": "DELETE",
@@ -5586,7 +6923,7 @@
           ]
         },
         {
-          "id": "att-003w",
+          "id": "att-004p",
           "name": "Legacy: the ended session → 404",
           "request": {
             "method": "POST",
@@ -5644,11 +6981,11 @@
       "description": "Mock MCP server at /mcp: protocol 2026-07-28 requests (with the required headers) and a 2025-11-25 session. Uses the active auth mode."
     },
     {
-      "id": "att-004f",
+      "id": "att-0058",
       "name": "A2A agent",
       "item": [
         {
-          "id": "att-003y",
+          "id": "att-004r",
           "name": "Agent Card (1.0)",
           "request": {
             "method": "GET",
@@ -5678,7 +7015,7 @@
           ]
         },
         {
-          "id": "att-003z",
+          "id": "att-004s",
           "name": "Agent Card (0.3)",
           "request": {
             "method": "GET",
@@ -5710,7 +7047,7 @@
           ]
         },
         {
-          "id": "att-0040",
+          "id": "att-004t",
           "name": "SendMessage: greeting → direct Message",
           "request": {
             "method": "POST",
@@ -5757,7 +7094,7 @@
           ]
         },
         {
-          "id": "att-0041",
+          "id": "att-004u",
           "name": "SendMessage: question → COMPLETED task",
           "request": {
             "method": "POST",
@@ -5806,7 +7143,7 @@
           ]
         },
         {
-          "id": "att-0042",
+          "id": "att-004v",
           "name": "GetTask",
           "request": {
             "method": "POST",
@@ -5853,7 +7190,7 @@
           ]
         },
         {
-          "id": "att-0043",
+          "id": "att-004w",
           "name": "ListTasks",
           "request": {
             "method": "POST",
@@ -5900,7 +7237,7 @@
           ]
         },
         {
-          "id": "att-0044",
+          "id": "att-004x",
           "name": "Missing record → FAILED",
           "request": {
             "method": "POST",
@@ -5947,7 +7284,7 @@
           ]
         },
         {
-          "id": "att-0045",
+          "id": "att-004y",
           "name": "Out of scope → REJECTED",
           "request": {
             "method": "POST",
@@ -5994,7 +7331,7 @@
           ]
         },
         {
-          "id": "att-0046",
+          "id": "att-004z",
           "name": "Delete product → INPUT_REQUIRED",
           "request": {
             "method": "POST",
@@ -6042,7 +7379,7 @@
           ]
         },
         {
-          "id": "att-0047",
+          "id": "att-0050",
           "name": "Answer \"no\" on the same task → REJECTED",
           "request": {
             "method": "POST",
@@ -6089,7 +7426,7 @@
           ]
         },
         {
-          "id": "att-0048",
+          "id": "att-0051",
           "name": "Streamed answer",
           "request": {
             "method": "POST",
@@ -6139,7 +7476,7 @@
           ]
         },
         {
-          "id": "att-0049",
+          "id": "att-0052",
           "name": "Unknown task → -32001",
           "request": {
             "method": "POST",
@@ -6186,7 +7523,7 @@
           ]
         },
         {
-          "id": "att-004a",
+          "id": "att-0053",
           "name": "No A2A-Version header means 0.3 → -32601",
           "request": {
             "method": "POST",
@@ -6230,7 +7567,7 @@
           ]
         },
         {
-          "id": "att-004b",
+          "id": "att-0054",
           "name": "HTTP+JSON: message:send",
           "request": {
             "method": "POST",
@@ -6279,7 +7616,7 @@
           ]
         },
         {
-          "id": "att-004c",
+          "id": "att-0055",
           "name": "HTTP+JSON: unknown task → 404 google.rpc.Status",
           "request": {
             "method": "GET",
@@ -6316,7 +7653,7 @@
           ]
         },
         {
-          "id": "att-004d",
+          "id": "att-0056",
           "name": "A2A 0.3: message/send",
           "request": {
             "method": "POST",
@@ -6360,7 +7697,7 @@
           ]
         },
         {
-          "id": "att-004e",
+          "id": "att-0057",
           "name": "Forced failure",
           "request": {
             "method": "POST",
@@ -6414,11 +7751,11 @@
       "description": "Mock A2A agent: Agent Cards, A2A 1.0 JSON-RPC and HTTP+JSON, and 0.3. Uses the active auth mode."
     },
     {
-      "id": "att-004v",
+      "id": "att-005o",
       "name": "GraphQL",
       "item": [
         {
-          "id": "att-004g",
+          "id": "att-0059",
           "name": "SDL (always open)",
           "request": {
             "method": "GET",
@@ -6449,7 +7786,7 @@
           ]
         },
         {
-          "id": "att-004h",
+          "id": "att-005a",
           "name": "Query: offset page with nested department",
           "request": {
             "method": "POST",
@@ -6494,7 +7831,7 @@
           ]
         },
         {
-          "id": "att-004i",
+          "id": "att-005b",
           "name": "Query over GET",
           "request": {
             "method": "GET",
@@ -6530,7 +7867,7 @@
           ]
         },
         {
-          "id": "att-004j",
+          "id": "att-005c",
           "name": "Relay connection: first page",
           "request": {
             "method": "POST",
@@ -6574,7 +7911,7 @@
           ]
         },
         {
-          "id": "att-004k",
+          "id": "att-005d",
           "name": "Relay connection: next page",
           "request": {
             "method": "POST",
@@ -6618,7 +7955,7 @@
           ]
         },
         {
-          "id": "att-004l",
+          "id": "att-005e",
           "name": "Filter and sort",
           "request": {
             "method": "POST",
@@ -6662,7 +7999,7 @@
           ]
         },
         {
-          "id": "att-004m",
+          "id": "att-005f",
           "name": "Mutation: create department",
           "request": {
             "method": "POST",
@@ -6706,7 +8043,7 @@
           ]
         },
         {
-          "id": "att-004n",
+          "id": "att-005g",
           "name": "Mutation: update (merge patch)",
           "request": {
             "method": "POST",
@@ -6750,7 +8087,7 @@
           ]
         },
         {
-          "id": "att-004o",
+          "id": "att-005h",
           "name": "Mutation: delete",
           "request": {
             "method": "POST",
@@ -6794,7 +8131,7 @@
           ]
         },
         {
-          "id": "att-004p",
+          "id": "att-005i",
           "name": "Not found → field error NOT_FOUND (HTTP 200)",
           "request": {
             "method": "POST",
@@ -6838,7 +8175,7 @@
           ]
         },
         {
-          "id": "att-004q",
+          "id": "att-005j",
           "name": "Validation → BAD_USER_INPUT with field errors",
           "request": {
             "method": "POST",
@@ -6882,7 +8219,7 @@
           ]
         },
         {
-          "id": "att-004r",
+          "id": "att-005k",
           "name": "Invalid query → 400 with graphql-response+json",
           "request": {
             "method": "POST",
@@ -6931,7 +8268,7 @@
           ]
         },
         {
-          "id": "att-004s",
+          "id": "att-005l",
           "name": "Injected field error → partial data",
           "request": {
             "method": "POST",
@@ -6978,7 +8315,7 @@
           ]
         },
         {
-          "id": "att-004t",
+          "id": "att-005m",
           "name": "Mutation over GET → 405",
           "request": {
             "method": "GET",
@@ -7014,7 +8351,7 @@
           ]
         },
         {
-          "id": "att-004u",
+          "id": "att-005n",
           "name": "X-Force-Error: 503 → errors with the real status",
           "request": {
             "method": "POST",
@@ -7063,11 +8400,11 @@
       ]
     },
     {
-      "id": "att-005e",
+      "id": "att-0067",
       "name": "OData v4",
       "item": [
         {
-          "id": "att-004w",
+          "id": "att-005p",
           "name": "Service document (open)",
           "request": {
             "method": "GET",
@@ -7097,7 +8434,7 @@
           ]
         },
         {
-          "id": "att-004x",
+          "id": "att-005q",
           "name": "$metadata (open)",
           "request": {
             "method": "GET",
@@ -7130,7 +8467,7 @@
           ]
         },
         {
-          "id": "att-004y",
+          "id": "att-005r",
           "name": "Filter, select, orderby, count",
           "request": {
             "method": "GET",
@@ -7180,7 +8517,7 @@
           ]
         },
         {
-          "id": "att-004z",
+          "id": "att-005s",
           "name": "Functions and lambda",
           "request": {
             "method": "GET",
@@ -7221,7 +8558,7 @@
           ]
         },
         {
-          "id": "att-0050",
+          "id": "att-005t",
           "name": "Expand with nested options",
           "request": {
             "method": "GET",
@@ -7258,7 +8595,7 @@
           ]
         },
         {
-          "id": "att-0051",
+          "id": "att-005u",
           "name": "$count",
           "request": {
             "method": "GET",
@@ -7296,7 +8633,7 @@
           ]
         },
         {
-          "id": "att-0052",
+          "id": "att-005v",
           "name": "Property value",
           "request": {
             "method": "GET",
@@ -7330,7 +8667,7 @@
           ]
         },
         {
-          "id": "att-0053",
+          "id": "att-005w",
           "name": "Reset the paging walker",
           "request": {
             "method": "GET",
@@ -7359,7 +8696,7 @@
           ]
         },
         {
-          "id": "att-0054",
+          "id": "att-005x",
           "name": "Server paging: follow @odata.nextLink to the end",
           "request": {
             "method": "GET",
@@ -7400,7 +8737,7 @@
           ]
         },
         {
-          "id": "att-0055",
+          "id": "att-005y",
           "name": "Create employee with @odata.bind",
           "request": {
             "method": "POST",
@@ -7445,7 +8782,7 @@
           ]
         },
         {
-          "id": "att-0056",
+          "id": "att-005z",
           "name": "PATCH with a stale If-Match → 412",
           "request": {
             "method": "PATCH",
@@ -7495,7 +8832,7 @@
           ]
         },
         {
-          "id": "att-0057",
+          "id": "att-0060",
           "name": "PATCH with If-Match → 204",
           "request": {
             "method": "PATCH",
@@ -7543,7 +8880,7 @@
           ]
         },
         {
-          "id": "att-0058",
+          "id": "att-0061",
           "name": "PATCH return=representation → 200",
           "request": {
             "method": "PATCH",
@@ -7592,7 +8929,7 @@
           ]
         },
         {
-          "id": "att-0059",
+          "id": "att-0062",
           "name": "DELETE → 204",
           "request": {
             "method": "DELETE",
@@ -7622,7 +8959,7 @@
           ]
         },
         {
-          "id": "att-005a",
+          "id": "att-0063",
           "name": "Deleted → 404",
           "request": {
             "method": "GET",
@@ -7654,7 +8991,7 @@
           ]
         },
         {
-          "id": "att-005b",
+          "id": "att-0064",
           "name": "Unknown property in $filter → 400",
           "request": {
             "method": "GET",
@@ -7692,7 +9029,7 @@
           ]
         },
         {
-          "id": "att-005c",
+          "id": "att-0065",
           "name": "Validation → 422 with details",
           "request": {
             "method": "POST",
@@ -7739,7 +9076,7 @@
           ]
         },
         {
-          "id": "att-005d",
+          "id": "att-0066",
           "name": "X-Force-Error: 503 → OData error",
           "request": {
             "method": "GET",
@@ -7784,11 +9121,11 @@
       ]
     },
     {
-      "id": "att-005w",
+      "id": "att-006p",
       "name": "S3-compatible API",
       "item": [
         {
-          "id": "att-005f",
+          "id": "att-0068",
           "name": "ListBuckets",
           "request": {
             "method": "GET",
@@ -7841,7 +9178,7 @@
           ]
         },
         {
-          "id": "att-005g",
+          "id": "att-0069",
           "name": "HeadBucket",
           "request": {
             "method": "HEAD",
@@ -7895,7 +9232,7 @@
           ]
         },
         {
-          "id": "att-005h",
+          "id": "att-006a",
           "name": "ListObjectsV2 (page of 3)",
           "request": {
             "method": "GET",
@@ -7961,7 +9298,7 @@
           ]
         },
         {
-          "id": "att-005i",
+          "id": "att-006b",
           "name": "ListObjectsV2 (next page)",
           "request": {
             "method": "GET",
@@ -8029,7 +9366,7 @@
           ]
         },
         {
-          "id": "att-005j",
+          "id": "att-006c",
           "name": "PutObject with metadata",
           "request": {
             "method": "PUT",
@@ -8098,7 +9435,7 @@
           ]
         },
         {
-          "id": "att-005k",
+          "id": "att-006d",
           "name": "HeadObject",
           "request": {
             "method": "HEAD",
@@ -8155,7 +9492,7 @@
           ]
         },
         {
-          "id": "att-005l",
+          "id": "att-006e",
           "name": "GetObject",
           "request": {
             "method": "GET",
@@ -8212,7 +9549,7 @@
           ]
         },
         {
-          "id": "att-005m",
+          "id": "att-006f",
           "name": "GetObject with Range → 206",
           "request": {
             "method": "GET",
@@ -8274,7 +9611,7 @@
           ]
         },
         {
-          "id": "att-005n",
+          "id": "att-006g",
           "name": "CopyObject",
           "request": {
             "method": "PUT",
@@ -8336,7 +9673,7 @@
           ]
         },
         {
-          "id": "att-005o",
+          "id": "att-006h",
           "name": "List a \"folder\" with a delimiter",
           "request": {
             "method": "GET",
@@ -8405,7 +9742,7 @@
           ]
         },
         {
-          "id": "att-005p",
+          "id": "att-006i",
           "name": "The copy is in the file pool (/v1/files)",
           "request": {
             "method": "GET",
@@ -8441,7 +9778,7 @@
           ]
         },
         {
-          "id": "att-005q",
+          "id": "att-006j",
           "name": "DeleteObjects",
           "request": {
             "method": "POST",
@@ -8510,7 +9847,7 @@
           ]
         },
         {
-          "id": "att-005r",
+          "id": "att-006k",
           "name": "Deleted → 404 NoSuchKey",
           "request": {
             "method": "GET",
@@ -8567,7 +9904,7 @@
           ]
         },
         {
-          "id": "att-005s",
+          "id": "att-006l",
           "name": "Unknown bucket → 404 NoSuchBucket",
           "request": {
             "method": "GET",
@@ -8628,7 +9965,7 @@
           ]
         },
         {
-          "id": "att-005t",
+          "id": "att-006m",
           "name": "Wrong secret → 403 SignatureDoesNotMatch",
           "request": {
             "method": "GET",
@@ -8689,7 +10026,7 @@
           ]
         },
         {
-          "id": "att-005u",
+          "id": "att-006n",
           "name": "Unsigned → 403 AccessDenied",
           "request": {
             "method": "GET",
@@ -8723,7 +10060,7 @@
           ]
         },
         {
-          "id": "att-005v",
+          "id": "att-006o",
           "name": "X-Force-Error: 503 → S3 XML error",
           "request": {
             "method": "GET",
@@ -8792,11 +10129,11 @@
       "description": "The file pool as an S3 bucket (path-style). Requests use Postman's AWS Signature auth with {{s3AccessKeyId}}, {{s3SecretAccessKey}} and {{s3Region}}, independent of {{authMode}}."
     },
     {
-      "id": "att-005z",
+      "id": "att-006s",
       "name": "Headers & inspector",
       "item": [
         {
-          "id": "att-005x",
+          "id": "att-006q",
           "name": "Request id echo",
           "request": {
             "method": "GET",
@@ -8836,7 +10173,7 @@
           ]
         },
         {
-          "id": "att-005y",
+          "id": "att-006r",
           "name": "Inspector catch-all",
           "request": {
             "method": "POST",
@@ -8879,7 +10216,7 @@
                 "type": "text/javascript",
                 "exec": [
                   "pm.test('status 200', () => pm.response.to.have.status(200));",
-                  "pm.test('captured with actual path', () => { pm.expect(pm.response.json().status).to.eql('captured'); pm.expect(pm.response.json().path).to.eql('/hooks/postman'); });"
+                  "pm.test('captured with actual path', () => { pm.expect(pm.response.json().status).to.eql('captured'); pm.expect(pm.response.json().path).to.eql((pm.environment.get('baseUrl').match(/^https?:\\/\\/[^/]+(\\/.*?)?\\/?$/)[1] || '') + '/hooks/postman'); });"
                 ]
               }
             }

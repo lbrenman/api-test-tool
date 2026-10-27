@@ -36,8 +36,11 @@ module.exports = function platformRouter(ctx, { adminAuth } = {}) {
       time: new Date().toISOString(),
       baseUrl: ctx.baseUrl(req),
       checks: { database: { driver: repo.name, ...db }, fileStore: { driver: files.store.name, ...store } },
+      ...(req.profile ? { profile: req.profile.name } : {}),
       settings: {
         authMode: settings.get('authMode'),
+        profiles: ctx.profiles ? ctx.profiles.list().map((p) => p.name) : [],
+        mtls: { enabled: settings.get('mtlsEnabled'), port: settings.get('mtlsPort'), listening: !!ctx.mtlsServer?.listening },
         dateFormat: settings.get('dateFormat'),
         errorRate: settings.get('errorRate'),
         errorTypes: settings.get('errorTypes'),

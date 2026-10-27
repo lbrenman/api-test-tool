@@ -72,10 +72,10 @@ Design principles (from the design doc; respect these in PRs):
 | DB | `src/db/repo.js`, `sqlite.js`, `postgres.js` | One generic document table; `get/list/put/putMany/del/count/trim` + kv helpers. SQLite (better-sqlite3) or Postgres. |
 | Middleware | `src/middleware/` | requestId, headers, cors, ratelimit, auth (7 modes), chaos, idempotency, body, adminAuth, inspector, protocol. |
 | REST routes | `src/routes/` | platform (health, openapi, docs), oauth, resources, files, admin, tester, appApi. |
-| Services | `src/services/` | seed (deterministic Faker), schemas, resources (emits `change` events), query, paginate, dateFormat, files + `fileStore/{local,s3,meter}`, sampleFiles, keys, oauth, inspector, webhooks, openapiGen (data spec), openapiAdminGen (admin spec). |
+| Services | `src/services/` | seed (deterministic Faker), schemas, resources (emits `change` events), query, paginate, dateFormat, files + `fileStore/{local,s3,meter}`, sampleFiles, keys, oauth (client auth: secrets, RFC 7523 assertions, RFC 8705), cimd (URL client_ids), ca (lab CA for mTLS), profiles (`/p/<name>`), inspector, webhooks, openapiGen (data spec), openapiAdminGen (admin spec). |
 | Tester | `src/services/tester/` | core: index, load, lint, sample, validate, runner, auth, mock, report, refs, operations; adapters: `openapi.js`, `wsdl/`, `websocket/`. |
 | Protocols | `src/protocols/{soap,ws,sse,graphql,odata,s3,llm,mcp,a2a}/` | Each has `router.js`, usually `errors.js` (renderer) and a model/schema file. SOAP `model.js` is one field table that generates XSD, XML out and XML in. S3 has its own SigV4 (`sigv4.js`), AUTH_MODE does not apply. |
-| Utils | `src/util/` | problem (HttpError, renderers), xml (saxes-based tiny DOM, DOCTYPE rejected), websocket (hand-rolled, no `ws` dep), build. |
+| Utils | `src/util/` | problem (HttpError, renderers), xml (saxes-based tiny DOM, DOCTYPE rejected), websocket (hand-rolled, no `ws` dep), build, safeFetch (SSRF guard), der + pkcs12 (X.509 and .p12 writer), clientCert. |
 | Dashboard | `src/public/app.js` (2,380 lines), `guides.js` (1,407), `index.html`, `styles.css` | Single-file vanilla JS. `guides.js` holds the per-page `?` guides with curls for every auth mode. |
 | Back office | `src/webapp/` | Business view of the data at `/app`. |
 | Postman | `scripts/build-postman.js` → `postman/*.json` | **Collection is generated**: edit the script, run `npm run postman:build`, commit both. |
@@ -147,6 +147,7 @@ Test harness facts worth knowing:
   (it used to live only in Leor's Claude project instructions).
 - `docs/decisions.md`: deliberate deviations from the original spec, deployments, verification status.
 - `docs/platform-test-checklist.md`: checks to run against the real integration platform.
+- `docs/security-roadmap.md`: the API security roadmap and its status (profiles, signed client assertions, CIMD and mTLS are built; SPIFFE is parked).
 - `docs/multi-protocol-design.md`: design record (principles, delivery plan, open questions). Partly stale (see §7).
 
 ## 7. Known gaps and drift (candidate contributions)

@@ -115,13 +115,25 @@
   // The guides only read the configuration (env or dashboard override); they never change it.
   let CURL = null;
   let PASSWORD_REQUIRED = false;
+  // Settings profile the guides are written for (picker at the bottom of the menu); '' = the global settings.
+  let GUIDE_PROFILE = '';
+  try { GUIDE_PROFILE = localStorage.getItem('att-guide-profile') || ''; } catch { /* storage unavailable */ }
 
   async function loadCurlCtx() {
-    const [a] = await Promise.all([api('GET', '/auth'), SETTINGS ? Promise.resolve() : loadSettings()]);
-    const base = a.oauth.tokenUrl.replace(/\/oauth\/token$/, '');
+    let a;
+    try {
+      [a] = await Promise.all([api('GET', GUIDE_PROFILE ? `/auth?profile=${encodeURIComponent(GUIDE_PROFILE)}` : '/auth'), SETTINGS ? Promise.resolve() : loadSettings()]);
+    } catch (e) {
+      if (e.status !== 404 || !GUIDE_PROFILE) throw e;
+      setGuideProfile('', { reload: false }); // the profile was deleted
+      a = await api('GET', '/auth');
+    }
+    const root = a.oauth.tokenUrl.replace(/\/oauth\/token$/, '');
     const client = a.clients.find((c) => c.secret) || a.clients[0];
     CURL = window.ATT_GUIDES.makeCurl({
-      base,
+      base: a.apiBase || root,
+      root,
+      profile: a.profile,
       mode: a.mode,
       apiKey: a.apiKey,
       basic: a.basic,
@@ -130,10 +142,28 @@
       s3: a.s3 ? { bucket: a.s3.bucket, region: a.s3.region, accessKeyId: a.s3.accessKeyId, secretAccessKey: a.s3.secretAccessKey } : null,
       tokenUrl: a.oauth.tokenUrl,
       client: client ? { clientId: client.clientId, secret: client.secret || '' } : null,
-      required: (sval('requiredHeaders') || []).map((r) => ({ name: r.name, value: r.value })),
+      required: (a.requiredHeaders || sval('requiredHeaders') || []).map((r) => ({ name: r.name, value: r.value })),
       adminPasswordRequired: PASSWORD_REQUIRED,
+      mtls: a.mtls,
     });
     return CURL;
+  }
+
+  function setGuideProfile(name, { reload = true } = {}) {
+    GUIDE_PROFILE = name || '';
+    try { if (GUIDE_PROFILE) localStorage.setItem('att-guide-profile', GUIDE_PROFILE); else localStorage.removeItem('att-guide-profile'); } catch { /* ignore */ }
+    const sel = document.getElementById('guide-profile');
+    if (sel) sel.value = GUIDE_PROFILE;
+    if (reload) route();
+  }
+
+  // Fills the menu's profile picker (built-in and custom profiles).
+  async function loadProfilePicker() {
+    const sel = document.getElementById('guide-profile');
+    if (!sel) return;
+    const { profiles } = await api('GET', '/profiles');
+    clear(sel).append(h('option', { value: '' }, 'Guides: global'), ...profiles.map((p) => h('option', { value: p.name }, `Guides: /p/${p.name}`)));
+    sel.value = profiles.some((p) => p.name === GUIDE_PROFILE) ? GUIDE_PROFILE : '';
   }
 
   const inlineCode = (text) => String(text).split('`').map((part, i) => (i % 2 ? h('code', null, part) : part));
@@ -229,7 +259,7 @@
   // ---------------------------------------------------------------- shell & routing
   const PAGES = [
     ['overview', 'Overview'], ['settings', 'Settings'], ['data', 'Data'], ['inspector', 'Inspector'], ['webhooks', 'Webhooks'], ['files', 'Files'],
-    ['auth', 'Auth'], ['chaos', 'Chaos'], ['headers', 'Headers'], ['protocols', 'Protocols'], ['openapi', 'OpenAPI'], ['tester', 'API Tester'],
+    ['auth', 'Auth'], ['profiles', 'Profiles'], ['chaos', 'Chaos'], ['headers', 'Headers'], ['protocols', 'Protocols'], ['openapi', 'OpenAPI'], ['tester', 'API Tester'],
     ['help', 'About & Help'],
   ];
   // One-line purpose of each page; shown in the Help guide and as the tooltip of each page's help link.
@@ -240,7 +270,8 @@
     inspector: { purpose: 'Every call made to this server shows up here live, with headers, auth, body and the response that was returned: webhooks and other calls to unreserved paths, plus calls to every API the tool serves (/v1, SOAP, WebSocket upgrades, SSE, GraphQL, OData, the LLM mock, the MCP server, the A2A agent, the S3 API and OAuth). Filter by source, or switch API recording off with the checkbox at the top of the page.' },
     webhooks: { purpose: 'Outgoing webhooks: when an employee, product, department or category is created, updated or deleted, or a file is uploaded, downloaded or deleted (through any protocol), POST its type and id to URLs you choose. Stored in the database, so they survive restarts; every delivery is logged with the response.' },
     files: { purpose: 'The shared file pool used by every file protocol (multipart, raw/octet-stream, base64, tus, presigned, range, chunked) and by the S3-compatible API, where it is a bucket. The Upload card\'s ? guides have curl examples for testing each upload protocol, including error cases (413, 400, 415); upload, download, delete or regenerate samples.' },
-    auth: { purpose: 'Choose how API calls must authenticate (none, API key, Basic, Bearer, JWT, OAuth2, HMAC) on /v1, SOAP, WebSocket, SSE, GraphQL, OData, the LLM mock, the MCP server and the A2A agent; see the credentials, manage OAuth clients (added here, from OAUTH_CLIENTS, or registered dynamically), control dynamic client registration and get test tokens. The S3 API signs with its own keys (Protocols page).' },
+    auth: { purpose: 'Choose how API calls must authenticate (none, API key, Basic, Bearer, JWT, OAuth2, HMAC) on /v1, SOAP, WebSocket, SSE, GraphQL, OData, the LLM mock, the MCP server and the A2A agent; see the credentials, manage OAuth clients (added here, from OAUTH_CLIENTS, or registered dynamically) and how they authenticate (secret, client_secret_jwt or private_key_jwt with generated or pasted keys), control dynamic client registration and get test tokens. The S3 API signs with its own keys (Protocols page).' },
+    profiles: { purpose: 'Use several setups side by side on one server: a request to /p/<name>/… (for example /p/hmac/v1/employees) runs with that profile\'s auth mode, credentials, chaos, headers, rate limit and formats, without touching the global settings. One built-in profile per auth mode; add your own. Data, files, OAuth clients and webhooks stay shared. The picker at the bottom of the menu writes every guide for a profile.' },
     chaos: { purpose: 'Make the mock API misbehave on purpose: random errors, latency, timeouts, broken JSON and rate limits, globally or per route, so you can test client error handling.' },
     headers: { purpose: 'Headers added to every response, and headers every API request must carry on every protocol (missing ones are rejected with 400 in that protocol\'s error format).' },
     protocols: { purpose: 'The same mock data over other protocols: SOAP 1.1/1.2 services with live WSDLs, WebSocket channels (echo, JSON-RPC, live change feed) with an AsyncAPI document and a live console, Server-Sent Events streams (change feed with replay, ticks, LLM-style streaming) with a live viewer, GraphQL (queries, mutations, subscriptions), OData v4, an OpenAI-compatible mock LLM (chat completions with random token usage, tool calls, streaming, embeddings), an MCP server (tools, resources and prompts over the data; protocol 2026-07-28 and session-based 2025 clients), an A2A agent that answers questions about the data as tasks (A2A 1.0 JSON-RPC and HTTP+JSON, and 0.3), and the file pool as an S3-compatible bucket (AWS Signature V4), each with a console. Auth (the S3 API uses its own keys), chaos, rate limits and required headers apply as on /v1.' },
@@ -259,11 +290,13 @@
       h('div', { class: 'brand' }, h('span', { class: 'dot' }), 'API Test Tool'),
       PAGES.map(([id, label]) => h('a', { href: `#/${id}`, dataset: { page: id } }, label, id === 'inspector' ? h('span', { class: 'live-dot', id: 'nav-live' }) : null)),
       h('div', { class: 'foot' },
+        h('select', { id: 'guide-profile', 'aria-label': 'Settings profile for the guides', title: 'Write every ? guide and curl for a settings profile (/p/<name>/…) instead of the global settings', onchange: (e) => setGuideProfile(e.target.value) },
+          h('option', { value: '' }, 'Guides: global')),
         h('select', { 'aria-label': 'Theme', onchange: (e) => setTheme(e.target.value) },
           h('option', { value: '' }, 'Theme: system'), h('option', { value: 'light' }, 'Theme: light'), h('option', { value: 'dark' }, 'Theme: dark')),
         h('a', { href: '/docs', target: '_blank', rel: 'noopener' }, 'Swagger UI ↗'),
         h('button', { class: 'small', id: 'logout-btn', onclick: guard(async () => { await api('POST', '/logout'); location.reload(); }) }, 'Log out')));
-    const sel = navEl.querySelector('select');
+    const sel = navEl.querySelector('select[aria-label="Theme"]');
     sel.value = document.documentElement.dataset.theme || '';
     mainEl = h('main', { class: 'main' });
     root.append(h('div', { class: 'shell' }, navEl, mainEl));
@@ -289,6 +322,7 @@
     try {
       SETTINGS = null;
       await loadCurlCtx().catch((e) => { if (e.status === 401) throw e; });
+      loadProfilePicker().catch(() => {});
       cleanup = (await fn(mainEl, parts.slice(1))) || null;
     } catch (e) {
       if (e.status !== 401) mainEl.append(h('div', { class: 'card' }, h('h2', null, 'Something went wrong'), h('pre', null, e.message)));
@@ -395,7 +429,7 @@
       h('div', { class: 'card' }, titled('Data', 'overview.data'),
         kv({ ...o.counts, files: o.files, 'inspector captures': o.inspector, 'last seed': o.lastSeed ? `${fmtDate(o.lastSeed.at)} (seed ${o.lastSeed.seed})` : 'never' }))));
     const quick = CURL ? window.ATT_GUIDES.build(CURL)['overview.curls'].curls.map(([, cmd]) => cmd) : o.curls;
-    el.append(h('div', { class: 'card' }, titled('Quick curls', 'overview.curls'), h('div', { class: 'small muted', style: { marginBottom: '8px' } }, `Built for the active auth mode (${o.authMode}) and any required headers.`), quick.map((c) => h('div', { class: 'row', style: { marginBottom: '8px', flexWrap: 'nowrap' } }, h('pre', { style: { flex: '1' } }, c), h('button', { class: 'small', onclick: () => copy(c) }, 'copy')))));
+    el.append(h('div', { class: 'card' }, titled('Quick curls', 'overview.curls'), h('div', { class: 'small muted', style: { marginBottom: '8px' } }, CURL?.prefix ? `Built for the settings profile ${CURL.prefix} (auth mode ${CURL.mode}), as chosen at the bottom of the menu.` : `Built for the active auth mode (${o.authMode}) and any required headers.`), quick.map((c) => h('div', { class: 'row', style: { marginBottom: '8px', flexWrap: 'nowrap' } }, h('pre', { style: { flex: '1' } }, c), h('button', { class: 'small', onclick: () => copy(c) }, 'copy')))));
   };
 
   VIEWS.settings = async (el) => {
@@ -455,6 +489,9 @@
     const filterMethod = h('select', { 'aria-label': 'Method' }, ['', 'GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'].map((m) => h('option', { value: m }, m || 'All methods')));
     const filterSource = h('select', { 'aria-label': 'Source' },
       [['', 'All sources'], ['catch-all', 'Webhooks / other paths'], ['v1', 'Mock API (/v1)'], ['soap', 'SOAP (/soap)'], ['ws', 'WebSocket (/ws)'], ['sse', 'SSE (/sse)'], ['graphql', 'GraphQL (/graphql)'], ['odata', 'OData (/odata)'], ['llm', 'LLM (/llm)'], ['mcp', 'MCP (/mcp)'], ['a2a', 'A2A (/a2a)'], ['s3', 'S3 API (/<bucket>)'], ['oauth', 'OAuth (/oauth)']].map(([v, l]) => h('option', { value: v }, l)));
+    const profileNames = [...new Set(items.map((it) => it.profile).filter(Boolean))].sort();
+    const filterProfile = h('select', { 'aria-label': 'Profile', title: 'Settings profile (/p/<name>/…) the request ran in' },
+      [['', 'All profiles'], ['-', 'No profile'], ...profileNames.map((n) => [n, `/p/${n}`])].map(([v, l]) => h('option', { value: v }, l)));
     const live = h('span', { class: 'live-dot' });
     const count = h('span', { class: 'muted small' });
     const logAll = h('input', { type: 'checkbox', checked: !!sval('inspectorLogAll') });
@@ -468,6 +505,7 @@
     const matches = (it) => {
       if (filterMethod.value && it.method !== filterMethod.value) return false;
       if (filterSource.value && (it.kind || 'catch-all') !== filterSource.value) return false;
+      if (filterProfile.value && (it.profile || '-') !== filterProfile.value) return false;
       const q = filterText.value.trim().toLowerCase();
       if (!q) return true;
       return JSON.stringify(it).toLowerCase().includes(q);
@@ -494,6 +532,7 @@
           h('div', { style: { minWidth: 0 } }, h('div', { class: 'path', title: it.path }, it.path + (it.query && Object.keys(it.query).length ? `?${new URLSearchParams(it.query)}` : '')),
             h('div', { class: 'small muted' }, `${fmtTime(it.ts)} · ${it.ip || ''} · ${fmtBytes(it.size)}${it.durationMs != null ? ` · ${it.durationMs} ms` : ''}${it.rule ? ` · ${it.rule}` : ''}`)),
           h('div', { class: 'row', style: { gap: '6px', flexWrap: 'nowrap' } },
+            it.profile ? h('span', { class: 'badge', title: `Settings profile ${it.profile}` }, `p/${it.profile}`) : null,
             SOURCE_LABEL[it.kind] ? h('span', { class: 'badge' }, SOURCE_LABEL[it.kind]) : null,
             h('span', { class: statusClass(it.aborted ? null : it.status), title: it.aborted ? 'The connection closed before the response finished' : '' }, it.aborted ? `${it.status ?? ''} dropped`.trim() : (it.status ?? '…')),
             h('button', { class: 'icon-btn del', title: 'Delete this capture', 'aria-label': 'Delete this capture', onclick: (ev) => { ev.stopPropagation(); removeCapture(it.id); } }, '×'))));
@@ -523,7 +562,7 @@
       const replayOut = h('div');
       const views = {
         request: () => h('div', { class: 'stack' },
-          h('div', { class: 'kv' }, h('div', null, 'URL'), h('div', null, e.url), h('div', null, 'Client IP'), h('div', null, `${e.ip}${e.ips?.length ? ` (via ${e.ips.join(', ')})` : ''}`), h('div', null, 'HTTP'), h('div', null, e.httpVersion), h('div', null, 'Request id'), h('div', null, e.requestId || '')),
+          h('div', { class: 'kv' }, h('div', null, 'URL'), h('div', null, e.url), h('div', null, 'Client IP'), h('div', null, `${e.ip}${e.ips?.length ? ` (via ${e.ips.join(', ')})` : ''}`), h('div', null, 'HTTP'), h('div', null, e.httpVersion), h('div', null, 'Request id'), h('div', null, e.requestId || ''), h('div', null, 'Profile'), h('div', null, e.profile ? `${e.profile} (/p/${e.profile})` : 'none (global settings)')),
           e.query && Object.keys(e.query).length ? h('div', null, h('h3', null, 'Query'), kv(e.query)) : null,
           h('h3', null, 'Headers'), kv(e.headers),
           showBody(e.body, 'Body')),
@@ -553,7 +592,8 @@
     const es = new EventSource('/admin/api/inspector/stream');
     es.onopen = () => { live.classList.add('on'); $('#nav-live')?.classList.add('on'); };
     es.onerror = () => { live.classList.remove('on'); $('#nav-live')?.classList.remove('on'); };
-    es.addEventListener('request', (ev) => { const it = JSON.parse(ev.data); items.unshift(it); items = items.slice(0, sval('inspectorRetention') || 500); renderList(); });
+    const seeProfile = (n) => { if (n && !profileNames.includes(n)) { profileNames.push(n); filterProfile.append(h('option', { value: n }, `/p/${n}`)); } };
+    es.addEventListener('request', (ev) => { const it = JSON.parse(ev.data); seeProfile(it.profile); items.unshift(it); items = items.slice(0, sval('inspectorRetention') || 500); renderList(); });
     es.addEventListener('update', (ev) => {
       const it = JSON.parse(ev.data);
       const i = items.findIndex((x) => x.id === it.id);
@@ -567,6 +607,7 @@
     filterText.addEventListener('input', renderList);
     filterMethod.addEventListener('change', renderList);
     filterSource.addEventListener('change', renderList);
+    filterProfile.addEventListener('change', renderList);
 
     const fwdEnabled = h('input', { type: 'checkbox', checked: sval('inspectorForwardEnabled') });
     const fwdUrl = h('input', { type: 'url', value: sval('inspectorForwardUrl') || '', placeholder: 'https://example.com/webhooks' });
@@ -576,7 +617,7 @@
       h('label', { class: 'check', title: 'INSPECTOR_LOG_ALL' }, logAll, 'Record API calls'),
       h('a', { class: 'btn', href: '/admin/api/inspector/export' }, 'Export JSON'),
       h('button', { class: 'danger', onclick: guard(async () => { if (!confirm('Clear all captured requests?')) return; await api('DELETE', '/inspector'); }) }, 'Clear')));
-    el.append(h('div', { class: 'card' }, h('div', { class: 'row', style: { flexWrap: 'nowrap' } }, tip('inspector.capture'), filterSource, filterMethod, filterText),
+    el.append(h('div', { class: 'card' }, h('div', { class: 'row', style: { flexWrap: 'nowrap' } }, tip('inspector.capture'), filterSource, filterProfile, filterMethod, filterText),
       h('details', { style: { marginTop: '10px' } }, h('summary', null, 'Default response, rules & forwarding'),
         h('div', { class: 'grid cols-2', style: { marginTop: '10px' } },
           h('div', null, h('h3', { class: 'with-tip' }, 'Default response', tip('inspector.rules')), settingsForm(['inspectorResponseStatus', 'inspectorResponseContentType', 'inspectorResponseBody', 'inspectorResponseHeaders', 'inspectorResponseDelayMs'])),
@@ -623,7 +664,7 @@
   // ---------------------------------------------------------------- auth
   VIEWS.auth = async (el) => {
     await loadSettings();
-    const a = await api('GET', '/auth');
+    const [a, mt] = await Promise.all([api('GET', '/auth'), api('GET', '/mtls')]);
     const tokenOut = h('div');
     const clientSel = h('select', null, a.clients.map((c) => h('option', { value: c.clientId }, `${c.clientId} (${c.scopes.join(' ')})`)));
     const scope = h('input', { type: 'text', placeholder: 'scope (blank = all of the client)' });
@@ -649,6 +690,30 @@
           }) }, 'Issue token'), tokenOut,
           h('div', { class: 'small muted' }, 'curl:'), codeBlock(`curl -s -u '${a.clients[0]?.clientId || 'demo-client'}:${a.clients[0]?.secret || 'demo-secret'}' -d grant_type=client_credentials -d scope="read write" '${a.oauth.tokenUrl}'`)),
         h('div', { class: 'card' }, titled('OAuth server', 'auth.server'), kv({ token: a.oauth.tokenUrl, authorize: a.oauth.authorizeUrl, metadata: a.oauth.metadata, jwks: a.jwt.jwks, issuer: a.jwt.issuer, audience: a.jwt.audience, alg: a.jwt.alg, users: a.oauth.users.join(', '), 'roles claim': a.oauth.rolesClaim })))));
+    // Signed client assertions (RFC 7523): make one with the client's generated key or its secret, then try it.
+    const keyed = a.clients.find((c) => c.assertionKey && !c.public)?.clientId;
+    const asClientSel = h('select', null, a.clients.filter((c) => !c.public).map((c) => h('option', { value: c.clientId, selected: c.clientId === keyed }, `${c.clientId}${c.tokenEndpointAuthMethod ? ` (${c.tokenEndpointAuthMethod})` : ''}`)));
+    const asMethod = h('select', null, [['', 'auto'], ['private_key_jwt', 'private_key_jwt'], ['client_secret_jwt', 'client_secret_jwt (HS256)']].map(([v, l]) => h('option', { value: v }, l)));
+    const asOut = h('div');
+    el.append(h('div', { class: 'card stack' }, titled('Signed client assertions (private_key_jwt)', 'auth.assertions'),
+      h('div', { class: 'small muted' }, 'Authenticate a client with a signed JWT instead of sending its secret. Give a client keys under Edit (Generate key pair, or paste its public keys or a JWKS URL), then make an assertion here and try it against the token endpoint.'),
+      h('div', { class: 'grid cols-3' }, field('Client', asClientSel), field('Method', asMethod), h('div', { class: 'row', style: { alignSelf: 'end' } },
+        h('button', { class: 'primary', onclick: guard(async () => {
+          const r = await api('POST', '/auth/client-assertion', { clientId: asClientSel.value, method: asMethod.value || undefined });
+          const tryOut = h('div');
+          clear(asOut).append(h('div', { class: 'stack' },
+            h('div', { class: 'row' }, h('b', null, `${r.method}, valid once for ${r.decoded.payload.exp - r.decoded.payload.iat}s`), h('button', { class: 'small', onclick: () => copy(r.assertion) }, 'Copy assertion'),
+              h('button', { class: 'small', onclick: guard(async () => {
+                const res = await fetch(r.tokenEndpoint.replace(/^https?:\/\/[^/]+/, ''), { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ grant_type: 'client_credentials', client_assertion_type: r.clientAssertionType, client_assertion: r.assertion }) });
+                const j = await res.json().catch(() => ({}));
+                clear(tryOut).append(h('div', { class: 'small' }, h('span', { class: `badge ${res.ok ? 'ok' : 'error'}` }, String(res.status)), ' ', res.ok ? 'token issued' : `${j.error}: ${j.error_description}`), codeBlock(pretty(j)));
+              }) }, 'Get a token with it')),
+            codeBlock(r.assertion), codeBlock(pretty(r.decoded)),
+            h('div', { class: 'small muted' }, 'curl:'),
+            codeBlock(`curl -s -d grant_type=client_credentials -d client_assertion_type=${r.clientAssertionType} -d client_assertion=${r.assertion} '${r.tokenEndpoint}'`),
+            tryOut));
+        }) }, 'Make assertion'))), asOut,
+      h('details', null, h('summary', { class: 'small' }, 'JWKS URL fetching'), settingsForm(['oauthFetchPrivate']))));
     // Inline editor for one client (redirect URIs, scopes, secret, grants, name).
     const editBox = h('div');
     function editClient(c) {
@@ -659,14 +724,55 @@
       const nameIn = h('input', { type: 'text', value: c.clientName || '' });
       const secretIn = h('input', { type: 'text', placeholder: c.public ? 'public client: no secret' : 'leave blank to keep the current secret', disabled: !!c.public });
       const regen = h('input', { type: 'checkbox', disabled: !!c.public });
+      const methodSel = h('select', { disabled: !!c.public }, [['', 'secret or signed JWT (not pinned)'], ['client_secret_basic', 'client_secret_basic'], ['client_secret_post', 'client_secret_post'], ['client_secret_jwt', 'client_secret_jwt (HS256 over the secret)'], ['private_key_jwt', 'private_key_jwt (public keys below)'], ['tls_client_auth', 'tls_client_auth (lab CA certificate, mTLS)'], ['self_signed_tls_client_auth', 'self_signed_tls_client_auth (certificate in JWKS, mTLS)']]
+        .map(([v, l]) => h('option', { value: v, selected: (c.tokenEndpointAuthMethod || '') === v }, c.public ? 'none (public client)' : l)));
+      const jwksIn = h('textarea', { rows: 4, class: 'mono', placeholder: 'JWKS {"keys":[…]}, one JWK, or a PEM public key / certificate (empty = none)', disabled: !!c.public }, c.jwks ? JSON.stringify(c.jwks, null, 2) : '');
+      const jwksUriIn = h('input', { type: 'url', value: c.jwksUri || '', placeholder: 'https://client.example/jwks.json', disabled: !!c.public });
+      const tlsType = h('select', { style: { width: 'auto', flex: 'none' } }, [['subject_dn', 'subject DN'], ['san_dns', 'SAN DNS'], ['san_uri', 'SAN URI'], ['san_email', 'SAN email'], ['san_ip', 'SAN IP']].map(([v, l]) => h('option', { value: v, selected: c.tlsClientAuth?.type === v }, l)));
+      const tlsValue = h('input', { type: 'text', value: c.tlsClientAuth?.value || '', placeholder: 'CN=my-client, O=Acme   or   spiffe://lab/my-client' });
+      const fromCert = h('select', { style: { width: 'auto', flex: 'none' } }, h('option', { value: '' }, 'fill from an issued certificate…'), (mt.certs || []).map((x) => h('option', { value: x.id }, x.cn)));
+      fromCert.addEventListener('change', () => {
+        const x = (mt.certs || []).find((y) => y.id === fromCert.value);
+        if (!x) return;
+        tlsType.value = 'subject_dn'; tlsValue.value = x.subject.replace(/\n/g, ', ');
+        if (!methodSel.value || !methodSel.value.includes('tls')) methodSel.value = 'tls_client_auth';
+      });
+      const algSel = h('select', { style: { width: 'auto' } }, ['RS256', 'ES256', 'PS256', 'EdDSA'].map((x) => h('option', { value: x }, x)));
+      const keyOut = h('div');
+      const showPrivateKey = (pem, kid) => clear(keyOut).append(h('div', { class: 'stack' },
+        h('div', { class: 'row' }, h('b', null, `Private key (kid ${kid})`), h('button', { class: 'small', onclick: () => copy(pem) }, 'Copy'),
+          h('a', { class: 'btn small', href: URL.createObjectURL(new Blob([pem], { type: 'application/x-pem-file' })), download: `${c.clientId}-${kid.slice(0, 8)}.pem` }, 'Download .pem')),
+        h('div', { class: 'small muted' }, 'Give this to the client that signs assertions. The public key is in the client\'s JWKS; the dashboard keeps the private key so "Make assertion" can sign with it.'),
+        h('details', null, h('summary', { class: 'small' }, 'Show the PEM'), codeBlock(pem))));
+      if (c.assertionKey) showPrivateKey(c.assertionKey.privateKeyPem, c.assertionKey.kid);
       clear(editBox).append(h('div', { class: 'card stack', style: { marginTop: '12px' } },
         h('div', { class: 'row between' }, h('b', null, `Edit ${c.clientId}`), h('button', { class: 'small', onclick: () => clear(editBox) }, 'Cancel')),
         c.source === 'env' ? h('div', { class: 'small muted' }, 'This client comes from OAUTH_CLIENTS. Saving stores an edited copy that takes precedence; Revert goes back to the env values.') : null,
         field('Redirect URIs', redirects, 'Exact match; loopback http URIs (127.0.0.1, localhost) also match on any port. Custom schemes such as myapp://callback are allowed.'),
         h('div', { class: 'grid cols-3' }, field('Scopes', scopesIn), field('Grant types', grants, 'authorization_code refresh_token client_credentials'), field('Name', nameIn)),
         h('div', { class: 'grid cols-2' }, field('New secret', secretIn), h('label', { class: 'check', style: { alignSelf: 'end' } }, regen, 'Generate a new secret')),
+        c.public ? null : h('div', { class: 'stack' }, h('h3', { class: 'with-tip' }, 'Client authentication', tip('auth.assertions')),
+          h('div', { class: 'grid cols-2' }, field('Token endpoint auth method', methodSel, 'Pinning a method refuses the others (e.g. private_key_jwt: the secret stops working).'), field('JWKS URL', jwksUriIn, 'Fetched over https (private hosts need OAUTH_FETCH_PRIVATE), cached 5 minutes.')),
+          field('Public keys (JWKS)', jwksIn, 'For self_signed_tls_client_auth paste the client\'s certificate PEM here.'),
+          field('Certificate to expect (tls_client_auth, RFC 8705)', h('div', { class: 'row', style: { flexWrap: 'nowrap' } }, tlsType, tlsValue, fromCert), mt.enabled ? `Token requests come to ${mt.url}/oauth/token with client_id and the certificate, no secret.` : 'Needs the mTLS listener (MTLS_ENABLED=true).'),
+          h('div', { class: 'row', style: { flexWrap: 'nowrap' } }, algSel, h('button', { onclick: guard(async () => {
+            if (c.assertionKey && !confirm('Replace the generated key pair? Assertions signed with the old key stop working.')) return;
+            const k = await api('POST', `/oauth/clients/${encodeURIComponent(c.clientId)}/keypair`, { alg: algSel.value });
+            toast(`Key pair ${k.kid.slice(0, 8)}… generated; ${c.clientId} now uses private_key_jwt`, 'ok');
+            const fresh = (await api('GET', '/auth')).clients.find((x) => x.clientId === c.clientId);
+            if (fresh) { editClient(fresh); return; }
+            showPrivateKey(k.privateKeyPem, k.kid);
+          }) }, 'Generate key pair'), h('span', { class: 'small muted' }, 'Adds the public key to the JWKS and pins private_key_jwt.')),
+          keyOut),
         h('div', { class: 'row' }, h('button', { class: 'primary', onclick: guard(async () => {
           const body = { redirectUris: redirects.value.split(/\s+/).filter(Boolean), scopes: scopesIn.value, grantTypes: grants.value, clientName: nameIn.value };
+          if (!c.public) {
+            const jw = jwksIn.value.trim();
+            if (jw !== (c.jwks ? JSON.stringify(c.jwks, null, 2) : '')) body.jwks = jw;
+            if (jwksUriIn.value !== (c.jwksUri || '')) body.jwksUri = jwksUriIn.value;
+            if (methodSel.value !== (c.tokenEndpointAuthMethod || '')) body.tokenEndpointAuthMethod = methodSel.value;
+            if (tlsValue.value.trim() !== (c.tlsClientAuth?.value || '') || (tlsValue.value.trim() && tlsType.value !== c.tlsClientAuth?.type)) body.tlsClientAuth = tlsValue.value.trim() ? { type: tlsType.value, value: tlsValue.value.trim() } : null;
+          }
           if (!c.public && regen.checked) body.secret = '';
           else if (!c.public && secretIn.value) body.secret = secretIn.value;
           const updated = await api('PATCH', `/oauth/clients/${encodeURIComponent(c.clientId)}`, body);
@@ -699,9 +805,96 @@
           }) }, 'Delete all registered')) : null),
       h('div', { class: 'card' }, titled('Registration settings', 'auth.registration-settings'),
         settingsForm(['oauthRegistration', 'oauthRegistrationToken', 'oauthRegistrationScopes', 'oauthRegistrationGrants', 'oauthRegistrationRate', 'oauthRegistrationTtlDays', 'oauthRegistrationMax'], { onSaved: () => { loadCurlCtx().catch(() => {}); route(); } }))));
+    // ---- mutual TLS: the lab CA, client certificates, the listener
+    const certCn = h('input', { type: 'text', placeholder: 'common name, e.g. fusion-client' });
+    const certUri = h('input', { type: 'text', placeholder: 'SAN URIs, e.g. spiffe://lab/fusion (optional)' });
+    const certDns = h('input', { type: 'text', placeholder: 'SAN DNS names (optional)' });
+    const certDays = h('input', { type: 'number', value: 365, min: 1, max: 825 });
+    const certKey = h('select', null, [['ec', 'EC P-256'], ['rsa', 'RSA 2048']].map(([v, l]) => h('option', { value: v }, l)));
+    const dl = (x, file, label) => h('a', { class: 'btn small', href: `/admin/api/mtls/certs/${encodeURIComponent(x.id)}/${file}`, download: '' }, label);
+    const p12 = (x) => guard(async () => {
+      const pw = prompt(`Password for ${x.cn}.p12 (at least 4 characters; Java and Postman ask for it)`, 'changeit');
+      if (!pw) return;
+      const res = await api('POST', `/mtls/certs/${encodeURIComponent(x.id)}/p12`, { password: pw }, { raw: true });
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || `HTTP ${res.status}`);
+      const a2 = h('a', { href: URL.createObjectURL(await res.blob()), download: `${x.cn}.p12` });
+      document.body.append(a2); a2.click(); a2.remove();
+    });
+    const tlsClient = (x) => guard(async () => {
+      const id = prompt('Client id for an OAuth client that authenticates with this certificate (tls_client_auth)', `${x.cn}-tls`.replace(/[^A-Za-z0-9._-]/g, '-'));
+      if (!id) return;
+      await api('POST', '/oauth/clients', { clientId: id, scopes: 'read write', tokenEndpointAuthMethod: 'tls_client_auth', tlsClientAuth: { type: 'subject_dn', value: x.subject.replace(/\n/g, ', ') } });
+      toast(`Client ${id} created: request tokens at ${mt.url}/oauth/token with client_id=${id} and this certificate`, 'ok');
+      route();
+    });
+    el.append(h('div', { class: 'card stack' }, titled('Mutual TLS (client certificates)', 'auth.mtls'),
+      h('div', { class: 'small muted' }, 'A second, TLS listener asks callers for a client certificate: the certificate is the credential in the mtls auth mode (profile /p/mtls), and OAuth clients can authenticate with it and get tokens bound to it (RFC 8705). The lab CA below issues the certificates.'),
+      mt.listening ? h('div', { class: 'kv' }, h('div', null, 'mTLS endpoint'), h('div', null, h('code', null, mt.url), ' ', h('button', { class: 'small', onclick: () => copy(mt.url) }, 'copy')),
+        h('div', null, 'Try'), h('div', null, h('code', null, `${mt.url}/p/mtls/v1/employees`)))
+        : h('div', { class: 'small', style: { color: 'var(--err)' } }, mt.enabled ? 'MTLS_ENABLED is set but the listener is not running (restart the server, or check the log).' : 'The mTLS listener is off. Set MTLS_ENABLED=true (and MTLS_PORT, default 8443) and restart. Certificates can be issued already.'),
+      h('div', { class: 'grid cols-2' },
+        h('div', { class: 'stack' }, h('h3', null, 'Lab CA'), kv({ subject: mt.ca.subject.replace(/\n/g, ', '), expires: fmtDate(mt.ca.validTo), 'SHA-256': mt.ca.fingerprint256 }),
+          h('div', { class: 'row' }, h('a', { class: 'btn small', href: '/admin/api/mtls/ca.pem', download: 'lab-ca.pem' }, 'Download lab-ca.pem'), h('span', { class: 'small muted' }, 'Trust it in clients: it also signed the listener\'s certificate.'))),
+        h('div', { class: 'stack' }, h('h3', null, 'Issue a client certificate'),
+          h('div', { class: 'grid cols-2' }, field('Common name', certCn), field('Key', certKey), field('SAN URIs', certUri), field('SAN DNS', certDns), field('Valid for (days)', certDays)),
+          h('div', { class: 'row' }, h('button', { class: 'primary', onclick: guard(async () => {
+            const x = await api('POST', '/mtls/certs', { cn: certCn.value.trim(), keyType: certKey.value, days: Number(certDays.value), san: { uri: certUri.value, dns: certDns.value } });
+            toast(`Issued ${x.cn}`, 'ok');
+            route();
+          }) }, 'Issue')))),
+      mt.certs.length ? h('div', { class: 'table-wrap' }, h('table', null, h('thead', null, h('tr', null, ['Common name', 'SANs', 'Expires', 'x5t#S256', ''].map((x) => h('th', null, x)))),
+        h('tbody', null, mt.certs.map((x) => h('tr', null, h('td', null, x.cn, h('div', { class: 'small muted' }, x.keyType === 'rsa' ? 'RSA 2048' : 'EC P-256')), h('td', { class: 'small' }, x.subjectAltName || '—'),
+          h('td', { class: 'small' }, fmtDate(x.validTo)), h('td', { class: 'mono small', title: x['x5t#S256'] }, `${x['x5t#S256'].slice(0, 12)}…`),
+          h('td', null, h('div', { class: 'row', style: { flexWrap: 'nowrap' } }, dl(x, 'cert.pem', 'cert.pem'), dl(x, 'key.pem', 'key.pem'), h('button', { class: 'small', onclick: p12(x) }, '.p12'),
+            h('button', { class: 'small', title: 'Create an OAuth client that authenticates with this certificate', onclick: tlsClient(x) }, 'OAuth client'),
+            h('button', { class: 'small danger', onclick: guard(async () => { if (!confirm(`Delete ${x.cn}? It stays valid until it expires (there is no revocation list); only the download goes away.`)) return; await api('DELETE', `/mtls/certs/${encodeURIComponent(x.id)}`); route(); }) }, 'Delete')))))))) : h('div', { class: 'small muted' }, 'No client certificates issued yet.'),
+      h('details', null, h('summary', { class: 'small' }, 'mTLS settings'), settingsForm(['mtlsEnabled', 'mtlsPort', 'mtlsPublicUrl', 'mtlsAllowedSubjects', 'mtlsTrustedCas', 'mtlsCertFile', 'mtlsKeyFile'], { onSaved: route }))));
+
+    // ---- client ID metadata documents (CIMD): URL client_ids, hosted documents, what has been seen
+    const cimd = await api('GET', '/oauth/client-metadata');
+    const cimdName = h('input', { type: 'text', placeholder: 'name (becomes <name>.json)' });
+    const cimdJson = h('textarea', { rows: 8, class: 'mono', placeholder: '{"client_name": "…", "redirect_uris": ["https://…/callback"], "token_endpoint_auth_method": "none"}' });
+    const loadDoc = (d) => {
+      const { client_id: _id, ...rest } = d.document; // eslint-disable-line no-unused-vars
+      cimdName.value = d.name; cimdJson.value = JSON.stringify(rest, null, 2);
+      cimdName.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    };
+    const signIn = (d) => `${a.oauth.authorizeUrl}?${new URLSearchParams({ response_type: 'code', client_id: d.url, redirect_uri: d.document.redirect_uris?.[0] || '', scope: d.document.scope || 'read', state: 'cimd-demo' })}`;
+    el.append(h('div', { class: 'card stack' }, titled('Client ID metadata documents (CIMD)', 'auth.cimd'),
+      h('div', { class: 'small muted' }, `A client can use an https URL as its client_id; the server fetches the JSON metadata there (name, redirect URIs, auth method) instead of a registration. ${cimd.enabled ? 'Accepted now.' : 'Turned off now: URL client_ids are refused.'} ${cimd.registration === 'off' ? 'Dynamic registration is off, so MCP clients must use CIMD (or a client added below).' : 'Turn dynamic registration off (Registration settings) to prove a client really uses CIMD rather than falling back to registration.'}`),
+      settingsForm(['oauthCimd'], { onSaved: route }),
+      h('h3', null, 'Hosted here'),
+      h('div', { class: 'small muted' }, 'Documents this server serves at /oauth/client-metadata/<name>.json, so a demo needs nothing hosted elsewhere. Use the URL as the client_id in your platform\'s MCP or OAuth connection.'),
+      h('div', { class: 'table-wrap' }, h('table', null, h('thead', null, h('tr', null, ['Name', 'client_id (URL)', 'Auth', 'Redirect URIs', ''].map((x) => h('th', null, x)))),
+        h('tbody', null, cimd.documents.map((d) => h('tr', null,
+          h('td', null, d.name, d.builtIn ? h('div', { class: 'small muted' }, 'built-in') : d.overridesBuiltIn ? h('div', { class: 'small muted' }, 'edited built-in') : null, d.document.client_name ? h('div', { class: 'small muted' }, d.document.client_name) : null),
+          h('td', { class: 'mono small' }, d.url, ' ', h('button', { class: 'small', onclick: () => copy(d.url) }, 'copy')),
+          h('td', null, h('span', { class: 'badge' }, d.document.token_endpoint_auth_method || 'none')),
+          h('td', { class: 'small' }, (d.document.redirect_uris || []).join(' ')),
+          h('td', null, h('div', { class: 'row', style: { flexWrap: 'nowrap' } },
+            d.document.redirect_uris?.length ? h('a', { class: 'btn small', href: signIn(d), target: '_blank', rel: 'noopener', title: 'Open the sign-in page as this client' }, 'Try sign-in') : null,
+            h('button', { class: 'small', onclick: () => loadDoc(d) }, 'Edit'),
+            d.builtIn ? null : h('button', { class: 'small danger', onclick: guard(async () => {
+              if (!confirm(d.overridesBuiltIn ? `Revert ${d.name} to the built-in document?` : `Delete ${d.name}.json? Clients using it stop working.`)) return;
+              await api('DELETE', `/oauth/client-metadata/${encodeURIComponent(d.name)}`); route();
+            }) }, d.overridesBuiltIn ? 'Revert' : 'Delete')))))))),
+      h('div', { class: 'grid cols-2' }, field('Name', cimdName), h('div')), field('Metadata (JSON; client_id is set to the document URL)', cimdJson),
+      h('div', { class: 'row' }, h('button', { class: 'primary', onclick: guard(async () => {
+        let meta;
+        try { meta = JSON.parse(cimdJson.value || '{}'); } catch (e) { throw new Error(`Metadata must be JSON: ${e.message}`); }
+        const d = await api('PUT', `/oauth/client-metadata/${encodeURIComponent(cimdName.value.trim())}`, meta);
+        toast(`Saved ${d.url}`, 'ok'); route();
+      }) }, 'Save document')),
+      h('h3', null, 'URL client_ids seen'),
+      cimd.seen.length ? h('div', { class: 'table-wrap' }, h('table', null, h('thead', null, h('tr', null, ['client_id', 'Name', 'Auth', 'Uses', 'Last used', 'Last fetch', 'Problem'].map((x) => h('th', null, x)))),
+        h('tbody', null, cimd.seen.map((x) => h('tr', null, h('td', { class: 'mono small' }, x.url, x.hostedHere ? h('div', { class: 'small muted' }, 'hosted here') : null), h('td', null, x.clientName || '—'), h('td', null, x.method || '—'),
+          h('td', null, String(x.uses)), h('td', { class: 'small' }, x.lastUsedAt ? fmtDate(x.lastUsedAt) : '—'), h('td', { class: 'small' }, x.fetchedAt ? fmtDate(x.fetchedAt) : '—'),
+          h('td', { class: 'small' }, x.error ? h('span', { style: { color: 'var(--err)' } }, x.error) : '—'))))))
+        : h('div', { class: 'small muted' }, 'None since the server started. A client that uses CIMD shows up here, with the reason when its document is refused.'),
+      h('div', { class: 'row' }, h('button', { class: 'small', onclick: guard(async () => { await api('DELETE', '/oauth/client-metadata-cache'); toast('Fetched documents will be loaded again on next use', 'ok'); }) }, 'Forget cached documents'))));
     el.append(h('div', { class: 'card' }, titled('OAuth clients', 'auth.clients'),
       h('div', { class: 'table-wrap' }, h('table', null, h('thead', null, h('tr', null, ['Client id', 'Secret', 'Scopes', 'Grants', 'Redirect URIs', 'Source', ''].map((x) => h('th', null, x)))),
-        h('tbody', null, a.clients.map((c) => h('tr', null, h('td', { class: 'mono' }, c.clientId, c.clientName ? h('div', { class: 'small muted' }, c.clientName) : null), h('td', { class: 'mono' }, c.secret || '(public)'), h('td', null, c.scopes.join(' ')),
+        h('tbody', null, a.clients.map((c) => h('tr', null, h('td', { class: 'mono' }, c.clientId, c.clientName ? h('div', { class: 'small muted' }, c.clientName) : null), h('td', { class: 'mono' }, c.secret || (c.public ? '(public)' : '—'), c.tokenEndpointAuthMethod && !c.public ? h('div', null, h('span', { class: 'badge' }, c.tokenEndpointAuthMethod)) : null, c.jwks?.keys?.length || c.jwksUri ? h('div', { class: 'small muted' }, c.jwksUri ? 'keys: jwks_uri' : `keys: ${c.jwks.keys.length} in JWKS`) : null), h('td', null, c.scopes.join(' ')),
           h('td', { class: 'small' }, (c.grantTypes || ['any']).join(' ')), h('td', { class: 'small' }, (c.redirectUris || []).join(' ') || 'any http(s)'),
           h('td', null, h('span', { class: 'badge' }, c.source), c.overridesEnv ? h('div', { class: 'small muted' }, 'edited (overrides env)') : null,
             c.source === 'registered' ? h('div', { class: 'small muted' }, c.lastUsedAt ? `last token ${new Date(c.lastUsedAt).toLocaleDateString()}` : 'never used') : null),
@@ -935,6 +1128,85 @@
   };
 
   // ---------------------------------------------------------------- chaos
+  // ---------------------------------------------------------------- profiles
+  VIEWS.profiles = async (el) => {
+    const d = await api('GET', '/profiles');
+    const defs = d.settings || {};
+    const show = (v) => (typeof v === 'object' ? JSON.stringify(v) : String(v));
+    const editBox = h('div');
+
+    el.append(header('Profiles', 'Several setups side by side on one server: /p/<name>/… runs a request with the profile\'s settings; everything else stays global.'));
+    el.append(h('div', { class: 'card stack' }, h('h2', null, 'How profiles work'),
+      h('div', null, 'Prefix any mock API path with ', h('code', null, '/p/<name>'), ': ', h('code', null, `${d.profiles[0]?.url.replace(/\/p\/[^/]+$/, '') || location.origin}/p/hmac/v1/employees`),
+        ' is ', h('code', null, '/v1/employees'), ' with auth mode hmac. Every protocol works this way (REST, SOAP, WebSocket, SSE, GraphQL, OData, LLM, MCP, A2A, S3), and links, specs and WSDLs stay inside the profile.'),
+      h('div', { class: 'small muted' }, 'A profile changes behaviour only: auth mode and credentials, chaos, required and response headers, the rate limit (each profile has its own budget), date formats and a few protocol options. Data, files, OAuth clients and users, webhooks, the inspector and the OAuth server are shared, so a token from /oauth/token works in every profile.'),
+      h('div', { class: 'small muted' }, 'Give each person or each demo its own profile, so changing one does not break anyone else. To write every ? guide for a profile, pick it at the bottom of the menu.')));
+
+    const table = h('table', null,
+      h('thead', null, h('tr', null, ['Profile', 'Description', 'Settings', 'Base URL', ''].map((x) => h('th', null, x)))),
+      h('tbody', null, d.profiles.map((p) => h('tr', null,
+        h('td', null, h('b', null, p.name), ' ', p.builtIn ? h('span', { class: 'badge' }, 'built-in') : null),
+        h('td', { class: 'small' }, p.description || ''),
+        h('td', { class: 'small mono' }, Object.entries(p.settings).map(([k, v]) => `${k}=${defs[k]?.secret ? '********' : show(v)}`).join(' · ') || '(all global)'),
+        h('td', null, h('code', null, p.url), ' ', h('button', { class: 'small', onclick: () => copy(p.url) }, 'copy')),
+        h('td', null, h('div', { class: 'row', style: { flexWrap: 'nowrap' } },
+          GUIDE_PROFILE === p.name ? h('span', { class: 'badge ok' }, 'in guides') : h('button', { class: 'small', title: 'Write every ? guide and curl for this profile', onclick: () => setGuideProfile(p.name) }, 'Use in guides'),
+          p.builtIn ? null : h('button', { class: 'small', onclick: () => editor(p) }, 'Edit'),
+          p.builtIn ? null : h('button', { class: 'small danger', onclick: guard(async () => {
+            if (!confirm(`Delete profile ${p.name}? Requests to /p/${p.name}/… will get 404.`)) return;
+            await api('DELETE', `/profiles/${encodeURIComponent(p.name)}`);
+            if (GUIDE_PROFILE === p.name) setGuideProfile('', { reload: false });
+            toast(`Deleted ${p.name}`, 'ok'); route();
+          }) }, 'Delete')))))));
+    el.append(h('div', { class: 'card table-wrap' }, titled('Profiles', 'profiles.list'), table,
+      h('div', { class: 'row', style: { marginTop: '10px' } }, h('button', { class: 'primary', onclick: () => editor(null) }, 'New profile'),
+        GUIDE_PROFILE ? h('button', { onclick: () => setGuideProfile('') }, 'Guides: back to global settings') : null)));
+    el.append(editBox);
+
+    // Create or edit a custom profile: a name, a description and any number of settings rows.
+    function editor(p) {
+      const nameIn = h('input', { type: 'text', value: p?.name || '', placeholder: 'e.g. arun-demo', disabled: !!p, pattern: '[a-z0-9][a-z0-9-]*' });
+      const descIn = h('input', { type: 'text', value: p?.description || '', placeholder: 'What this profile is for' });
+      const rowsEl = h('div', { class: 'stack' });
+      const rows = [];
+      const addRow = (key, value) => {
+        const keySel = h('select', { style: { width: '220px', flex: '0 0 auto' }, 'aria-label': 'Setting' }, d.keys.map((k) => h('option', { value: k }, k)));
+        keySel.value = key || d.keys.find((k) => !rows.some((r) => r.keySel.value === k)) || d.keys[0];
+        const slot = h('div', { style: { flex: '1', minWidth: '200px' } });
+        const row = { keySel, input: null };
+        const renderInput = (v) => {
+          const def = defs[keySel.value] || { key: keySel.value, type: 'string', value: '' };
+          row.input = settingInput({ ...def, restartRequired: false, value: v === undefined ? def.value : v });
+          clear(slot).append(...[def.type === 'bool' ? h('label', { class: 'check' }, row.input, h('span', null, 'on')) : row.input,
+            def.description ? h('div', { class: 'small muted' }, def.description) : null,
+            h('div', { class: 'small muted' }, `Global value: ${def.secret ? '********' : show(def.value)}`)].filter(Boolean));
+        };
+        keySel.addEventListener('change', () => renderInput(undefined));
+        renderInput(value);
+        const wrap = h('div', { class: 'row', style: { alignItems: 'flex-start', flexWrap: 'wrap' } }, keySel, slot,
+          h('button', { class: 'small', title: 'Remove this setting (the global value applies)', onclick: () => { rows.splice(rows.indexOf(row), 1); wrap.remove(); } }, 'Remove'));
+        rows.push(row);
+        rowsEl.append(wrap);
+      };
+      for (const [k, v] of Object.entries(p?.settings || { authMode: 'none' })) addRow(k, v);
+      clear(editBox).append(h('div', { class: 'card stack' },
+        h('div', { class: 'row between' }, h('h2', { class: 'with-tip' }, p ? `Edit ${p.name}` : 'New profile', tip('profiles.edit')), h('button', { class: 'small', onclick: () => clear(editBox) }, 'Cancel')),
+        h('div', { class: 'grid cols-2' }, field('Name', nameIn, 'Lowercase letters, digits and hyphens; it becomes the path /p/<name>.'), field('Description', descIn)),
+        h('h3', null, 'Settings'), h('div', { class: 'small muted' }, 'Only what differs from the global settings. Anything not listed uses the global value.'),
+        rowsEl,
+        h('div', { class: 'row' }, h('button', { class: 'small', onclick: () => addRow() }, 'Add setting'),
+          h('button', { class: 'primary', onclick: guard(async () => {
+            const settings = {};
+            for (const r of rows) settings[r.keySel.value] = readInput(r.input);
+            const body = { description: descIn.value, settings };
+            const saved = p ? await api('PATCH', `/profiles/${encodeURIComponent(p.name)}`, body) : await api('POST', '/profiles', { name: nameIn.value.trim(), ...body });
+            toast(`Saved ${saved.name}: ${saved.url}`, 'ok');
+            route();
+          }) }, 'Save profile'))));
+      editBox.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+  };
+
   VIEWS.chaos = async (el) => {
     await loadSettings();
     el.append(header('Chaos', 'Random error and latency injection for /v1/*, plus deterministic forcing headers.'));
@@ -2319,7 +2591,10 @@
           ['/mcp, /.well-known/oauth-protected-resource/mcp', 'Mock MCP server (Streamable HTTP): tools, resources and prompts over the same data. Protocol 2026-07-28 (stateless) and 2025-11-25/06-18/03-26 clients that initialize a session. The protected resource metadata points OAuth-capable MCP clients at the built-in OAuth server.'],
           ['/a2a, /a2a/rest/…, /a2a/v0.3, /.well-known/agent-card.json', 'Mock A2A agent: answers questions about the same data as tasks with artifacts. A2A 1.0 over JSON-RPC (/a2a, header A2A-Version: 1.0) and HTTP+JSON (/a2a/rest), and 0.3 JSON-RPC (/a2a/v0.3, or /a2a without the header). The Agent Card is always open.'],
           ['/files, /files/{key} (the S3 bucket name)', 'S3-compatible API over the file pool: path-style, signed with AWS Signature V4 using the S3 API keys (a signed GET / is ListBuckets). The bucket name is a setting.'],
-          ['/oauth/token, /oauth/authorize, /oauth/introspect, /oauth/revoke, /oauth/register', 'Built-in OAuth 2.0 server, with dynamic client registration (RFC 7591) at /oauth/register.'],
+          ['/oauth/token, /oauth/authorize, /oauth/introspect, /oauth/revoke, /oauth/register', 'Built-in OAuth 2.0 server, with dynamic client registration (RFC 7591) at /oauth/register, signed client assertions (private_key_jwt) and client certificate auth (RFC 8705).'],
+          ['/oauth/client-metadata/{name}.json', 'Client ID metadata documents (CIMD) hosted by the lab: use the URL as a client_id. Edit them on the Auth page.'],
+          ['/p/{profile}/…', 'Any API path above with a settings profile (built-in: one per auth mode, e.g. /p/hmac/v1/employees). See the Profiles page.'],
+          ['https://{host}:{MTLS_PORT, 8443}/…', 'The mutual-TLS listener (when MTLS_ENABLED): the same paths, with a client certificate from the lab CA (Auth page → Mutual TLS).'],
           ['/.well-known/jwks.json, /.well-known/oauth-authorization-server', 'Signing keys and OAuth discovery.'],
           ['/openapi.json, /openapi.yaml', 'Live OpenAPI for the mock data API (for integrations).'],
           ['/admin/api/openapi.json, .yaml', 'Live OpenAPI for the admin API (password protected).'],

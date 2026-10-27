@@ -21,7 +21,7 @@ function validType(t) {
 
 function findOverride(list, req) {
   if (!Array.isArray(list)) return null;
-  const p = req.originalUrl.split('?')[0];
+  const p = req.originalUrl.split('?')[0].slice(req.profile?.prefix.length || 0); // route overrides name paths without /p/<profile>
   return list.find((o) => {
     if (!o || !o.path) return false;
     const base = String(o.path).replace(/\/+$/, '');

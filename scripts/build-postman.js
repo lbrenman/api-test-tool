@@ -47,7 +47,7 @@ const collectionPreBody = [
   "const skip = pm.request.headers.has('X-Skip-Auth');",
   "if (skip) pm.request.headers.remove('X-Skip-Auth');",
   "const resolved = new sdk.Url(pm.variables.replaceIn(pm.request.url.toString()));",
-  "const p = resolved.getPath();",
+  "const p = resolved.getPath().replace(/^\\/p\\/[^/]+(?=\\/)/, ''); // a settings profile prefix (/p/<name>) is not part of the API path",
   "const isApi = (p.indexOf('/v1/') === 0 && p.indexOf('/v1/files/presigned/') !== 0) || (p.indexOf('/soap/') === 0 && pm.request.method === 'POST') || p.indexOf('/sse/') === 0 || p.indexOf('/llm/v1/') === 0 || p === '/mcp' || ((p === '/a2a' || p.indexOf('/a2a/') === 0) && p.indexOf('agent-card.json') < 0) || p === '/graphql' || (p.indexOf('/odata/v4/') === 0 && p !== '/odata/v4/' && p !== '/odata/v4/$metadata');",
   "if (!isApi || skip || mode === 'none') return;",
   "const set = (k, v) => pm.request.headers.upsert({ key: k, value: v });",
@@ -112,7 +112,8 @@ const platform = folder('Platform', [
   req('OpenAPI JSON (admin API)', 'GET', '/admin/api/openapi.json', {
     description: 'The admin / control-plane spec. Needs the dashboard password when ADMIN_PASSWORD is set (401 otherwise).',
     tests: [
-      "pm.test('200 or 401 (password set)', () => pm.expect([200, 401]).to.include(pm.response.code));",
+      "const inProfile = /\\/p\\/[^/]+\\/?$/.test(pm.environment.get('baseUrl'));",
+      "pm.test('200 or 401 (password set); 404 inside a settings profile', () => pm.expect(inProfile ? [404] : [200, 401]).to.include(pm.response.code));",
       "if (pm.response.code === 200) {",
       "  const d = pm.response.json();",
       "  pm.test('admin spec', () => pm.expect(d.info.title).to.include('Admin API'));",
@@ -149,8 +150,106 @@ const oauth = folder('OAuth server', [
   req('Register without redirect_uris → 400', 'POST', '/oauth/register', { headers: { 'Content-Type': 'application/json' }, body: json({ grant_types: ['authorization_code'] }), tests: [status(400), "pm.test('invalid_redirect_uri', () => pm.expect(pm.response.json().error).to.eql('invalid_redirect_uri'));"] }),
 ]);
 
+// RFC 7523 client authentication. client_secret_jwt is signed in the pre-request script (HS256 with CryptoJS);
+// Postman's sandbox cannot sign RS256/ES256, so private_key_jwt uses the admin helper (skipped when the admin API needs a password).
+const BEARER_TYPE = 'urn:ietf:params:oauth:client-assertion-type:jwt-bearer';
+const assertionBody = (extra = []) => ({ mode: 'urlencoded', urlencoded: [{ key: 'grant_type', value: 'client_credentials' }, { key: 'client_assertion_type', value: BEARER_TYPE }, { key: 'client_assertion', value: '{{clientAssertion}}' }, ...extra] });
+const signHs256 = (aud) => [
+  "const CJ = require('crypto-js');",
+  "const b64 = (w) => CJ.enc.Base64.stringify(w).replace(/=+$/, '').replace(/\\+/g, '-').replace(/\\//g, '_');",
+  "const now = Math.floor(Date.now() / 1000);",
+  "const id = pm.environment.get('clientId');",
+  `const claims = { iss: id, sub: id, aud: ${aud}, iat: now, exp: now + 300, jti: pm.variables.replaceIn('{{$guid}}') };`,
+  "const input = b64(CJ.enc.Utf8.parse(JSON.stringify({ alg: 'HS256', typ: 'JWT' }))) + '.' + b64(CJ.enc.Utf8.parse(JSON.stringify(claims)));",
+  "pm.environment.set('clientAssertion', input + '.' + b64(CJ.HmacSHA256(input, pm.environment.get('clientSecret'))));",
+];
+const adminOnly = ["if (pm.environment.get('adminOpen') !== 'yes') pm.execution.skipRequest();"];
+const assertions = folder('Client assertions (RFC 7523)', [
+  req('Discovery advertises private_key_jwt and client_secret_jwt', 'GET', '/.well-known/oauth-authorization-server', {
+    pre: ["pm.environment.set('rootUrl', pm.environment.get('baseUrl').replace(/\\/p\\/[^/]+\\/?$/, '')); // admin API and OAuth server live at the root"],
+    tests: [status(200), "const m = pm.response.json();", "pm.test('methods', () => pm.expect(m.token_endpoint_auth_methods_supported).to.include.members(['client_secret_jwt', 'private_key_jwt']));", "pm.test('algs', () => pm.expect(m.token_endpoint_auth_signing_alg_values_supported).to.include.members(['RS256', 'ES256', 'HS256']));"],
+  }),
+  req('client_secret_jwt — HS256 assertion signed in the pre-request script', 'POST', '/oauth/token', { body: assertionBody(), pre: signHs256("pm.environment.get('baseUrl') + '/oauth/token'"), tests: [status(200), "pm.test('token for the client', () => pm.expect(JSON.parse(atob(pm.response.json().access_token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/'))).client_id).to.eql(pm.environment.get('clientId')));"] }),
+  req('Replay the same assertion → 401', 'POST', '/oauth/token', { body: assertionBody(), tests: [status(401), "pm.test('jti already used', () => { pm.expect(pm.response.json().error).to.eql('invalid_client'); pm.expect(pm.response.json().error_description).to.match(/already used/); });"] }),
+  req('Wrong audience → 401', 'POST', '/oauth/token', { body: assertionBody(), pre: signHs256("'https://elsewhere.example/token'"), tests: [status(401), "pm.test('aud named', () => pm.expect(pm.response.json().error_description).to.match(/aud must be one of/));"] }),
+  req('Assertion plus a client secret → 400', 'POST', '/oauth/token', { body: assertionBody([{ key: 'client_secret', value: '{{clientSecret}}' }]), pre: signHs256("pm.environment.get('baseUrl') + '/oauth/token'"), tests: [status(400), "pm.test('invalid_request', () => pm.expect(pm.response.json().error).to.eql('invalid_request'));"] }),
+  req('Add a client for private_key_jwt (admin API)', 'POST', '{{rootUrl}}/admin/api/oauth/clients', {
+    headers: { 'Content-Type': 'application/json' }, body: json({ clientId: 'postman-pkj', scopes: 'read' }),
+    description: 'Needs the admin API: when ADMIN_PASSWORD is set this returns 401 and the private_key_jwt requests below are skipped.',
+    tests: ["pm.test('201, or 401 when the admin API needs a password', () => pm.expect([201, 401]).to.include(pm.response.code));", "pm.environment.set('adminOpen', pm.response.code === 201 ? 'yes' : 'no');", "if (pm.response.code === 201) pm.environment.set('pkjSecret', pm.response.json().secret);"],
+  }),
+  req('Generate its key pair (ES256)', 'POST', '{{rootUrl}}/admin/api/oauth/clients/postman-pkj/keypair', { headers: { 'Content-Type': 'application/json' }, body: json({ alg: 'ES256' }), pre: adminOnly, tests: [status(201), "const k = pm.response.json();", "pm.test('public JWK and private key', () => { pm.expect(k.publicJwk.kty).to.eql('EC'); pm.expect(k.publicJwk.d).to.eql(undefined); pm.expect(k.privateKeyPem).to.include('PRIVATE KEY'); });", "pm.environment.set('pkjKid', k.kid);"] }),
+  req('Server-signed assertion (admin helper)', 'POST', '{{rootUrl}}/admin/api/auth/client-assertion', { headers: { 'Content-Type': 'application/json' }, body: json({ clientId: 'postman-pkj', audience: '{{baseUrl}}/oauth/token' }), pre: adminOnly, tests: [status(200), "const a = pm.response.json();", "pm.test('private_key_jwt, ES256, our kid', () => { pm.expect(a.method).to.eql('private_key_jwt'); pm.expect(a.decoded.header.alg).to.eql('ES256'); pm.expect(a.decoded.header.kid).to.eql(pm.environment.get('pkjKid')); });", "pm.environment.set('clientAssertion', a.assertion);"] }),
+  req('private_key_jwt — token with the assertion', 'POST', '/oauth/token', { body: assertionBody(), pre: adminOnly, tests: [status(200), "pm.test('read scope', () => pm.expect(pm.response.json().scope).to.eql('read'));"] }),
+  withAuth(req('Its secret no longer works (pinned to private_key_jwt) → 401', 'POST', '/oauth/token', { body: { mode: 'urlencoded', urlencoded: [{ key: 'grant_type', value: 'client_credentials' }] }, pre: adminOnly, tests: [status(401), "pm.test('names the method', () => pm.expect(pm.response.json().error_description).to.match(/signed JWT/));"] }), { type: 'basic', basic: [{ key: 'username', value: 'postman-pkj' }, { key: 'password', value: '{{pkjSecret}}' }] }),
+  req('Delete the client', 'DELETE', '{{rootUrl}}/admin/api/oauth/clients/postman-pkj', { pre: adminOnly, tests: [status(204)] }),
+], 'Client authentication with signed JWTs instead of a secret on the wire: client_secret_jwt (HS256 over the secret) and private_key_jwt (the client\'s key pair).');
+
+// Client ID metadata documents (CIMD): the hosted demo document's URL is the client_id; no registration step.
+const noRedirects = (item) => { item.protocolProfileBehavior = { followRedirects: false }; return item; };
+const cimdId = "{{rootUrl}}/oauth/client-metadata/demo.json";
+const cimdFolder = folder('Client ID metadata documents (CIMD)', [
+  req('Discovery says CIMD is supported', 'GET', '/.well-known/oauth-authorization-server', {
+    pre: ["pm.environment.set('rootUrl', pm.environment.get('baseUrl').replace(/\\/p\\/[^/]+\\/?$/, ''));"],
+    tests: [status(200), "pm.test('client_id_metadata_document_supported', () => pm.expect(pm.response.json().client_id_metadata_document_supported).to.eql(true));"],
+  }),
+  req('The hosted demo document', 'GET', `${cimdId}`, { tests: [status(200), "const d = pm.response.json();", "pm.test('client_id is its own URL', () => pm.expect(d.client_id).to.match(/^https?:\\/\\/[^/]+\\/oauth\\/client-metadata\\/demo\\.json$/));", "pm.test('public client', () => pm.expect(d.token_endpoint_auth_method).to.eql('none'));", "pm.environment.set('cimdId', d.client_id); pm.environment.set('cimdRedirect', d.redirect_uris[0]);"] }),
+  req('Sign-in page for the URL client_id', 'GET', '/oauth/authorize?response_type=code&client_id={{cimdIdEnc}}&redirect_uri={{cimdRedirectEnc}}&scope=read', {
+    pre: ["pm.environment.set('cimdIdEnc', encodeURIComponent(pm.environment.get('cimdId'))); pm.environment.set('cimdRedirectEnc', encodeURIComponent(pm.environment.get('cimdRedirect')));"],
+    tests: [status(200), "pm.test('names the document host', () => pm.expect(pm.response.text()).to.include('(CIMD)'));"],
+  }),
+  noRedirects(req('Sign in and allow (PKCE S256) → 302 with a code', 'POST', '/oauth/authorize', {
+    body: { mode: 'urlencoded', urlencoded: [['response_type', 'code'], ['client_id', '{{cimdId}}'], ['redirect_uri', '{{cimdRedirect}}'], ['scope', 'read'], ['state', 'cimd'], ['code_challenge', '{{cimdChallenge}}'], ['code_challenge_method', 'S256'], ['username', 'demo'], ['password', 'demo'], ['decision', 'allow']].map(([key, value]) => ({ key, value })) },
+    pre: [
+      "const CJ = require('crypto-js');",
+      "const verifier = CJ.lib.WordArray.random(32).toString(CJ.enc.Hex);",
+      "pm.environment.set('cimdVerifier', verifier);",
+      "pm.environment.set('cimdChallenge', CJ.enc.Base64.stringify(CJ.SHA256(verifier)).replace(/=+$/, '').replace(/\\+/g, '-').replace(/\\//g, '_'));",
+    ],
+    tests: [status(302), "const loc = pm.response.headers.get('Location');", "pm.test('code in the redirect', () => pm.expect(loc).to.match(/[?&]code=/));", "pm.environment.set('cimdCode', decodeURIComponent(/[?&]code=([^&]+)/.exec(loc)[1]));"],
+  })),
+  req('Exchange the code: client_id is the URL, no secret', 'POST', '/oauth/token', {
+    body: { mode: 'urlencoded', urlencoded: [['grant_type', 'authorization_code'], ['code', '{{cimdCode}}'], ['redirect_uri', '{{cimdRedirect}}'], ['client_id', '{{cimdId}}'], ['code_verifier', '{{cimdVerifier}}']].map(([key, value]) => ({ key, value })) },
+    tests: [status(200), "const t = pm.response.json();", "pm.test('token for the URL client', () => pm.expect(JSON.parse(atob(t.access_token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/'))).client_id).to.eql(pm.environment.get('cimdId')));", "pm.test('refresh token', () => pm.expect(t.refresh_token).to.be.a('string'));"],
+  }),
+  req('A redirect URI not in the document → 400', 'GET', '/oauth/authorize?response_type=code&client_id={{cimdIdEnc}}&redirect_uri=https%3A%2F%2Fevil.example%2Fcb', { tests: [status(400)] }),
+  req('A client_id URL on a private address → 400', 'GET', '/oauth/authorize?response_type=code&client_id=https%3A%2F%2F127.0.0.1%2Fclient.json&redirect_uri=https%3A%2F%2Fx.example%2Fcb', { tests: [status(400), "pm.test('names the client metadata document', () => pm.expect(pm.response.text()).to.include('Client metadata document'));"] }),
+], 'An https URL as client_id: the server fetches the client\'s metadata there instead of a registration (MCP authorization 2025-11-25). Uses the demo document this server hosts.');
+
+// Mutual TLS (RFC 8705). npm run postman boots the server with the mTLS listener and gives Newman two lab CA client
+// certificates: one for {{mtlsUrl}} (127.0.0.1) and one for {{mtlsUrlOther}} (localhost). Skipped when mtlsUrl is unset.
+const needsMtls = ["if (!pm.environment.get('mtlsUrl')) pm.execution.skipRequest();"];
+const skipAuth = { 'X-Skip-Auth': '1' };
+const mtlsFolder = folder('Mutual TLS (RFC 8705)', [
+  req('Discovery lists the mTLS endpoint aliases', 'GET', '/.well-known/oauth-authorization-server', {
+    pre: [...needsMtls, "pm.environment.set('rootUrl', pm.environment.get('baseUrl').replace(/\\/p\\/[^/]+\\/?$/, ''));"],
+    tests: [status(200), "const m = pm.response.json();", "pm.test('bound tokens', () => pm.expect(m.tls_client_certificate_bound_access_tokens).to.eql(true));", "pm.test('mTLS token endpoint', () => pm.expect(m.mtls_endpoint_aliases.token_endpoint).to.eql(pm.environment.get('mtlsUrl') + '/oauth/token'));", "pm.test('tls_client_auth', () => pm.expect(m.token_endpoint_auth_methods_supported).to.include('tls_client_auth'));"],
+  }),
+  req('Profile /p/mtls with a lab CA certificate', 'GET', '{{mtlsUrl}}/p/mtls/v1/employees?limit=1', { headers: skipAuth, pre: needsMtls, tests: [status(200), "pm.test('data', () => pm.expect(pm.response.json().data).to.have.length(1));"] }),
+  req('Register a tls_client_auth client (by SAN URI)', 'POST', '/oauth/register', {
+    headers: { 'Content-Type': 'application/json' }, pre: needsMtls,
+    body: json({ client_name: 'Postman mTLS', grant_types: ['client_credentials'], token_endpoint_auth_method: 'tls_client_auth', tls_client_auth_san_uri: '{{mtlsSanUri}}', scope: 'read' }),
+    tests: [status(201), "const c = pm.response.json();", "pm.test('no secret', () => pm.expect(c.client_secret).to.eql(undefined));", "pm.environment.set('tlsClientId', c.client_id);"],
+  }),
+  req('Token with the client certificate, no secret', 'POST', '{{mtlsUrl}}/oauth/token', {
+    headers: skipAuth, pre: needsMtls, body: { mode: 'urlencoded', urlencoded: [{ key: 'grant_type', value: 'client_credentials' }, { key: 'client_id', value: '{{tlsClientId}}' }] },
+    tests: [status(200), "const t = pm.response.json();", "const claims = JSON.parse(atob(t.access_token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')));", "pm.test('bound to the certificate (cnf.x5t#S256)', () => pm.expect(claims.cnf['x5t#S256']).to.be.a('string'));", "pm.environment.set('tlsToken', t.access_token);"],
+  }),
+  req('Bound token with the same certificate → 200', 'GET', '{{mtlsUrl}}/p/oauth2/v1/employees?limit=1', { headers: { ...skipAuth, Authorization: 'Bearer {{tlsToken}}' }, pre: needsMtls, tests: [status(200)] }),
+  req('Bound token with another certificate → 401', 'GET', '{{mtlsUrlOther}}/p/oauth2/v1/employees?limit=1', { headers: { ...skipAuth, Authorization: 'Bearer {{tlsToken}}' }, pre: needsMtls, tests: [status(401), "pm.test('certificate-mismatch', () => pm.expect(pm.response.json().code).to.eql('certificate-mismatch'));"] }),
+  req('Bound token without a certificate (plain listener) → 401', 'GET', '{{rootUrl}}/p/oauth2/v1/employees?limit=1', {
+    headers: { ...skipAuth, Authorization: 'Bearer {{tlsToken}}' },
+    pre: [...needsMtls, "if (pm.environment.get('rootUrl').indexOf('https://') === 0) pm.execution.skipRequest(); // this run is on the mTLS listener"],
+    tests: [status(401), "pm.test('says where to go', () => pm.expect(pm.response.json().detail).to.include('bound to a client certificate'));"],
+  }),
+  req('Token with a certificate that does not match the client → 401', 'POST', '{{mtlsUrlOther}}/oauth/token', {
+    headers: skipAuth, pre: needsMtls, body: { mode: 'urlencoded', urlencoded: [{ key: 'grant_type', value: 'client_credentials' }, { key: 'client_id', value: '{{tlsClientId}}' }] },
+    tests: [status(401), "pm.test('invalid_client', () => pm.expect(pm.response.json().error).to.eql('invalid_client'));"],
+  }),
+], 'Client certificates on the mTLS listener: the mtls profile, tls_client_auth and certificate-bound tokens. Needs a server with MTLS_ENABLED and Newman client certificates (npm run postman sets both up); skipped otherwise.');
+
 const authFolder = folder('Auth mode', [
-  req('Without credentials', 'GET', '/v1/employees/1', { headers: { 'X-Skip-Auth': '1' }, tests: ["const m = pm.environment.get('authMode');", "pm.test('401 unless auth mode is none', () => pm.response.to.have.status(m === 'none' ? 200 : 401));", "if (m !== 'none') pm.test('WWW-Authenticate', () => pm.expect(pm.response.headers.get('WWW-Authenticate')).to.be.a('string'));"] }),
+  req('Without credentials', 'GET', '/v1/employees/1', { headers: { 'X-Skip-Auth': '1' }, tests: ["const m = pm.environment.get('authMode');", "// mtls: the client certificate is part of the TLS connection, so a header cannot leave it out (npm test covers that case).", "const open = m === 'none' || m === 'mtls';", "pm.test('401 unless auth mode is none (or mtls)', () => pm.response.to.have.status(open ? 200 : 401));", "if (!open) pm.test('WWW-Authenticate', () => pm.expect(pm.response.headers.get('WWW-Authenticate')).to.be.a('string'));"] }),
   req('With credentials', 'GET', '/v1/employees/1', { tests: [status(200)] }),
 ], 'The collection pre-request script authenticates /v1 calls according to {{authMode}}.');
 
@@ -456,7 +555,7 @@ const s3Folder = folder('S3-compatible API', [
 
 const misc = folder('Headers & inspector', [
   req('Request id echo', 'GET', '/v1/employees/1', { headers: { 'X-Request-Id': 'postman-req-1', 'X-Correlation-Id': 'postman-corr-1' }, tests: [status(200), "pm.test('echoed', () => { pm.expect(pm.response.headers.get('X-Request-Id')).to.eql('postman-req-1'); pm.expect(pm.response.headers.get('X-Correlation-Id')).to.eql('postman-corr-1'); });"] }),
-  req('Inspector catch-all', 'POST', '/hooks/postman?source=newman', { headers: { 'Content-Type': 'application/json' }, body: json({ event: 'order.created', id: 42 }), tests: [status(200), "pm.test('captured with actual path', () => { pm.expect(pm.response.json().status).to.eql('captured'); pm.expect(pm.response.json().path).to.eql('/hooks/postman'); });"] }),
+  req('Inspector catch-all', 'POST', '/hooks/postman?source=newman', { headers: { 'Content-Type': 'application/json' }, body: json({ event: 'order.created', id: 42 }), tests: [status(200), "pm.test('captured with actual path', () => { pm.expect(pm.response.json().status).to.eql('captured'); pm.expect(pm.response.json().path).to.eql((pm.environment.get('baseUrl').match(/^https?:\\/\\/[^/]+(\\/.*?)?\\/?$/)[1] || '') + '/hooks/postman'); });"] }),
 ]);
 
 const collection = {
@@ -471,7 +570,7 @@ const collection = {
     { listen: 'test', script: { type: 'text/javascript', exec: collectionTest } },
   ],
   variable: [{ key: 'cachedToken', value: '' }, { key: 'cachedTokenExp', value: '0' }],
-  item: [platform, oauth, authFolder, crud, query, pagination, chaos, files, soapFolder, sseFolder, llmFolder, mcpFolder, a2aFolder, graphqlFolder, odataFolder, s3Folder, misc],
+  item: [platform, oauth, assertions, cimdFolder, mtlsFolder, authFolder, crud, query, pagination, chaos, files, soapFolder, sseFolder, llmFolder, mcpFolder, a2aFolder, graphqlFolder, odataFolder, s3Folder, misc],
 };
 
 const environment = {
