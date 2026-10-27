@@ -71,6 +71,7 @@ const DEFS = [
   { key: 'oauthRegistrationGrants', env: 'OAUTH_REGISTRATION_GRANTS', def: 'authorization_code refresh_token client_credentials', type: 'string', section: 'oauth', desc: 'Grant types an open registration may ask for (space separated). The default includes client_credentials, so machine clients can register themselves; that also lets anyone who finds /oauth/register mint tokens without a user signing in. Use authorization_code refresh_token to lock that down. With OAUTH_REGISTRATION=token every grant is allowed' },
   { key: 'oauthRegistrationRate', env: 'OAUTH_REGISTRATION_RATE', def: 20, type: 'int', section: 'oauth', min: 0, max: 100000, desc: 'Open registrations allowed per client IP per hour (0 = no limit); beyond it 429 with Retry-After' },
   { key: 'oauthRegistrationTtlDays', env: 'OAUTH_REGISTRATION_TTL_DAYS', def: 30, type: 'int', section: 'oauth', min: 0, max: 3650, desc: 'Registered clients that have not obtained a token for this many days are deleted (0 = keep forever)' },
+  { key: 'oauthFetchPrivate', env: 'OAUTH_FETCH_PRIVATE', def: false, type: 'bool', section: 'oauth', desc: 'Let the OAuth server fetch client documents (a client\'s jwks_uri, CIMD client metadata) from private, loopback and link-local addresses and over plain http. Off on a public server, so a client cannot make it call your internal network' },
 
   // ---- chaos ----
   { key: 'errorRate', env: 'ERROR_RATE', def: 0, type: 'number', section: 'chaos', min: 0, max: 100 },

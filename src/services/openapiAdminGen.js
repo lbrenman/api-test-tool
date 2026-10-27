@@ -132,18 +132,32 @@ async function generateAdminOpenApi(ctx, req) {
     parameters: [{ name: 'profile', in: 'query', required: false, description: 'Describe the auth settings inside this profile (apiBase then ends in /p/<name>)', schema: { type: 'string' }, example: 'hmac' }],
     responses: { ...ok('Auth configuration', anyObj('profile, apiBase (where the mock APIs are), mode, apiKey, basic, bearer, jwt, hmac, s3 (S3 API endpoint, bucket, region and keys), oauth, clients, users')), ...AUTHED, ...NF },
   }));
+  const keyFields = {
+    tokenEndpointAuthMethod: { type: 'string', enum: ['client_secret_basic', 'client_secret_post', 'client_secret_jwt', 'private_key_jwt'], description: 'Pin how the client authenticates. Unset = secret (Basic or form) or a signed assertion. private_key_jwt needs jwks or jwksUri' },
+    jwks: { description: 'Public keys for private_key_jwt: a JWK Set, a JWK, or a PEM public key or certificate. Private key material is refused. "" removes them', anyOf: [{ type: 'object', additionalProperties: true }, { type: 'string' }] },
+    jwksUri: { type: 'string', format: 'uri', description: 'Where to fetch the public keys instead (https; private addresses only with OAUTH_FETCH_PRIVATE). "" removes it' },
+  };
   add(`${A}/oauth/clients`, 'post', op('Auth', 'createOAuthClient', 'Add an OAuth client (stored in the DB)', {
-    requestBody: body(obj({ clientId: { type: 'string' }, secret: { type: 'string' }, scopes: { description: 'Space/comma-separated string or array', anyOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }] }, redirectUris: { anyOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }] } }), { clientId: 'fusion', secret: 's3cret', scopes: 'read write' }),
+    requestBody: body(obj({ clientId: { type: 'string' }, secret: { type: 'string' }, scopes: { description: 'Space/comma-separated string or array', anyOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }] }, redirectUris: { anyOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }] }, ...keyFields }), { clientId: 'fusion', secret: 's3cret', scopes: 'read write' }),
     responses: { ...created('Client created', S('OAuthClient')), ...BAD, ...AUTHED },
   }));
   add(`${A}/oauth/clients/{id}`, 'patch', op('Auth', 'updateOAuthClient', 'Edit a client: secret ("" = generate a new one), scopes, redirect URIs, grant types, name. Omitted fields are kept. Editing an env client stores a copy that overrides OAUTH_CLIENTS; deleting the copy reverts it.', {
     parameters: [pathParam('id', 'Client id')],
-    requestBody: body(obj({ secret: { type: 'string' }, scopes: { anyOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }] }, redirectUris: { anyOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }] }, grantTypes: { anyOf: [{ type: 'string' }, { type: 'array', items: { type: 'string', enum: ['authorization_code', 'refresh_token', 'client_credentials'] } }] }, clientName: { type: 'string' } }), { redirectUris: ['https://oauth.pstmn.io/v1/callback', 'http://localhost:8080/callback'] }),
+    requestBody: body(obj({ secret: { type: 'string' }, scopes: { anyOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }] }, redirectUris: { anyOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }] }, grantTypes: { anyOf: [{ type: 'string' }, { type: 'array', items: { type: 'string', enum: ['authorization_code', 'refresh_token', 'client_credentials'] } }] }, clientName: { type: 'string' }, ...keyFields }), { redirectUris: ['https://oauth.pstmn.io/v1/callback', 'http://localhost:8080/callback'] }),
     responses: { ...ok('Updated client', S('OAuthClient')), ...BAD, ...AUTHED, ...NF },
   }));
   add(`${A}/oauth/clients/{id}`, 'delete', op('Auth', 'deleteOAuthClient', 'Delete a dashboard-added, edited or registered OAuth client (deleting an edited env client reverts it to OAUTH_CLIENTS)', {
     parameters: [pathParam('id', 'Client id')],
     responses: { ...noContent('Deleted'), ...AUTHED, ...NF },
+  }));
+  add(`${A}/oauth/clients/{id}/keypair`, 'post', op('Auth', 'generateClientKeyPair', 'Generate a key pair for private_key_jwt. The public key joins the client\'s jwks and the client is pinned to private_key_jwt (use: false leaves the method alone). The private key is returned and kept, like a secret, so /auth/client-assertion can sign with it.', {
+    parameters: [pathParam('id', 'Client id')],
+    requestBody: body(obj({ alg: { type: 'string', enum: ['RS256', 'PS256', 'ES256', 'EdDSA'], default: 'RS256' }, use: { type: 'boolean', default: true } }), { alg: 'ES256' }, false),
+    responses: { ...created('Key pair', obj({ kid: { type: 'string' }, alg: { type: 'string' }, publicJwk: { type: 'object', additionalProperties: true }, privateKeyPem: { type: 'string' } })), ...BAD, ...AUTHED, ...NF },
+  }));
+  add(`${A}/auth/client-assertion`, 'post', op('Auth', 'makeClientAssertion', 'A signed client_assertion (RFC 7523) for the token, introspection or revocation endpoint: private_key_jwt with the client\'s generated key, or client_secret_jwt (HS256 over its secret). Valid once, for lifetime seconds.', {
+    requestBody: body(obj({ clientId: { type: 'string' }, method: { type: 'string', enum: ['private_key_jwt', 'client_secret_jwt'], description: 'Default: the client\'s pinned JWT method, else private_key_jwt when it has a generated key' }, audience: { type: 'string', description: 'Default <server>/oauth/token' }, lifetime: { type: 'integer', minimum: 30, maximum: 3600, default: 300 } }, ['clientId']), { clientId: 'demo-client', method: 'client_secret_jwt' }),
+    responses: { ...ok('Assertion', anyObj('method, assertion, clientAssertionType, tokenEndpoint, decoded {header, payload}')), ...BAD, ...AUTHED, ...NF },
   }));
   add(`${A}/oauth/registered`, 'delete', op('Auth', 'deleteRegisteredClients', 'Delete the clients that registered themselves through /oauth/register (all of them, or with unused=true only those that never obtained a token)', {
     parameters: [{ name: 'unused', in: 'query', schema: { type: 'boolean' }, description: 'Only delete registrations that never obtained a token' }],

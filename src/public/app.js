@@ -269,7 +269,7 @@
     inspector: { purpose: 'Every call made to this server shows up here live, with headers, auth, body and the response that was returned: webhooks and other calls to unreserved paths, plus calls to every API the tool serves (/v1, SOAP, WebSocket upgrades, SSE, GraphQL, OData, the LLM mock, the MCP server, the A2A agent, the S3 API and OAuth). Filter by source, or switch API recording off with the checkbox at the top of the page.' },
     webhooks: { purpose: 'Outgoing webhooks: when an employee, product, department or category is created, updated or deleted, or a file is uploaded, downloaded or deleted (through any protocol), POST its type and id to URLs you choose. Stored in the database, so they survive restarts; every delivery is logged with the response.' },
     files: { purpose: 'The shared file pool used by every file protocol (multipart, raw/octet-stream, base64, tus, presigned, range, chunked) and by the S3-compatible API, where it is a bucket. The Upload card\'s ? guides have curl examples for testing each upload protocol, including error cases (413, 400, 415); upload, download, delete or regenerate samples.' },
-    auth: { purpose: 'Choose how API calls must authenticate (none, API key, Basic, Bearer, JWT, OAuth2, HMAC) on /v1, SOAP, WebSocket, SSE, GraphQL, OData, the LLM mock, the MCP server and the A2A agent; see the credentials, manage OAuth clients (added here, from OAUTH_CLIENTS, or registered dynamically), control dynamic client registration and get test tokens. The S3 API signs with its own keys (Protocols page).' },
+    auth: { purpose: 'Choose how API calls must authenticate (none, API key, Basic, Bearer, JWT, OAuth2, HMAC) on /v1, SOAP, WebSocket, SSE, GraphQL, OData, the LLM mock, the MCP server and the A2A agent; see the credentials, manage OAuth clients (added here, from OAUTH_CLIENTS, or registered dynamically) and how they authenticate (secret, client_secret_jwt or private_key_jwt with generated or pasted keys), control dynamic client registration and get test tokens. The S3 API signs with its own keys (Protocols page).' },
     profiles: { purpose: 'Use several setups side by side on one server: a request to /p/<name>/… (for example /p/hmac/v1/employees) runs with that profile\'s auth mode, credentials, chaos, headers, rate limit and formats, without touching the global settings. One built-in profile per auth mode; add your own. Data, files, OAuth clients and webhooks stay shared. The picker at the bottom of the menu writes every guide for a profile.' },
     chaos: { purpose: 'Make the mock API misbehave on purpose: random errors, latency, timeouts, broken JSON and rate limits, globally or per route, so you can test client error handling.' },
     headers: { purpose: 'Headers added to every response, and headers every API request must carry on every protocol (missing ones are rejected with 400 in that protocol\'s error format).' },
@@ -689,6 +689,30 @@
           }) }, 'Issue token'), tokenOut,
           h('div', { class: 'small muted' }, 'curl:'), codeBlock(`curl -s -u '${a.clients[0]?.clientId || 'demo-client'}:${a.clients[0]?.secret || 'demo-secret'}' -d grant_type=client_credentials -d scope="read write" '${a.oauth.tokenUrl}'`)),
         h('div', { class: 'card' }, titled('OAuth server', 'auth.server'), kv({ token: a.oauth.tokenUrl, authorize: a.oauth.authorizeUrl, metadata: a.oauth.metadata, jwks: a.jwt.jwks, issuer: a.jwt.issuer, audience: a.jwt.audience, alg: a.jwt.alg, users: a.oauth.users.join(', '), 'roles claim': a.oauth.rolesClaim })))));
+    // Signed client assertions (RFC 7523): make one with the client's generated key or its secret, then try it.
+    const keyed = a.clients.find((c) => c.assertionKey && !c.public)?.clientId;
+    const asClientSel = h('select', null, a.clients.filter((c) => !c.public).map((c) => h('option', { value: c.clientId, selected: c.clientId === keyed }, `${c.clientId}${c.tokenEndpointAuthMethod ? ` (${c.tokenEndpointAuthMethod})` : ''}`)));
+    const asMethod = h('select', null, [['', 'auto'], ['private_key_jwt', 'private_key_jwt'], ['client_secret_jwt', 'client_secret_jwt (HS256)']].map(([v, l]) => h('option', { value: v }, l)));
+    const asOut = h('div');
+    el.append(h('div', { class: 'card stack' }, titled('Signed client assertions (private_key_jwt)', 'auth.assertions'),
+      h('div', { class: 'small muted' }, 'Authenticate a client with a signed JWT instead of sending its secret. Give a client keys under Edit (Generate key pair, or paste its public keys or a JWKS URL), then make an assertion here and try it against the token endpoint.'),
+      h('div', { class: 'grid cols-3' }, field('Client', asClientSel), field('Method', asMethod), h('div', { class: 'row', style: { alignSelf: 'end' } },
+        h('button', { class: 'primary', onclick: guard(async () => {
+          const r = await api('POST', '/auth/client-assertion', { clientId: asClientSel.value, method: asMethod.value || undefined });
+          const tryOut = h('div');
+          clear(asOut).append(h('div', { class: 'stack' },
+            h('div', { class: 'row' }, h('b', null, `${r.method}, valid once for ${r.decoded.payload.exp - r.decoded.payload.iat}s`), h('button', { class: 'small', onclick: () => copy(r.assertion) }, 'Copy assertion'),
+              h('button', { class: 'small', onclick: guard(async () => {
+                const res = await fetch(r.tokenEndpoint.replace(/^https?:\/\/[^/]+/, ''), { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ grant_type: 'client_credentials', client_assertion_type: r.clientAssertionType, client_assertion: r.assertion }) });
+                const j = await res.json().catch(() => ({}));
+                clear(tryOut).append(h('div', { class: 'small' }, h('span', { class: `badge ${res.ok ? 'ok' : 'error'}` }, String(res.status)), ' ', res.ok ? 'token issued' : `${j.error}: ${j.error_description}`), codeBlock(pretty(j)));
+              }) }, 'Get a token with it')),
+            codeBlock(r.assertion), codeBlock(pretty(r.decoded)),
+            h('div', { class: 'small muted' }, 'curl:'),
+            codeBlock(`curl -s -d grant_type=client_credentials -d client_assertion_type=${r.clientAssertionType} -d client_assertion=${r.assertion} '${r.tokenEndpoint}'`),
+            tryOut));
+        }) }, 'Make assertion'))), asOut,
+      h('details', null, h('summary', { class: 'small' }, 'JWKS URL fetching'), settingsForm(['oauthFetchPrivate']))));
     // Inline editor for one client (redirect URIs, scopes, secret, grants, name).
     const editBox = h('div');
     function editClient(c) {
@@ -699,14 +723,44 @@
       const nameIn = h('input', { type: 'text', value: c.clientName || '' });
       const secretIn = h('input', { type: 'text', placeholder: c.public ? 'public client: no secret' : 'leave blank to keep the current secret', disabled: !!c.public });
       const regen = h('input', { type: 'checkbox', disabled: !!c.public });
+      const methodSel = h('select', { disabled: !!c.public }, [['', 'secret or signed JWT (not pinned)'], ['client_secret_basic', 'client_secret_basic'], ['client_secret_post', 'client_secret_post'], ['client_secret_jwt', 'client_secret_jwt (HS256 over the secret)'], ['private_key_jwt', 'private_key_jwt (public keys below)']]
+        .map(([v, l]) => h('option', { value: v, selected: (c.tokenEndpointAuthMethod || '') === v }, c.public ? 'none (public client)' : l)));
+      const jwksIn = h('textarea', { rows: 4, class: 'mono', placeholder: 'JWKS {"keys":[…]}, one JWK, or a PEM public key / certificate (empty = none)', disabled: !!c.public }, c.jwks ? JSON.stringify(c.jwks, null, 2) : '');
+      const jwksUriIn = h('input', { type: 'url', value: c.jwksUri || '', placeholder: 'https://client.example/jwks.json', disabled: !!c.public });
+      const algSel = h('select', { style: { width: 'auto' } }, ['RS256', 'ES256', 'PS256', 'EdDSA'].map((x) => h('option', { value: x }, x)));
+      const keyOut = h('div');
+      const showPrivateKey = (pem, kid) => clear(keyOut).append(h('div', { class: 'stack' },
+        h('div', { class: 'row' }, h('b', null, `Private key (kid ${kid})`), h('button', { class: 'small', onclick: () => copy(pem) }, 'Copy'),
+          h('a', { class: 'btn small', href: URL.createObjectURL(new Blob([pem], { type: 'application/x-pem-file' })), download: `${c.clientId}-${kid.slice(0, 8)}.pem` }, 'Download .pem')),
+        h('div', { class: 'small muted' }, 'Give this to the client that signs assertions. The public key is in the client\'s JWKS; the dashboard keeps the private key so "Make assertion" can sign with it.'),
+        h('details', null, h('summary', { class: 'small' }, 'Show the PEM'), codeBlock(pem))));
+      if (c.assertionKey) showPrivateKey(c.assertionKey.privateKeyPem, c.assertionKey.kid);
       clear(editBox).append(h('div', { class: 'card stack', style: { marginTop: '12px' } },
         h('div', { class: 'row between' }, h('b', null, `Edit ${c.clientId}`), h('button', { class: 'small', onclick: () => clear(editBox) }, 'Cancel')),
         c.source === 'env' ? h('div', { class: 'small muted' }, 'This client comes from OAUTH_CLIENTS. Saving stores an edited copy that takes precedence; Revert goes back to the env values.') : null,
         field('Redirect URIs', redirects, 'Exact match; loopback http URIs (127.0.0.1, localhost) also match on any port. Custom schemes such as myapp://callback are allowed.'),
         h('div', { class: 'grid cols-3' }, field('Scopes', scopesIn), field('Grant types', grants, 'authorization_code refresh_token client_credentials'), field('Name', nameIn)),
         h('div', { class: 'grid cols-2' }, field('New secret', secretIn), h('label', { class: 'check', style: { alignSelf: 'end' } }, regen, 'Generate a new secret')),
+        c.public ? null : h('div', { class: 'stack' }, h('h3', { class: 'with-tip' }, 'Client authentication', tip('auth.assertions')),
+          h('div', { class: 'grid cols-2' }, field('Token endpoint auth method', methodSel, 'Pinning a method refuses the others (e.g. private_key_jwt: the secret stops working).'), field('JWKS URL', jwksUriIn, 'Fetched over https (private hosts need OAUTH_FETCH_PRIVATE), cached 5 minutes.')),
+          field('Public keys (JWKS)', jwksIn),
+          h('div', { class: 'row', style: { flexWrap: 'nowrap' } }, algSel, h('button', { onclick: guard(async () => {
+            if (c.assertionKey && !confirm('Replace the generated key pair? Assertions signed with the old key stop working.')) return;
+            const k = await api('POST', `/oauth/clients/${encodeURIComponent(c.clientId)}/keypair`, { alg: algSel.value });
+            toast(`Key pair ${k.kid.slice(0, 8)}… generated; ${c.clientId} now uses private_key_jwt`, 'ok');
+            const fresh = (await api('GET', '/auth')).clients.find((x) => x.clientId === c.clientId);
+            if (fresh) { editClient(fresh); return; }
+            showPrivateKey(k.privateKeyPem, k.kid);
+          }) }, 'Generate key pair'), h('span', { class: 'small muted' }, 'Adds the public key to the JWKS and pins private_key_jwt.')),
+          keyOut),
         h('div', { class: 'row' }, h('button', { class: 'primary', onclick: guard(async () => {
           const body = { redirectUris: redirects.value.split(/\s+/).filter(Boolean), scopes: scopesIn.value, grantTypes: grants.value, clientName: nameIn.value };
+          if (!c.public) {
+            const jw = jwksIn.value.trim();
+            if (jw !== (c.jwks ? JSON.stringify(c.jwks, null, 2) : '')) body.jwks = jw;
+            if (jwksUriIn.value !== (c.jwksUri || '')) body.jwksUri = jwksUriIn.value;
+            if (methodSel.value !== (c.tokenEndpointAuthMethod || '')) body.tokenEndpointAuthMethod = methodSel.value;
+          }
           if (!c.public && regen.checked) body.secret = '';
           else if (!c.public && secretIn.value) body.secret = secretIn.value;
           const updated = await api('PATCH', `/oauth/clients/${encodeURIComponent(c.clientId)}`, body);
@@ -741,7 +795,7 @@
         settingsForm(['oauthRegistration', 'oauthRegistrationToken', 'oauthRegistrationScopes', 'oauthRegistrationGrants', 'oauthRegistrationRate', 'oauthRegistrationTtlDays', 'oauthRegistrationMax'], { onSaved: () => { loadCurlCtx().catch(() => {}); route(); } }))));
     el.append(h('div', { class: 'card' }, titled('OAuth clients', 'auth.clients'),
       h('div', { class: 'table-wrap' }, h('table', null, h('thead', null, h('tr', null, ['Client id', 'Secret', 'Scopes', 'Grants', 'Redirect URIs', 'Source', ''].map((x) => h('th', null, x)))),
-        h('tbody', null, a.clients.map((c) => h('tr', null, h('td', { class: 'mono' }, c.clientId, c.clientName ? h('div', { class: 'small muted' }, c.clientName) : null), h('td', { class: 'mono' }, c.secret || '(public)'), h('td', null, c.scopes.join(' ')),
+        h('tbody', null, a.clients.map((c) => h('tr', null, h('td', { class: 'mono' }, c.clientId, c.clientName ? h('div', { class: 'small muted' }, c.clientName) : null), h('td', { class: 'mono' }, c.secret || (c.public ? '(public)' : '—'), c.tokenEndpointAuthMethod && !c.public ? h('div', null, h('span', { class: 'badge' }, c.tokenEndpointAuthMethod)) : null, c.jwks?.keys?.length || c.jwksUri ? h('div', { class: 'small muted' }, c.jwksUri ? 'keys: jwks_uri' : `keys: ${c.jwks.keys.length} in JWKS`) : null), h('td', null, c.scopes.join(' ')),
           h('td', { class: 'small' }, (c.grantTypes || ['any']).join(' ')), h('td', { class: 'small' }, (c.redirectUris || []).join(' ') || 'any http(s)'),
           h('td', null, h('span', { class: 'badge' }, c.source), c.overridesEnv ? h('div', { class: 'small muted' }, 'edited (overrides env)') : null,
             c.source === 'registered' ? h('div', { class: 'small muted' }, c.lastUsedAt ? `last token ${new Date(c.lastUsedAt).toLocaleDateString()}` : 'never used') : null),

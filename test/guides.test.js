@@ -207,3 +207,32 @@ test('inside a settings profile the guides call /p/<name>, sign the full path, a
   assert.match(C.s3('GET', ''), /'https:\/\/att\.example\.dev\/files'/);
   assert.match(C.ws('/ws/echo', 'hi'), /wss:\/\/att\.example\.dev\/p\/hmac\/ws\/echo/);
 });
+
+test('the client assertion snippets build JWTs the server accepts (HS256 and RS256)', { skip: !hasOpenssl && 'openssl not available' }, () => {
+  const g = build(makeCurl({ ...BASE_CTX, mode: 'none' }), {});
+  const a = g['auth.assertions'];
+  assert.ok(a, 'auth.assertions guide');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'att-assert-'));
+  const { privateKey, publicKey } = crypto.generateKeyPairSync('rsa', { modulusLength: 2048 });
+  fs.writeFileSync(path.join(dir, 'key.pem'), privateKey.export({ type: 'pkcs8', format: 'pem' }));
+  const dec = (s) => Buffer.from(s, 'base64url');
+  for (const [label, alg] of [['client_secret_jwt', 'HS256'], ['private_key_jwt', 'RS256']]) {
+    const cmd = a.curls.find(([l]) => l.startsWith(label))[1];
+    const script = cmd.split('\n').filter((l) => !/^curl /.test(l)).join('\n').replace('KID=YOUR_KEY_ID', 'KID=k1');
+    const jwt = execFileSync('bash', ['-c', `${script}\nprintf %s "$HEADER.$PAYLOAD.$SIG"`], { cwd: dir }).toString();
+    const [h, p, sig] = jwt.split('.');
+    const header = JSON.parse(dec(h));
+    const payload = JSON.parse(dec(p));
+    assert.equal(header.alg, alg);
+    assert.equal(payload.iss, 'demo-client');
+    assert.equal(payload.sub, 'demo-client');
+    assert.equal(payload.aud, BASE_CTX.tokenUrl);
+    assert.equal(payload.exp - payload.iat, 300);
+    assert.match(payload.jti, /^[0-9a-f]{32}$/);
+    const ok = alg === 'HS256'
+      ? crypto.createHmac('sha256', 'demo-secret').update(`${h}.${p}`).digest('base64url') === sig
+      : crypto.verify('sha256', Buffer.from(`${h}.${p}`), publicKey, dec(sig));
+    assert.ok(ok, `${alg} signature verifies`);
+    if (alg === 'RS256') assert.equal(header.kid, 'k1');
+  }
+});

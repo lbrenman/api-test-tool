@@ -150,6 +150,41 @@ const oauth = folder('OAuth server', [
   req('Register without redirect_uris → 400', 'POST', '/oauth/register', { headers: { 'Content-Type': 'application/json' }, body: json({ grant_types: ['authorization_code'] }), tests: [status(400), "pm.test('invalid_redirect_uri', () => pm.expect(pm.response.json().error).to.eql('invalid_redirect_uri'));"] }),
 ]);
 
+// RFC 7523 client authentication. client_secret_jwt is signed in the pre-request script (HS256 with CryptoJS);
+// Postman's sandbox cannot sign RS256/ES256, so private_key_jwt uses the admin helper (skipped when the admin API needs a password).
+const BEARER_TYPE = 'urn:ietf:params:oauth:client-assertion-type:jwt-bearer';
+const assertionBody = (extra = []) => ({ mode: 'urlencoded', urlencoded: [{ key: 'grant_type', value: 'client_credentials' }, { key: 'client_assertion_type', value: BEARER_TYPE }, { key: 'client_assertion', value: '{{clientAssertion}}' }, ...extra] });
+const signHs256 = (aud) => [
+  "const CJ = require('crypto-js');",
+  "const b64 = (w) => CJ.enc.Base64.stringify(w).replace(/=+$/, '').replace(/\\+/g, '-').replace(/\\//g, '_');",
+  "const now = Math.floor(Date.now() / 1000);",
+  "const id = pm.environment.get('clientId');",
+  `const claims = { iss: id, sub: id, aud: ${aud}, iat: now, exp: now + 300, jti: pm.variables.replaceIn('{{$guid}}') };`,
+  "const input = b64(CJ.enc.Utf8.parse(JSON.stringify({ alg: 'HS256', typ: 'JWT' }))) + '.' + b64(CJ.enc.Utf8.parse(JSON.stringify(claims)));",
+  "pm.environment.set('clientAssertion', input + '.' + b64(CJ.HmacSHA256(input, pm.environment.get('clientSecret'))));",
+];
+const adminOnly = ["if (pm.environment.get('adminOpen') !== 'yes') pm.execution.skipRequest();"];
+const assertions = folder('Client assertions (RFC 7523)', [
+  req('Discovery advertises private_key_jwt and client_secret_jwt', 'GET', '/.well-known/oauth-authorization-server', {
+    pre: ["pm.environment.set('rootUrl', pm.environment.get('baseUrl').replace(/\\/p\\/[^/]+\\/?$/, '')); // admin API and OAuth server live at the root"],
+    tests: [status(200), "const m = pm.response.json();", "pm.test('methods', () => pm.expect(m.token_endpoint_auth_methods_supported).to.include.members(['client_secret_jwt', 'private_key_jwt']));", "pm.test('algs', () => pm.expect(m.token_endpoint_auth_signing_alg_values_supported).to.include.members(['RS256', 'ES256', 'HS256']));"],
+  }),
+  req('client_secret_jwt — HS256 assertion signed in the pre-request script', 'POST', '/oauth/token', { body: assertionBody(), pre: signHs256("pm.environment.get('baseUrl') + '/oauth/token'"), tests: [status(200), "pm.test('token for the client', () => pm.expect(JSON.parse(atob(pm.response.json().access_token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/'))).client_id).to.eql(pm.environment.get('clientId')));"] }),
+  req('Replay the same assertion → 401', 'POST', '/oauth/token', { body: assertionBody(), tests: [status(401), "pm.test('jti already used', () => { pm.expect(pm.response.json().error).to.eql('invalid_client'); pm.expect(pm.response.json().error_description).to.match(/already used/); });"] }),
+  req('Wrong audience → 401', 'POST', '/oauth/token', { body: assertionBody(), pre: signHs256("'https://elsewhere.example/token'"), tests: [status(401), "pm.test('aud named', () => pm.expect(pm.response.json().error_description).to.match(/aud must be one of/));"] }),
+  req('Assertion plus a client secret → 400', 'POST', '/oauth/token', { body: assertionBody([{ key: 'client_secret', value: '{{clientSecret}}' }]), pre: signHs256("pm.environment.get('baseUrl') + '/oauth/token'"), tests: [status(400), "pm.test('invalid_request', () => pm.expect(pm.response.json().error).to.eql('invalid_request'));"] }),
+  req('Add a client for private_key_jwt (admin API)', 'POST', '{{rootUrl}}/admin/api/oauth/clients', {
+    headers: { 'Content-Type': 'application/json' }, body: json({ clientId: 'postman-pkj', scopes: 'read' }),
+    description: 'Needs the admin API: when ADMIN_PASSWORD is set this returns 401 and the private_key_jwt requests below are skipped.',
+    tests: ["pm.test('201, or 401 when the admin API needs a password', () => pm.expect([201, 401]).to.include(pm.response.code));", "pm.environment.set('adminOpen', pm.response.code === 201 ? 'yes' : 'no');", "if (pm.response.code === 201) pm.environment.set('pkjSecret', pm.response.json().secret);"],
+  }),
+  req('Generate its key pair (ES256)', 'POST', '{{rootUrl}}/admin/api/oauth/clients/postman-pkj/keypair', { headers: { 'Content-Type': 'application/json' }, body: json({ alg: 'ES256' }), pre: adminOnly, tests: [status(201), "const k = pm.response.json();", "pm.test('public JWK and private key', () => { pm.expect(k.publicJwk.kty).to.eql('EC'); pm.expect(k.publicJwk.d).to.eql(undefined); pm.expect(k.privateKeyPem).to.include('PRIVATE KEY'); });", "pm.environment.set('pkjKid', k.kid);"] }),
+  req('Server-signed assertion (admin helper)', 'POST', '{{rootUrl}}/admin/api/auth/client-assertion', { headers: { 'Content-Type': 'application/json' }, body: json({ clientId: 'postman-pkj', audience: '{{baseUrl}}/oauth/token' }), pre: adminOnly, tests: [status(200), "const a = pm.response.json();", "pm.test('private_key_jwt, ES256, our kid', () => { pm.expect(a.method).to.eql('private_key_jwt'); pm.expect(a.decoded.header.alg).to.eql('ES256'); pm.expect(a.decoded.header.kid).to.eql(pm.environment.get('pkjKid')); });", "pm.environment.set('clientAssertion', a.assertion);"] }),
+  req('private_key_jwt — token with the assertion', 'POST', '/oauth/token', { body: assertionBody(), pre: adminOnly, tests: [status(200), "pm.test('read scope', () => pm.expect(pm.response.json().scope).to.eql('read'));"] }),
+  withAuth(req('Its secret no longer works (pinned to private_key_jwt) → 401', 'POST', '/oauth/token', { body: { mode: 'urlencoded', urlencoded: [{ key: 'grant_type', value: 'client_credentials' }] }, pre: adminOnly, tests: [status(401), "pm.test('names the method', () => pm.expect(pm.response.json().error_description).to.match(/signed JWT/));"] }), { type: 'basic', basic: [{ key: 'username', value: 'postman-pkj' }, { key: 'password', value: '{{pkjSecret}}' }] }),
+  req('Delete the client', 'DELETE', '{{rootUrl}}/admin/api/oauth/clients/postman-pkj', { pre: adminOnly, tests: [status(204)] }),
+], 'Client authentication with signed JWTs instead of a secret on the wire: client_secret_jwt (HS256 over the secret) and private_key_jwt (the client\'s key pair).');
+
 const authFolder = folder('Auth mode', [
   req('Without credentials', 'GET', '/v1/employees/1', { headers: { 'X-Skip-Auth': '1' }, tests: ["const m = pm.environment.get('authMode');", "pm.test('401 unless auth mode is none', () => pm.response.to.have.status(m === 'none' ? 200 : 401));", "if (m !== 'none') pm.test('WWW-Authenticate', () => pm.expect(pm.response.headers.get('WWW-Authenticate')).to.be.a('string'));"] }),
   req('With credentials', 'GET', '/v1/employees/1', { tests: [status(200)] }),
@@ -472,7 +507,7 @@ const collection = {
     { listen: 'test', script: { type: 'text/javascript', exec: collectionTest } },
   ],
   variable: [{ key: 'cachedToken', value: '' }, { key: 'cachedTokenExp', value: '0' }],
-  item: [platform, oauth, authFolder, crud, query, pagination, chaos, files, soapFolder, sseFolder, llmFolder, mcpFolder, a2aFolder, graphqlFolder, odataFolder, s3Folder, misc],
+  item: [platform, oauth, assertions, authFolder, crud, query, pagination, chaos, files, soapFolder, sseFolder, llmFolder, mcpFolder, a2aFolder, graphqlFolder, odataFolder, s3Folder, misc],
 };
 
 const environment = {

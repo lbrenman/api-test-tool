@@ -442,7 +442,7 @@ async function generateOpenApi(ctx, req) {
   paths['/oauth/token'] = {
     post: {
       tags: ['OAuth'], operationId: 'oauthToken', summary: 'Token endpoint (client_credentials, authorization_code + PKCE, refresh_token)', security: [],
-      requestBody: { required: true, content: { 'application/x-www-form-urlencoded': { schema: { type: 'object', required: ['grant_type'], properties: { grant_type: { type: 'string', enum: ['client_credentials', 'authorization_code', 'refresh_token'] }, client_id: { type: 'string' }, client_secret: { type: 'string' }, scope: { type: 'string' }, code: { type: 'string' }, redirect_uri: { type: 'string' }, code_verifier: { type: 'string' }, refresh_token: { type: 'string' } } } } } },
+      requestBody: { required: true, content: { 'application/x-www-form-urlencoded': { schema: { type: 'object', required: ['grant_type'], properties: { grant_type: { type: 'string', enum: ['client_credentials', 'authorization_code', 'refresh_token'] }, client_id: { type: 'string' }, client_secret: { type: 'string' }, client_assertion_type: { type: 'string', const: 'urn:ietf:params:oauth:client-assertion-type:jwt-bearer', description: 'With client_assertion: client authentication with a signed JWT (RFC 7523), instead of a secret' }, client_assertion: { type: 'string', description: 'JWT with iss = sub = client_id, aud = the token endpoint (or issuer), exp at most 1 h away and a unique jti. Asymmetric algs (private_key_jwt) are checked against the client\'s jwks / jwks_uri; HS256/384/512 (client_secret_jwt) against its secret' }, scope: { type: 'string' }, code: { type: 'string' }, redirect_uri: { type: 'string' }, code_verifier: { type: 'string' }, refresh_token: { type: 'string' } } } } } },
       responses: {
         200: { description: 'Token', content: { 'application/json': { schema: { type: 'object', required: ['access_token', 'token_type', 'expires_in'], properties: { access_token: { type: 'string' }, token_type: { type: 'string' }, expires_in: { type: 'integer' }, scope: { type: 'string' }, refresh_token: { type: 'string' } } } } } },
         400: { description: 'OAuth error', content: { 'application/json': { schema: S('OAuthError') } } },
@@ -587,7 +587,9 @@ async function generateOpenApi(ctx, req) {
           type: 'object', description: 'RFC 7591 client metadata',
           properties: {
             redirect_uris: { type: 'array', items: { type: 'string', format: 'uri' }, description: 'Required for authorization_code. Loopback http redirects match on any port (RFC 8252); custom schemes are allowed.' },
-            token_endpoint_auth_method: { type: 'string', enum: ['client_secret_basic', 'client_secret_post', 'none'], default: 'client_secret_basic' },
+            token_endpoint_auth_method: { type: 'string', enum: ['client_secret_basic', 'client_secret_post', 'client_secret_jwt', 'private_key_jwt', 'none'], default: 'client_secret_basic', description: 'private_key_jwt needs jwks or jwks_uri and gets no client_secret' },
+            jwks: { type: 'object', description: 'JWK Set with the client\'s public keys (private_key_jwt)', properties: { keys: { type: 'array', items: { type: 'object', additionalProperties: true } } } },
+            jwks_uri: { type: 'string', format: 'uri', description: 'https URL of the client\'s JWK Set (instead of jwks)' },
             grant_types: { type: 'array', items: { type: 'string', enum: ['authorization_code', 'refresh_token', 'client_credentials'] }, default: ['authorization_code'] },
             response_types: { type: 'array', items: { type: 'string', enum: ['code'] } },
             scope: { type: 'string', description: 'Space-separated; must be within OAUTH_REGISTRATION_SCOPES (default: all of them)' },
@@ -605,6 +607,7 @@ async function generateOpenApi(ctx, req) {
             redirect_uris: { type: 'array', items: { type: 'string' } }, scope: { type: 'string' },
             client_name: { type: 'string' }, client_uri: { type: 'string' }, logo_uri: { type: 'string' },
             contacts: { type: 'array', items: { type: 'string' } }, software_id: { type: 'string' }, software_version: { type: 'string' },
+            jwks: { type: 'object', additionalProperties: true }, jwks_uri: { type: 'string', format: 'uri' },
           },
         },
       },

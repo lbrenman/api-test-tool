@@ -210,6 +210,18 @@
     const c = C.ctx.client || { clientId: 'demo-client', secret: 'demo-secret' };
     const fileId = extra.fileId || 'FILE_ID';
     const specId = extra.specId || 'SPEC_ID';
+    // A JWT client assertion built with openssl (RFC 7523), then the client_credentials grant with it.
+    const assertionScript = (alg) => [
+      `CLIENT_ID=${q(c.clientId)}`,
+      alg === 'HS256' ? `SECRET=${q(c.secret)}` : 'KEY=key.pem; KID=YOUR_KEY_ID',
+      `AUD=${q(C.ctx.tokenUrl)}`,
+      'b64() { openssl base64 -A | tr \'+/\' \'-_\' | tr -d \'=\'; }',
+      'NOW=$(date +%s)',
+      alg === 'HS256' ? 'HEADER=$(printf \'{"alg":"HS256","typ":"JWT"}\' | b64)' : 'HEADER=$(printf \'{"alg":"RS256","typ":"JWT","kid":"%s"}\' "$KID" | b64)',
+      'PAYLOAD=$(printf \'{"iss":"%s","sub":"%s","aud":"%s","iat":%s,"exp":%s,"jti":"%s"}\' "$CLIENT_ID" "$CLIENT_ID" "$AUD" "$NOW" "$((NOW + 300))" "$(openssl rand -hex 16)" | b64)',
+      alg === 'HS256' ? 'SIG=$(printf \'%s.%s\' "$HEADER" "$PAYLOAD" | openssl dgst -sha256 -hmac "$SECRET" -binary | b64)' : 'SIG=$(printf \'%s.%s\' "$HEADER" "$PAYLOAD" | openssl dgst -sha256 -sign "$KEY" -binary | b64)',
+      'curl -s -d grant_type=client_credentials -d client_assertion_type=urn:ietf:params:oauth:client-assertion-type:jwt-bearer -d "client_assertion=$HEADER.$PAYLOAD.$SIG" "$AUD"',
+    ].join('\n');
     const pw = C.ctx.adminPasswordRequired ? ['Admin API calls use the dashboard password: run `export ADMIN_PASSWORD=…` first.'] : [];
     const EMP_NS = 'urn:api-test-tool:soap:EmployeeService';
     const PROD_NS = 'urn:api-test-tool:soap:ProductService';
@@ -605,6 +617,24 @@
           ['Get a token for it', `curl -s -u 'read-only-app:SECRET' -d grant_type=client_credentials ${q(C.ctx.tokenUrl)}`],
           ['Add a redirect URI to an existing client', admin('PATCH', `/oauth/clients/${encodeURIComponent(c.clientId)}`, { json: { redirectUris: ['https://oauth.pstmn.io/v1/callback', 'http://localhost:8080/callback'] } })],
           ['Regenerate its secret', admin('PATCH', `/oauth/clients/${encodeURIComponent(c.clientId)}`, { json: { secret: '' } })],
+        ],
+      },
+      'auth.assertions': {
+        title: 'Signed client assertions (private_key_jwt)',
+        purpose: 'Client authentication with a signed JWT instead of a secret on the wire (RFC 7523): `private_key_jwt` signs with the client\'s private key and the server checks it against the client\'s public keys (`jwks` or `jwks_uri`); `client_secret_jwt` signs with HS256 over the client secret. Works at the token, introspection and revocation endpoints, inside any profile.',
+        steps: [
+          'Edit a client and press "Generate key pair" (or paste your own public key, a JWKS or a PEM, or a `jwks_uri`). Generating pins the client to `private_key_jwt`, so its secret stops working.',
+          'Download or copy the private key into your platform\'s OAuth connection (choose "private key JWT" / "JWT bearer client assertion"), with the token URL as audience.',
+          'Or press "Make assertion" here and paste the result as `client_assertion` (it is valid once, for 5 minutes).',
+          'The assertion needs `iss` = `sub` = client id, `aud` = the token URL (or the issuer), `exp` at most an hour away and a unique `jti`. The error description names what is wrong: audience, expiry, a replayed `jti`, an unknown `kid`, or the wrong method for the client.',
+          'A `jwks_uri` must be https on a public address; set `OAUTH_FETCH_PRIVATE` to allow private or loopback hosts in a lab.',
+          ...pw,
+        ],
+        curls: [
+          ['Generate a key pair for a client (keeps the private key for the helper below)', admin('POST', `/oauth/clients/${encodeURIComponent(c.clientId)}/keypair`, { json: { alg: 'RS256' } })],
+          ['Let the server sign an assertion for you', admin('POST', '/auth/client-assertion', { json: { clientId: c.clientId } })],
+          ['client_secret_jwt: build an HS256 assertion with openssl and get a token', assertionScript('HS256')],
+          ['private_key_jwt: sign an RS256 assertion with your key.pem and get a token', assertionScript('RS256')],
         ],
       },
       'auth.users': {

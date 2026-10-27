@@ -190,6 +190,22 @@ module.exports = function adminRouter(ctx, { adminAuth, filesApi }) {
     const { registrationTokenHash, ...c } = doc; // eslint-disable-line no-unused-vars
     res.json(c);
   });
+  // A key pair for private_key_jwt: the public key joins the client's jwks; the private key is kept (and shown here,
+  // like client secrets) so the assertion helper below and a demo client can sign with it.
+  r.post('/oauth/clients/:id/keypair', async (req, res) => {
+    const out = await oauth.generateClientKey(req.params.id, req.body?.alg || 'RS256');
+    if (!out) throw new HttpError(404, `No OAuth client ${req.params.id}`);
+    if (req.body?.use !== false) await oauth.updateClient(req.params.id, { tokenEndpointAuthMethod: 'private_key_jwt' });
+    res.status(201).json(out);
+  });
+  // A signed client_assertion (RFC 7523) for a client, ready for the token endpoint: private_key_jwt with the
+  // generated key pair, or client_secret_jwt (HS256 over the secret).
+  r.post('/auth/client-assertion', async (req, res) => {
+    const b = req.body || {};
+    const out = await oauth.makeAssertion(req, b.clientId, { method: b.method, audience: b.audience, lifetime: b.lifetime });
+    if (!out) throw new HttpError(404, `No OAuth client ${b.clientId}`);
+    res.json({ ...out, tokenEndpoint: `${baseUrl.root(req)}/oauth/token` });
+  });
   // Bulk delete of dynamically registered clients (?unused=true: only those that never obtained a token).
   r.delete('/oauth/registered', async (req, res) => res.json({ deleted: await oauth.removeRegisteredClients({ unusedOnly: req.query.unused === 'true' }) }));
   r.delete('/oauth/clients/:id', async (req, res) => {
