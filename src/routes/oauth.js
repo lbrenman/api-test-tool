@@ -3,7 +3,7 @@
 // authorize (login/consent page), introspect (RFC 7662), revoke (RFC 7009), metadata (RFC 8414), JWKS, and
 // dynamic client registration (RFC 7591, with read/delete from RFC 7592) at /oauth/register.
 const express = require('express');
-const { OAuthError, OAuthService, clientIp, ASSERTION_ALGS } = require('../services/oauth');
+const { OAuthError, OAuthService, clientIp, ASSERTION_ALGS, TLS_METHODS } = require('../services/oauth');
 const { verify } = require('../middleware/body');
 const { CIMD_PREFIX } = require('../services/cimd');
 
@@ -233,6 +233,7 @@ module.exports = function oauthRouter(ctx) {
 
   function metadata(req) {
     const base = baseUrl.root(req);
+    const tls = settings.get('mtlsEnabled') ? TLS_METHODS : [];
     return {
       issuer: oauth.issuer(req),
       authorization_endpoint: `${base}/oauth/authorize`,
@@ -242,15 +243,20 @@ module.exports = function oauthRouter(ctx) {
       jwks_uri: `${base}/.well-known/jwks.json`,
       response_types_supported: ['code'],
       grant_types_supported: ['client_credentials', 'authorization_code', 'refresh_token'],
-      token_endpoint_auth_methods_supported: ['client_secret_basic', 'client_secret_post', 'client_secret_jwt', 'private_key_jwt', 'none'],
+      token_endpoint_auth_methods_supported: ['client_secret_basic', 'client_secret_post', 'client_secret_jwt', 'private_key_jwt', ...tls, 'none'],
       token_endpoint_auth_signing_alg_values_supported: ASSERTION_ALGS,
-      introspection_endpoint_auth_methods_supported: ['client_secret_basic', 'client_secret_post', 'client_secret_jwt', 'private_key_jwt'],
+      introspection_endpoint_auth_methods_supported: ['client_secret_basic', 'client_secret_post', 'client_secret_jwt', 'private_key_jwt', ...tls],
       introspection_endpoint_auth_signing_alg_values_supported: ASSERTION_ALGS,
-      revocation_endpoint_auth_methods_supported: ['client_secret_basic', 'client_secret_post', 'client_secret_jwt', 'private_key_jwt', 'none'],
+      revocation_endpoint_auth_methods_supported: ['client_secret_basic', 'client_secret_post', 'client_secret_jwt', 'private_key_jwt', ...tls, 'none'],
       revocation_endpoint_auth_signing_alg_values_supported: ASSERTION_ALGS,
       code_challenge_methods_supported: ['S256', 'plain'],
       ...(settings.get('oauthRegistration') !== 'off' ? { registration_endpoint: `${base}/oauth/register` } : {}),
       ...(settings.get('oauthCimd') ? { client_id_metadata_document_supported: true } : {}),
+      // RFC 8705: client certificate authentication and certificate-bound tokens, on the mTLS listener's endpoints.
+      ...(settings.get('mtlsEnabled') ? {
+        tls_client_certificate_bound_access_tokens: true,
+        mtls_endpoint_aliases: { token_endpoint: `${baseUrl.mtls(req)}/oauth/token`, introspection_endpoint: `${baseUrl.mtls(req)}/oauth/introspect`, revocation_endpoint: `${baseUrl.mtls(req)}/oauth/revoke` },
+      } : {}),
       scopes_supported: [...new Set(['read', 'write', ...oauth.envClients().flatMap((c) => c.scopes), ...oauth.registrationScopes()])],
       id_token_signing_alg_values_supported: [settings.get('jwtAlg')],
       subject_types_supported: ['public'],

@@ -1,9 +1,11 @@
 'use strict';
 // Built-in OAuth 2.0 authorization server logic: clients, users, codes (PKCE), tokens, refresh, introspection, revocation.
 // Clients authenticate with a secret (Basic or form), or with a signed JWT (RFC 7523): private_key_jwt against the
-// client's public keys (jwks or jwks_uri), client_secret_jwt with an HMAC over its secret.
+// client's public keys (jwks or jwks_uri), client_secret_jwt with an HMAC over its secret; or with a client certificate on the
+// mTLS listener (RFC 8705: tls_client_auth, self_signed_tls_client_auth), which also binds its tokens to that certificate.
 const crypto = require('node:crypto');
 const { fetchJson, FetchRefused } = require('../util/safeFetch');
+const { clientCert, certNames } = require('../util/clientCert');
 
 class OAuthError extends Error {
   constructor(error, description, status = 400, headers = undefined) {
@@ -16,7 +18,11 @@ class OAuthError extends Error {
 }
 
 const GRANTS = ['authorization_code', 'refresh_token', 'client_credentials'];
-const AUTH_METHODS = ['client_secret_basic', 'client_secret_post', 'client_secret_jwt', 'private_key_jwt', 'none'];
+const AUTH_METHODS = ['client_secret_basic', 'client_secret_post', 'client_secret_jwt', 'private_key_jwt', 'tls_client_auth', 'self_signed_tls_client_auth', 'none'];
+const TLS_METHODS = ['tls_client_auth', 'self_signed_tls_client_auth'];
+// RFC 8705 2.1.2: how a tls_client_auth client's certificate is matched (exactly one per client).
+const TLS_MATCH = { subject_dn: 'tls_client_auth_subject_dn', san_dns: 'tls_client_auth_san_dns', san_uri: 'tls_client_auth_san_uri', san_ip: 'tls_client_auth_san_ip', san_email: 'tls_client_auth_san_email' };
+const dnSet = (dn) => String(dn || '').split(/[,\n]/).map((p) => p.trim()).filter(Boolean).map((p) => { const i = p.indexOf('='); return `${p.slice(0, i).trim().toUpperCase()}=${p.slice(i + 1).trim()}`; }).sort().join(',');
 const JWT_METHODS = ['client_secret_jwt', 'private_key_jwt'];
 const JWT_BEARER = 'urn:ietf:params:oauth:client-assertion-type:jwt-bearer';
 const KEY_ALGS = ['RS256', 'RS384', 'RS512', 'PS256', 'PS384', 'PS512', 'ES256', 'ES384', 'ES512', 'EdDSA'];
@@ -37,7 +43,7 @@ function clientIp(req) {
 }
 
 // Claims set by the server itself; a user attribute may not use these names.
-const RESERVED_CLAIMS = ['iss', 'sub', 'aud', 'exp', 'nbf', 'iat', 'jti', 'scope', 'client_id', 'token_use', 'azp', 'preferred_username'];
+const RESERVED_CLAIMS = ['iss', 'sub', 'aud', 'exp', 'nbf', 'iat', 'jti', 'scope', 'client_id', 'token_use', 'azp', 'preferred_username', 'cnf'];
 
 function safeEq(a, b) {
   const x = Buffer.from(String(a ?? ''));
@@ -105,7 +111,7 @@ class OAuthService {
     return (await this.clients()).find((c) => c.clientId === id) || null;
   }
 
-  async addClient({ clientId, secret, scopes, redirectUris, jwks, jwksUri, tokenEndpointAuthMethod }) {
+  async addClient({ clientId, secret, scopes, redirectUris, jwks, jwksUri, tokenEndpointAuthMethod, tlsClientAuth }) {
     if (!clientId || !/^[A-Za-z0-9._-]{3,64}$/.test(clientId)) throw new OAuthError('invalid_request', 'clientId must be 3-64 chars [A-Za-z0-9._-]');
     const doc = await this.applyKeyPatch({
       clientId,
@@ -113,7 +119,7 @@ class OAuthService {
       scopes: (Array.isArray(scopes) ? scopes : String(scopes || 'read write').split(/[\s,]+/)).filter(Boolean),
       redirectUris: OAuthService.checkRedirectUris((Array.isArray(redirectUris) ? redirectUris : String(redirectUris || '').split(/[\s,]+/)).filter(Boolean)),
       createdAt: new Date().toISOString(),
-    }, { jwks, jwksUri, tokenEndpointAuthMethod });
+    }, { jwks, jwksUri, tokenEndpointAuthMethod, tlsClientAuth });
     await this.ctx.repo.put('oauth_clients', clientId, doc);
     return doc;
   }
@@ -145,6 +151,20 @@ class OAuthService {
       if (m && !AUTH_METHODS.includes(m)) throw new OAuthError('invalid_request', `tokenEndpointAuthMethod must be one of ${AUTH_METHODS.join(', ')}`);
       if (m === 'none' && !doc.public) throw new OAuthError('invalid_request', 'Only a registered public client uses "none"');
       if (m) doc.tokenEndpointAuthMethod = m; else delete doc.tokenEndpointAuthMethod;
+    }
+    if (patch.tlsClientAuth !== undefined) {
+      const t = patch.tlsClientAuth;
+      if (!t || !t.value) delete doc.tlsClientAuth;
+      else {
+        if (!TLS_MATCH[t.type]) throw new OAuthError('invalid_request', `tlsClientAuth.type must be one of ${Object.keys(TLS_MATCH).join(', ')}`);
+        doc.tlsClientAuth = { type: t.type, value: String(t.value).trim().slice(0, 500) };
+      }
+    }
+    if (doc.tokenEndpointAuthMethod === 'tls_client_auth' && !doc.tlsClientAuth) {
+      throw new OAuthError('invalid_request', 'tls_client_auth needs the certificate to expect: tlsClientAuth {type: subject_dn | san_dns | san_uri | san_ip | san_email, value}');
+    }
+    if (doc.tokenEndpointAuthMethod === 'self_signed_tls_client_auth' && !doc.jwks?.keys?.some((k) => k.x5c?.length) && !doc.jwksUri) {
+      throw new OAuthError('invalid_request', 'self_signed_tls_client_auth needs the client\'s certificate in its jwks (paste the certificate PEM) or a jwksUri');
     }
     if (doc.tokenEndpointAuthMethod === 'private_key_jwt' && !doc.jwks?.keys?.length && !doc.jwksUri) {
       throw new OAuthError('invalid_request', 'private_key_jwt needs the client\'s public keys: set jwks (or generate a key pair) or jwksUri');
@@ -304,6 +324,13 @@ class OAuthService {
       jwksUri = u.toString();
     }
     if (authMethod === 'private_key_jwt' && !jwks && !jwksUri) throw bad('private_key_jwt needs jwks or jwks_uri');
+    let tlsClientAuth;
+    if (authMethod === 'tls_client_auth') {
+      const given = Object.entries(TLS_MATCH).filter(([, k]) => typeof meta[k] === 'string' && meta[k]);
+      if (given.length !== 1) throw bad(`tls_client_auth needs exactly one of ${Object.values(TLS_MATCH).join(', ')}`);
+      tlsClientAuth = { type: given[0][0], value: meta[given[0][1]].slice(0, 500) };
+    }
+    if (authMethod === 'self_signed_tls_client_auth' && !jwks?.keys.some((k) => k.x5c?.length) && !jwksUri) throw bad('self_signed_tls_client_auth needs jwks with the certificate (x5c) or jwks_uri');
     const grantTypes = list(meta.grant_types, 'grant_types') || ['authorization_code'];
     const unknownGrant = grantTypes.find((g) => !GRANTS.includes(g));
     if (unknownGrant) throw bad(`Unsupported grant type "${unknownGrant}" (supported: ${GRANTS.join(', ')})`);
@@ -356,7 +383,7 @@ class OAuthService {
     const regToken = crypto.randomBytes(32).toString('base64url');
     const doc = {
       clientId: `dcr-${crypto.randomBytes(12).toString('base64url')}`,
-      secret: authMethod === 'none' || authMethod === 'private_key_jwt' ? '' : crypto.randomBytes(24).toString('base64url'),
+      secret: ['none', 'private_key_jwt', ...TLS_METHODS].includes(authMethod) ? '' : crypto.randomBytes(24).toString('base64url'),
       scopes,
       redirectUris,
       source: 'registered',
@@ -364,6 +391,7 @@ class OAuthService {
       tokenEndpointAuthMethod: authMethod,
       ...(jwks ? { jwks } : {}),
       ...(jwksUri ? { jwksUri } : {}),
+      ...(tlsClientAuth ? { tlsClientAuth } : {}),
       grantTypes,
       responseTypes,
       clientName: str('client_name', 200),
@@ -396,7 +424,7 @@ class OAuthService {
       registration_client_uri: `${base}/oauth/register/${encodeURIComponent(client.clientId)}`,
     };
     if (registrationAccessToken) out.registration_access_token = registrationAccessToken;
-    for (const [k, v] of [['client_name', client.clientName], ['client_uri', client.clientUri], ['logo_uri', client.logoUri], ['contacts', client.contacts], ['software_id', client.softwareId], ['software_version', client.softwareVersion], ['jwks', client.jwks], ['jwks_uri', client.jwksUri]]) {
+    for (const [k, v] of [['client_name', client.clientName], ['client_uri', client.clientUri], ['logo_uri', client.logoUri], ['contacts', client.contacts], ['software_id', client.softwareId], ['software_version', client.softwareVersion], ['jwks', client.jwks], ['jwks_uri', client.jwksUri], ...(client.tlsClientAuth ? [[TLS_MATCH[client.tlsClientAuth.type], client.tlsClientAuth.value]] : [])]) {
       if (v !== undefined) out[k] = v;
     }
     return out;
@@ -606,6 +634,7 @@ class OAuthService {
     if (!id) throw new OAuthError('invalid_client', 'Client authentication required', 401);
     const client = await this.client(id, req);
     if (!client) throw new OAuthError('invalid_client', 'Unknown client', 401);
+    if (TLS_METHODS.includes(client.tokenEndpointAuthMethod)) return this.authenticateTls(req, client);
     if (JWT_METHODS.includes(client.tokenEndpointAuthMethod)) {
       throw new OAuthError('invalid_client', `This client authenticates with a signed JWT (${client.tokenEndpointAuthMethod}): send client_assertion_type=${JWT_BEARER} and client_assertion`, 401);
     }
@@ -658,7 +687,7 @@ class OAuthService {
       key = jose.createLocalJWKSet(jwks);
     }
     const root = this.ctx.baseUrl.root(req);
-    const audiences = [...new Set([this.issuer(req), `${root}/oauth/token`, `${this.ctx.baseUrl(req)}/oauth/token`, `${root}${req.path}`])];
+    const audiences = [...new Set([this.issuer(req), `${root}/oauth/token`, `${this.ctx.baseUrl(req)}/oauth/token`, `${root}${req.path}`, `${this.ctx.baseUrl.mtls(req)}/oauth/token`])];
     let payload;
     try {
       ({ payload } = await jose.jwtVerify(jwt, key, { algorithms: [header.alg], audience: audiences, clockTolerance: 30, requiredClaims: ['exp', 'jti'] }));
@@ -672,6 +701,28 @@ class OAuthService {
     const seen = `${id}:${payload.jti}`;
     if (this.assertionIds.has(seen)) throw fail('This client_assertion (jti) was already used');
     this.assertionIds.set(seen, payload.exp * 1000 + 60000);
+    return { client, public: false, method };
+  }
+
+  /** RFC 8705 client authentication with the TLS client certificate (the request must come in on the mTLS listener). */
+  async authenticateTls(req, client) {
+    const fail = (d) => new OAuthError('invalid_client', d, 401);
+    const method = client.tokenEndpointAuthMethod;
+    if (!req.socket?.encrypted) throw fail(`This client authenticates with a client certificate (${method}): call ${this.ctx.baseUrl.mtls(req)}/oauth/token on the mTLS listener`);
+    const cert = clientCert(req);
+    if (!cert) throw fail('This client authenticates with a client certificate, but the TLS handshake carried none');
+    if (method === 'tls_client_auth') {
+      if (!cert.authorized) throw fail(`The client certificate is not trusted: ${cert.error}`);
+      const { type, value } = client.tlsClientAuth || {};
+      const ok = type === 'subject_dn' ? dnSet(cert.subject) === dnSet(value)
+        : type === 'san_dns' ? cert.sans.dns.includes(value) : type === 'san_uri' ? cert.sans.uri.includes(value)
+          : type === 'san_ip' ? cert.sans.ip.includes(value) : type === 'san_email' ? cert.sans.email.includes(value) : false;
+      if (!ok) throw fail(`The client certificate (${cert.subject}${certNames(cert).length > 1 ? `; ${certNames(cert).slice(1).join(', ')}` : ''}) does not match this client's ${TLS_MATCH[type] || 'expected certificate'} "${value}"`);
+    } else {
+      const jwks = await this.clientJwks(client);
+      const match = jwks?.keys?.some((k) => Array.isArray(k.x5c) && k.x5c[0] && Buffer.from(k.x5c[0], 'base64').equals(cert.raw));
+      if (!match) throw fail('The client certificate is not one registered for this client (its jwks x5c)');
+    }
     return { client, public: false, method };
   }
 
@@ -703,7 +754,9 @@ class OAuthService {
     if (typeof input === 'string' && /-----BEGIN /.test(input)) {
       let pub;
       try { pub = crypto.createPublicKey(input); } catch (e) { throw new OAuthError('invalid_request', `Not a PEM public key or certificate: ${e.message}`); }
-      keys = [pub.export({ format: 'jwk' })];
+      // A certificate keeps its DER as x5c, so self_signed_tls_client_auth can match it (RFC 8705 2.2).
+      const x5c = /-----BEGIN CERTIFICATE-----/.test(input) ? [new crypto.X509Certificate(input).raw.toString('base64')] : undefined;
+      keys = [{ ...pub.export({ format: 'jwk' }), ...(x5c ? { x5c } : {}) }];
     } else {
       let v = input;
       if (typeof v === 'string') { try { v = JSON.parse(v); } catch { throw new OAuthError('invalid_request', 'jwks must be a JWK Set (JSON), a JWK or a PEM public key'); } }
@@ -776,16 +829,19 @@ class OAuthService {
     if (resource === undefined || resource === null || resource === '') return undefined;
     const r = Array.isArray(resource) ? resource[0] : String(resource);
     const base = this.ctx.baseUrl.root(req); // any resource on this server, including inside a profile (/p/<name>/mcp)
+    const bases = [base, ...(this.ctx.settings.get('mtlsEnabled') ? [this.ctx.baseUrl.mtls(req)] : [])];
     let ok = false;
-    try { const u = new URL(r); ok = !u.hash && (r === base || r.startsWith(`${base}/`)); } catch { ok = false; }
+    try { const u = new URL(r); ok = !u.hash && bases.some((b) => r === b || r.startsWith(`${b}/`)); } catch { ok = false; }
     if (!ok) throw new OAuthError('invalid_target', `resource must be an absolute URL on this server (${base}/…)`);
     return r;
   }
 
   async issueAccessToken(req, { client, scopes, subject, user, refresh, resource }) {
     const ttl = this.ctx.settings.get('oauthTokenTtl');
+    // RFC 8705 3: a token requested with a client certificate is bound to it (cnf.x5t#S256), and only works with it.
+    const cert = clientCert(req);
     const token = await this.ctx.keys.sign(
-      { ...this.userClaims(user), client_id: client.clientId, scope: scopes.join(' '), token_use: 'access' },
+      { ...this.userClaims(user), client_id: client.clientId, scope: scopes.join(' '), token_use: 'access', ...(cert ? { cnf: { 'x5t#S256': cert.x5tS256 } } : {}) },
       { ttl, issuer: this.issuer(req), audience: resource && resource !== this.audience() ? [this.audience(), resource] : this.audience(), subject: subject || client.clientId },
     );
     await this.markUsed(client).catch(() => {}); // keeps a registered client from expiring (OAUTH_REGISTRATION_TTL_DAYS)
@@ -865,4 +921,4 @@ class OAuthService {
   }
 }
 
-module.exports = { OAuthService, OAuthError, safeEq, clientIp, RESERVED_CLAIMS, AUTH_METHODS, ASSERTION_ALGS: [...KEY_ALGS, ...SECRET_ALGS], JWT_BEARER };
+module.exports = { OAuthService, OAuthError, safeEq, clientIp, RESERVED_CLAIMS, AUTH_METHODS, TLS_METHODS, TLS_MATCH, ASSERTION_ALGS: [...KEY_ALGS, ...SECRET_ALGS], JWT_BEARER };

@@ -43,7 +43,8 @@ const DEFS = [
   { key: 'dateTzOffset', env: 'DATE_TZ_OFFSET', def: '+00:00', type: 'string', section: 'dates', pattern: /^[+-]\d{2}:\d{2}$/ },
 
   // ---- auth ----
-  { key: 'authMode', env: 'AUTH_MODE', def: 'none', type: 'enum', options: ['none', 'apikey', 'basic', 'bearer', 'jwt', 'oauth2', 'hmac'], section: 'auth' },
+  { key: 'authMode', env: 'AUTH_MODE', def: 'none', type: 'enum', options: ['none', 'apikey', 'basic', 'bearer', 'jwt', 'oauth2', 'hmac', 'mtls'], section: 'auth' },
+  { key: 'mtlsAllowedSubjects', env: 'MTLS_ALLOWED_SUBJECTS', def: '', type: 'string', section: 'auth', desc: 'AUTH_MODE=mtls: client certificates accepted, as a comma-separated list of common names or SAN values (DNS name, URI such as spiffe://lab/agent, email). Blank = any certificate issued by a trusted CA' },
   { key: 'apiKey', env: 'API_KEY', def: 'demo-key', type: 'string', section: 'auth', secret: true },
   { key: 'apiKeyName', env: 'API_KEY_NAME', def: 'X-API-Key', type: 'string', section: 'auth' },
   { key: 'apiKeyIn', env: 'API_KEY_IN', def: 'header', type: 'enum', options: ['header', 'query'], section: 'auth' },
@@ -71,6 +72,12 @@ const DEFS = [
   { key: 'oauthRegistrationGrants', env: 'OAUTH_REGISTRATION_GRANTS', def: 'authorization_code refresh_token client_credentials', type: 'string', section: 'oauth', desc: 'Grant types an open registration may ask for (space separated). The default includes client_credentials, so machine clients can register themselves; that also lets anyone who finds /oauth/register mint tokens without a user signing in. Use authorization_code refresh_token to lock that down. With OAUTH_REGISTRATION=token every grant is allowed' },
   { key: 'oauthRegistrationRate', env: 'OAUTH_REGISTRATION_RATE', def: 20, type: 'int', section: 'oauth', min: 0, max: 100000, desc: 'Open registrations allowed per client IP per hour (0 = no limit); beyond it 429 with Retry-After' },
   { key: 'oauthRegistrationTtlDays', env: 'OAUTH_REGISTRATION_TTL_DAYS', def: 30, type: 'int', section: 'oauth', min: 0, max: 3650, desc: 'Registered clients that have not obtained a token for this many days are deleted (0 = keep forever)' },
+  { key: 'mtlsEnabled', env: 'MTLS_ENABLED', def: false, type: 'bool', section: 'mtls', restart: true, desc: 'Run a second, TLS listener that asks for client certificates (mutual TLS). Needed for AUTH_MODE=mtls and for OAuth client certificate authentication and certificate-bound tokens (RFC 8705)' },
+  { key: 'mtlsPort', env: 'MTLS_PORT', def: 8443, type: 'int', section: 'mtls', restart: true, desc: 'Port of the mTLS listener' },
+  { key: 'mtlsPublicUrl', env: 'MTLS_PUBLIC_URL', def: '', type: 'string', section: 'mtls', desc: 'Public URL of the mTLS listener, for links and the OAuth metadata (blank = https://<public host>:<MTLS_PORT>)' },
+  { key: 'mtlsCertFile', env: 'MTLS_CERT_FILE', def: '', type: 'string', section: 'mtls', restart: true, desc: 'PEM certificate (chain) the mTLS listener presents. Blank = one issued by the lab CA for the public host name and localhost (clients then trust the lab CA, or skip verification)' },
+  { key: 'mtlsKeyFile', env: 'MTLS_KEY_FILE', def: '', type: 'string', section: 'mtls', restart: true, desc: 'PEM private key for MTLS_CERT_FILE' },
+  { key: 'mtlsTrustedCas', env: 'MTLS_TRUSTED_CAS', def: '', type: 'string', section: 'mtls', restart: true, desc: 'More CA certificates (PEM, concatenated) whose client certificates are trusted, besides the lab CA, e.g. your platform\'s own CA' },
   { key: 'oauthCimd', env: 'OAUTH_CIMD', def: true, type: 'bool', section: 'oauth', desc: 'Accept client ID metadata documents (CIMD): a client may use an https URL as its client_id, and the server fetches its metadata (name, redirect URIs, auth method) from that URL instead of a registration. MCP clients use this. Turn dynamic registration off (OAUTH_REGISTRATION=off) to make sure a client really uses CIMD' },
   { key: 'oauthFetchPrivate', env: 'OAUTH_FETCH_PRIVATE', def: false, type: 'bool', section: 'oauth', desc: 'Let the OAuth server fetch client documents (a client\'s jwks_uri, CIMD client metadata) from private, loopback and link-local addresses and over plain http. Off on a public server, so a client cannot make it call your internal network' },
 

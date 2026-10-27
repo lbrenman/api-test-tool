@@ -133,7 +133,8 @@ async function generateAdminOpenApi(ctx, req) {
     responses: { ...ok('Auth configuration', anyObj('profile, apiBase (where the mock APIs are), mode, apiKey, basic, bearer, jwt, hmac, s3 (S3 API endpoint, bucket, region and keys), oauth, clients, users')), ...AUTHED, ...NF },
   }));
   const keyFields = {
-    tokenEndpointAuthMethod: { type: 'string', enum: ['client_secret_basic', 'client_secret_post', 'client_secret_jwt', 'private_key_jwt'], description: 'Pin how the client authenticates. Unset = secret (Basic or form) or a signed assertion. private_key_jwt needs jwks or jwksUri' },
+    tokenEndpointAuthMethod: { type: 'string', enum: ['client_secret_basic', 'client_secret_post', 'client_secret_jwt', 'private_key_jwt', 'tls_client_auth', 'self_signed_tls_client_auth'], description: 'Pin how the client authenticates. Unset = secret (Basic or form) or a signed assertion. private_key_jwt needs jwks or jwksUri; tls_client_auth needs tlsClientAuth; self_signed_tls_client_auth needs the certificate in jwks (both on the mTLS listener)' },
+    tlsClientAuth: { type: ['object', 'null'], description: 'tls_client_auth (RFC 8705): the client certificate to expect. null removes it', properties: { type: { type: 'string', enum: ['subject_dn', 'san_dns', 'san_uri', 'san_ip', 'san_email'] }, value: { type: 'string' } } },
     jwks: { description: 'Public keys for private_key_jwt: a JWK Set, a JWK, or a PEM public key or certificate. Private key material is refused. "" removes them', anyOf: [{ type: 'object', additionalProperties: true }, { type: 'string' }] },
     jwksUri: { type: 'string', format: 'uri', description: 'Where to fetch the public keys instead (https; private addresses only with OAUTH_FETCH_PRIVATE). "" removes it' },
   };
@@ -172,6 +173,27 @@ async function generateAdminOpenApi(ctx, req) {
   }));
   add(`${A}/oauth/client-metadata-cache`, 'delete', op('Auth', 'clearClientMetadataCache', 'Forget the cached fetched metadata documents, so the next use of each URL client_id fetches it again', {
     responses: { ...noContent('Cleared'), ...AUTHED },
+  }));
+  // ---- mutual TLS
+  const certId = pathParam('id', 'Certificate id (its serial number)');
+  const certOut = anyObj('id, cn, subject, issuer, serialNumber, validFrom, validTo, subjectAltName, fingerprint256, x5t#S256, keyType, certPem (and keyPem when issued or fetched one by one)');
+  add(`${A}/mtls`, 'get', op('mTLS', 'getMtls', 'The mTLS listener (enabled, listening, URL), the lab CA, the listener\'s certificate and the client certificates issued (without private keys)', {
+    responses: { ...ok('mTLS state', anyObj('enabled, listening, port, url, customServerCert, trustedCas, allowedSubjects, ca {pem, subject, …}, server, certs')), ...AUTHED },
+  }));
+  add(`${A}/mtls/ca.pem`, 'get', op('mTLS', 'getLabCa', 'The lab CA certificate (PEM): trust it for the listener\'s certificate; it issues the client certificates', {
+    responses: { 200: { description: 'PEM', content: { 'application/x-pem-file': { schema: { type: 'string' } } } }, ...AUTHED },
+  }));
+  add(`${A}/mtls/certs`, 'post', op('mTLS', 'issueClientCert', 'Issue a client certificate from the lab CA (key pair generated here). The reply includes certPem and keyPem.', {
+    requestBody: body(obj({ cn: { type: 'string', maxLength: 64 }, o: { type: 'string' }, ou: { type: 'string' }, san: obj({ dns: { type: 'array', items: { type: 'string' } }, uri: { type: 'array', items: { type: 'string' } }, email: { type: 'array', items: { type: 'string' } }, ip: { type: 'array', items: { type: 'string' } } }), days: { type: 'integer', minimum: 1, maximum: 825, default: 365 }, keyType: { type: 'string', enum: ['ec', 'rsa'], default: 'ec' }, label: { type: 'string' } }, ['cn']), { cn: 'fusion-client', san: { uri: ['spiffe://lab/fusion'] } }),
+    responses: { ...created('Issued certificate', certOut), ...BAD, ...AUTHED },
+  }));
+  add(`${A}/mtls/certs/{id}`, 'get', op('mTLS', 'getClientCert', 'One issued certificate, with its private key', { parameters: [certId], responses: { ...ok('Certificate', certOut), ...AUTHED, ...NF } }));
+  add(`${A}/mtls/certs/{id}`, 'delete', op('mTLS', 'deleteClientCert', 'Forget an issued certificate (it stays valid until it expires: there is no revocation list)', { parameters: [certId], responses: { ...noContent('Deleted'), ...AUTHED, ...NF } }));
+  add(`${A}/mtls/certs/{id}/cert.pem`, 'get', op('mTLS', 'downloadClientCert', 'The certificate (PEM)', { parameters: [certId], responses: { 200: { description: 'PEM', content: { 'application/x-pem-file': { schema: { type: 'string' } } } }, ...AUTHED, ...NF } }));
+  add(`${A}/mtls/certs/{id}/key.pem`, 'get', op('mTLS', 'downloadClientKey', 'The private key (PKCS#8 PEM)', { parameters: [certId], responses: { 200: { description: 'PEM', content: { 'application/x-pem-file': { schema: { type: 'string' } } } }, ...AUTHED, ...NF } }));
+  add(`${A}/mtls/certs/{id}/p12`, 'post', op('mTLS', 'downloadClientP12', 'Key, certificate and lab CA as a PKCS#12 (.p12) file protected by the password (AES-256, HMAC-SHA256)', {
+    parameters: [certId], requestBody: body(obj({ password: { type: 'string', minLength: 4 } }, ['password']), { password: 'changeit' }),
+    responses: { 200: { description: 'PKCS#12', content: { 'application/x-pkcs12': { schema: { type: 'string', format: 'binary' } } } }, ...BAD, ...AUTHED, ...NF },
   }));
   add(`${A}/oauth/registered`, 'delete', op('Auth', 'deleteRegisteredClients', 'Delete the clients that registered themselves through /oauth/register (all of them, or with unused=true only those that never obtained a token)', {
     parameters: [{ name: 'unused', in: 'query', schema: { type: 'boolean' }, description: 'Only delete registrations that never obtained a token' }],
@@ -402,6 +424,7 @@ async function generateAdminOpenApi(ctx, req) {
       { name: 'Files', description: 'Manage the shared file pool' },
       { name: 'Auth', description: '/v1 auth configuration and OAuth clients' },
       { name: 'Profiles', description: 'Settings profiles: /p/<name>/… runs a request with the profile\'s auth mode, chaos, headers, rate limit and formats, so several setups can be used side by side' },
+      { name: 'mTLS', description: 'Mutual TLS: the lab CA, client certificates (PEM and PKCS#12) and the mTLS listener (MTLS_ENABLED)' },
       { name: 'Inspector', description: 'Captured requests (webhook-style catch-all)' },
       { name: 'Webhooks', description: 'Outgoing webhooks: POST to your URL when mock data is created, updated or deleted, or a file is uploaded, downloaded or deleted, through any protocol' },
       { name: 'Tester', description: 'Contract tester for APIs you implemented (OpenAPI, WSDL/SOAP, AsyncAPI/WebSocket)' },

@@ -193,7 +193,7 @@ const cimdFolder = folder('Client ID metadata documents (CIMD)', [
     pre: ["pm.environment.set('rootUrl', pm.environment.get('baseUrl').replace(/\\/p\\/[^/]+\\/?$/, ''));"],
     tests: [status(200), "pm.test('client_id_metadata_document_supported', () => pm.expect(pm.response.json().client_id_metadata_document_supported).to.eql(true));"],
   }),
-  req('The hosted demo document', 'GET', `${cimdId}`, { tests: [status(200), "const d = pm.response.json();", "pm.test('client_id is its own URL', () => pm.expect(d.client_id).to.eql(pm.environment.get('rootUrl') + '/oauth/client-metadata/demo.json'));", "pm.test('public client', () => pm.expect(d.token_endpoint_auth_method).to.eql('none'));", "pm.environment.set('cimdId', d.client_id); pm.environment.set('cimdRedirect', d.redirect_uris[0]);"] }),
+  req('The hosted demo document', 'GET', `${cimdId}`, { tests: [status(200), "const d = pm.response.json();", "pm.test('client_id is its own URL', () => pm.expect(d.client_id).to.match(/^https?:\\/\\/[^/]+\\/oauth\\/client-metadata\\/demo\\.json$/));", "pm.test('public client', () => pm.expect(d.token_endpoint_auth_method).to.eql('none'));", "pm.environment.set('cimdId', d.client_id); pm.environment.set('cimdRedirect', d.redirect_uris[0]);"] }),
   req('Sign-in page for the URL client_id', 'GET', '/oauth/authorize?response_type=code&client_id={{cimdIdEnc}}&redirect_uri={{cimdRedirectEnc}}&scope=read', {
     pre: ["pm.environment.set('cimdIdEnc', encodeURIComponent(pm.environment.get('cimdId'))); pm.environment.set('cimdRedirectEnc', encodeURIComponent(pm.environment.get('cimdRedirect')));"],
     tests: [status(200), "pm.test('names the document host', () => pm.expect(pm.response.text()).to.include('(CIMD)'));"],
@@ -216,8 +216,40 @@ const cimdFolder = folder('Client ID metadata documents (CIMD)', [
   req('A client_id URL on a private address → 400', 'GET', '/oauth/authorize?response_type=code&client_id=https%3A%2F%2F127.0.0.1%2Fclient.json&redirect_uri=https%3A%2F%2Fx.example%2Fcb', { tests: [status(400), "pm.test('names the client metadata document', () => pm.expect(pm.response.text()).to.include('Client metadata document'));"] }),
 ], 'An https URL as client_id: the server fetches the client\'s metadata there instead of a registration (MCP authorization 2025-11-25). Uses the demo document this server hosts.');
 
+// Mutual TLS (RFC 8705). npm run postman boots the server with the mTLS listener and gives Newman two lab CA client
+// certificates: one for {{mtlsUrl}} (127.0.0.1) and one for {{mtlsUrlOther}} (localhost). Skipped when mtlsUrl is unset.
+const needsMtls = ["if (!pm.environment.get('mtlsUrl')) pm.execution.skipRequest();"];
+const skipAuth = { 'X-Skip-Auth': '1' };
+const mtlsFolder = folder('Mutual TLS (RFC 8705)', [
+  req('Discovery lists the mTLS endpoint aliases', 'GET', '/.well-known/oauth-authorization-server', {
+    pre: [...needsMtls, "pm.environment.set('rootUrl', pm.environment.get('baseUrl').replace(/\\/p\\/[^/]+\\/?$/, ''));"],
+    tests: [status(200), "const m = pm.response.json();", "pm.test('bound tokens', () => pm.expect(m.tls_client_certificate_bound_access_tokens).to.eql(true));", "pm.test('mTLS token endpoint', () => pm.expect(m.mtls_endpoint_aliases.token_endpoint).to.eql(pm.environment.get('mtlsUrl') + '/oauth/token'));", "pm.test('tls_client_auth', () => pm.expect(m.token_endpoint_auth_methods_supported).to.include('tls_client_auth'));"],
+  }),
+  req('Profile /p/mtls with a lab CA certificate', 'GET', '{{mtlsUrl}}/p/mtls/v1/employees?limit=1', { headers: skipAuth, pre: needsMtls, tests: [status(200), "pm.test('data', () => pm.expect(pm.response.json().data).to.have.length(1));"] }),
+  req('Register a tls_client_auth client (by SAN URI)', 'POST', '/oauth/register', {
+    headers: { 'Content-Type': 'application/json' }, pre: needsMtls,
+    body: json({ client_name: 'Postman mTLS', grant_types: ['client_credentials'], token_endpoint_auth_method: 'tls_client_auth', tls_client_auth_san_uri: '{{mtlsSanUri}}', scope: 'read' }),
+    tests: [status(201), "const c = pm.response.json();", "pm.test('no secret', () => pm.expect(c.client_secret).to.eql(undefined));", "pm.environment.set('tlsClientId', c.client_id);"],
+  }),
+  req('Token with the client certificate, no secret', 'POST', '{{mtlsUrl}}/oauth/token', {
+    headers: skipAuth, pre: needsMtls, body: { mode: 'urlencoded', urlencoded: [{ key: 'grant_type', value: 'client_credentials' }, { key: 'client_id', value: '{{tlsClientId}}' }] },
+    tests: [status(200), "const t = pm.response.json();", "const claims = JSON.parse(atob(t.access_token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')));", "pm.test('bound to the certificate (cnf.x5t#S256)', () => pm.expect(claims.cnf['x5t#S256']).to.be.a('string'));", "pm.environment.set('tlsToken', t.access_token);"],
+  }),
+  req('Bound token with the same certificate → 200', 'GET', '{{mtlsUrl}}/p/oauth2/v1/employees?limit=1', { headers: { ...skipAuth, Authorization: 'Bearer {{tlsToken}}' }, pre: needsMtls, tests: [status(200)] }),
+  req('Bound token with another certificate → 401', 'GET', '{{mtlsUrlOther}}/p/oauth2/v1/employees?limit=1', { headers: { ...skipAuth, Authorization: 'Bearer {{tlsToken}}' }, pre: needsMtls, tests: [status(401), "pm.test('certificate-mismatch', () => pm.expect(pm.response.json().code).to.eql('certificate-mismatch'));"] }),
+  req('Bound token without a certificate (plain listener) → 401', 'GET', '{{rootUrl}}/p/oauth2/v1/employees?limit=1', {
+    headers: { ...skipAuth, Authorization: 'Bearer {{tlsToken}}' },
+    pre: [...needsMtls, "if (pm.environment.get('rootUrl').indexOf('https://') === 0) pm.execution.skipRequest(); // this run is on the mTLS listener"],
+    tests: [status(401), "pm.test('says where to go', () => pm.expect(pm.response.json().detail).to.include('bound to a client certificate'));"],
+  }),
+  req('Token with a certificate that does not match the client → 401', 'POST', '{{mtlsUrlOther}}/oauth/token', {
+    headers: skipAuth, pre: needsMtls, body: { mode: 'urlencoded', urlencoded: [{ key: 'grant_type', value: 'client_credentials' }, { key: 'client_id', value: '{{tlsClientId}}' }] },
+    tests: [status(401), "pm.test('invalid_client', () => pm.expect(pm.response.json().error).to.eql('invalid_client'));"],
+  }),
+], 'Client certificates on the mTLS listener: the mtls profile, tls_client_auth and certificate-bound tokens. Needs a server with MTLS_ENABLED and Newman client certificates (npm run postman sets both up); skipped otherwise.');
+
 const authFolder = folder('Auth mode', [
-  req('Without credentials', 'GET', '/v1/employees/1', { headers: { 'X-Skip-Auth': '1' }, tests: ["const m = pm.environment.get('authMode');", "pm.test('401 unless auth mode is none', () => pm.response.to.have.status(m === 'none' ? 200 : 401));", "if (m !== 'none') pm.test('WWW-Authenticate', () => pm.expect(pm.response.headers.get('WWW-Authenticate')).to.be.a('string'));"] }),
+  req('Without credentials', 'GET', '/v1/employees/1', { headers: { 'X-Skip-Auth': '1' }, tests: ["const m = pm.environment.get('authMode');", "// mtls: the client certificate is part of the TLS connection, so a header cannot leave it out (npm test covers that case).", "const open = m === 'none' || m === 'mtls';", "pm.test('401 unless auth mode is none (or mtls)', () => pm.response.to.have.status(open ? 200 : 401));", "if (!open) pm.test('WWW-Authenticate', () => pm.expect(pm.response.headers.get('WWW-Authenticate')).to.be.a('string'));"] }),
   req('With credentials', 'GET', '/v1/employees/1', { tests: [status(200)] }),
 ], 'The collection pre-request script authenticates /v1 calls according to {{authMode}}.');
 
@@ -538,7 +570,7 @@ const collection = {
     { listen: 'test', script: { type: 'text/javascript', exec: collectionTest } },
   ],
   variable: [{ key: 'cachedToken', value: '' }, { key: 'cachedTokenExp', value: '0' }],
-  item: [platform, oauth, assertions, cimdFolder, authFolder, crud, query, pagination, chaos, files, soapFolder, sseFolder, llmFolder, mcpFolder, a2aFolder, graphqlFolder, odataFolder, s3Folder, misc],
+  item: [platform, oauth, assertions, cimdFolder, mtlsFolder, authFolder, crud, query, pagination, chaos, files, soapFolder, sseFolder, llmFolder, mcpFolder, a2aFolder, graphqlFolder, odataFolder, s3Folder, misc],
 };
 
 const environment = {

@@ -20,6 +20,7 @@ function requestBaseUrl(req) {
 
 // baseUrl(req) is where the request's APIs live: inside a settings profile it ends in /p/<name>, so links,
 // specs and endpoints stay in the profile. baseUrl.root(req) is the server itself (OAuth server, dashboard).
+// baseUrl.mtls(req) is the mutual-TLS listener.
 function makeBaseUrl(settings, env = process.env) {
   function root(req) {
     const configured = settings.get('publicBaseUrl');
@@ -29,11 +30,22 @@ function makeBaseUrl(settings, env = process.env) {
       || `http://localhost:${settings.get('port')}`;
     return url.replace(/\/+$/, '');
   }
+  // The mTLS listener (src/app.js listenTls): MTLS_PUBLIC_URL, else the host the client connected to (a request on that
+  // listener comes straight from the client), else the public host name on MTLS_PORT.
+  function mtls(req) {
+    const configured = settings.get('mtlsPublicUrl');
+    if (configured) return configured.replace(/\/+$/, '');
+    if (req?.socket?.encrypted && req.get('host')) return `https://${req.get('host')}`;
+    return `https://${new URL(root(req)).hostname}:${settings.get('mtlsPort')}`;
+  }
+  // A request on the mTLS listener gets links back to that listener, so a client authenticated by its certificate stays on it.
   function baseUrl(req) {
     const name = req ? req.profile?.name : settings.profile()?.name;
-    return name ? `${root(req)}/p/${name}` : root(req);
+    const at = req?.socket?.encrypted ? mtls(req) : root(req);
+    return name ? `${at}/p/${name}` : at;
   }
   baseUrl.root = root;
+  baseUrl.mtls = mtls;
   return baseUrl;
 }
 

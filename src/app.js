@@ -2,6 +2,8 @@
 // Application factory: builds the context (settings, DB, stores, services) and the Express app.
 const path = require('node:path');
 const http = require('node:http');
+const https = require('node:https');
+const fs = require('node:fs');
 const { EventEmitter } = require('node:events');
 const { AsyncResource } = require('node:async_hooks');
 const express = require('express');
@@ -14,6 +16,7 @@ const { FileService, createStore } = require('./services/files');
 const { KeyService } = require('./services/keys');
 const { OAuthService } = require('./services/oauth');
 const { ProfileService } = require('./services/profiles');
+const { CaService } = require('./services/ca');
 const { InspectorService } = require('./services/inspector');
 const { TesterService } = require('./services/tester');
 const { WebhookService } = require('./services/webhooks');
@@ -84,6 +87,8 @@ async function createContext({ env = process.env, overrides = {} } = {}) {
   await ctx.oauth.init();
   ctx.profiles = new ProfileService(ctx);
   await ctx.profiles.init();
+  ctx.ca = new CaService(ctx); // lab CA for mutual TLS: client certificates and the mTLS listener's certificate
+  await ctx.ca.init();
   ctx.inspector = new InspectorService(ctx);
   ctx.tester = new TesterService(ctx);
   ctx.webhooks = new WebhookService(ctx); // outgoing webhooks on data changes (stored in the database)
@@ -224,6 +229,32 @@ async function createApp(opts = {}) {
     return server;
   };
   app.handleUpgrade = handleUpgrade;
+
+  // The mutual-TLS listener: the same app on a TLS port that asks for a client certificate but lets the handshake
+  // finish without a valid one, so AUTH_MODE=mtls and RFC 8705 can answer with a readable 401 (util/clientCert.js).
+  app.listenTls = async (port, host) => {
+    let key;
+    let cert;
+    if (settings.get('mtlsCertFile')) {
+      cert = fs.readFileSync(settings.get('mtlsCertFile'), 'utf8');
+      key = fs.readFileSync(settings.get('mtlsKeyFile'), 'utf8');
+    } else {
+      const hostOf = (u) => { try { return new URL(u).hostname.replace(/^\[|\]$/g, ''); } catch { return null; } };
+      const issued = await ctx.ca.serverCert([hostOf(ctx.baseUrl.root()), hostOf(settings.get('mtlsPublicUrl')), 'localhost', '127.0.0.1', '::1']);
+      cert = issued.certPem + ctx.ca.caPem;
+      key = issued.keyPem;
+    }
+    const extra = String(settings.get('mtlsTrustedCas') || '').match(/-----BEGIN CERTIFICATE-----[\s\S]+?-----END CERTIFICATE-----/g) || [];
+    const server = https.createServer({ key, cert, ca: [ctx.ca.caPem, ...extra], requestCert: true, rejectUnauthorized: false }, app);
+    server.on('upgrade', handleUpgrade);
+    server.keepAliveTimeout = 65000;
+    server.requestTimeout = 0;
+    const close = server.close.bind(server);
+    server.close = (cb) => { for (const c of ctx.wsHub) c.close(1001, 'Server shutting down'); return close(cb); };
+    await new Promise((resolve, reject) => { server.once('error', reject); server.listen(port, host, resolve); });
+    ctx.mtlsServer = server;
+    return server;
+  };
 
   ctx.ready = true;
   return { app, ctx, close: async () => { ctx.oauth.close(); await ctx.webhooks.drain(); await ctx.repo.close(); } };

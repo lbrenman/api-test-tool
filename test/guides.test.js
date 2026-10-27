@@ -24,7 +24,7 @@ const BASE_CTX = {
   required: [],
   adminPasswordRequired: false,
 };
-const MODES = ['none', 'apikey', 'basic', 'bearer', 'jwt', 'oauth2', 'hmac'];
+const MODES = ['none', 'apikey', 'basic', 'bearer', 'jwt', 'oauth2', 'hmac', 'mtls'];
 const hasBash = spawnSync('bash', ['-c', 'true']).status === 0;
 const hasOpenssl = hasBash && spawnSync('bash', ['-c', 'command -v openssl']).status === 0;
 
@@ -235,4 +235,15 @@ test('the client assertion snippets build JWTs the server accepts (HS256 and RS2
     assert.ok(ok, `${alg} signature verifies`);
     if (alg === 'RS256') assert.equal(header.kid, 'k1');
   }
+});
+
+test('mtls mode: API calls go to the mTLS listener with the client certificate; the mtls guide exists', () => {
+  const C = makeCurl({ ...BASE_CTX, mode: 'mtls', mtls: { url: 'https://att.example.dev:8443' } });
+  const cmd = C.curl('GET', '/v1/employees?limit=1');
+  assert.match(cmd, /'https:\/\/att\.example\.dev:8443\/v1\/employees\?limit=1'/);
+  assert.match(cmd, /--cert client\.pem[\s\\]+--key client-key\.pem[\s\\]+--cacert lab-ca\.pem/);
+  assert.doesNotMatch(C.curl('GET', '/health'), /--cert|8443/);
+  const g = build(C, {})['auth.mtls'];
+  assert.ok(g, 'auth.mtls guide');
+  assert.ok(g.curls.some(([, c]) => /8443\/p\/mtls\/v1\/employees/.test(c)));
 });

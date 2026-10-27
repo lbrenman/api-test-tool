@@ -35,9 +35,15 @@ async function main() {
   server.keepAliveTimeout = 65000;
   server.headersTimeout = 66000;
   server.requestTimeout = 0; // chaos "timeout"/"slow-drip" and large uploads need long-lived requests
+  let tlsServer = null;
+  if (ctx.settings.get('mtlsEnabled')) {
+    tlsServer = await app.listenTls(ctx.settings.get('mtlsPort'));
+    console.log(`[info] mTLS       ${ctx.baseUrl.mtls()}   (client certificates from the lab CA; AUTH_MODE=mtls or /p/mtls)`);
+  }
 
   const shutdown = (sig) => {
     console.log(`[info] ${sig} received, shutting down`);
+    tlsServer?.close();
     server.close(async () => {
       await close().catch(() => {});
       process.exit(0);

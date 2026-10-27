@@ -66,6 +66,10 @@ Use cases:
   - [Route map](#route-map)
   - [Securing the dashboard and back office](#securing-the-dashboard-and-back-office)
   - [Authentication](#authentication)
+    - [Settings profiles](#settings-profiles)
+    - [Signed client assertions (private_key_jwt)](#signed-client-assertions-private_key_jwt)
+    - [Client ID metadata documents (CIMD)](#client-id-metadata-documents-cimd)
+    - [Mutual TLS and certificate-bound tokens](#mutual-tls-and-certificate-bound-tokens)
   - [Mock API conventions](#mock-api-conventions)
   - [Pagination](#pagination)
   - [Chaos: errors and latency](#chaos-errors-and-latency)
@@ -144,8 +148,10 @@ Fly.io, Render and Northflank are covered in [Deployment](#deployment).
 | **Chaos** | Error rate %, error types (any 4xx/5xx, `timeout`, `reset`, `malformed-json`, `truncated-body`, `empty-body`, `wrong-content-type`, `slow-drip`), latency range, per-route overrides, and deterministic forcing headers. |
 | **Rate limiting** | A real per-client limiter with `RateLimit-*` headers and 429 + `Retry-After`. |
 | **Headers** | Custom headers added to every response, and required request headers (with optional expected values) enforced on `/v1/*`. |
-| **Auth** | `none`, `apikey` (header or query), `basic`, `bearer`, `jwt` (HS256/RS256, JWKS), `oauth2` (scopes), `hmac` (signed requests). |
-| **OAuth 2.0 server** | client_credentials, authorization_code + PKCE (login/consent page), refresh_token (rotating), introspection (RFC 7662), revocation (RFC 7009), RFC 8414 metadata, JWKS, dynamic client registration (RFC 7591, with RFC 7592 read/delete) for MCP clients and other self-registering apps: public or confidential clients, loopback and custom-scheme redirects, open or token-protected, and resource indicators (RFC 8707: a `resource` parameter is added to the token's audience). |
+| **Auth** | `none`, `apikey` (header or query), `basic`, `bearer`, `jwt` (HS256/RS256, JWKS), `oauth2` (scopes), `hmac` (signed requests), `mtls` (client certificates on a second, mutual-TLS listener). |
+| **Settings profiles** | Every mock API also under `/p/<profile>/…` with that profile's settings: one built-in profile per auth mode (`/p/hmac/v1/employees` is `/v1/employees` under `AUTH_MODE=hmac`) plus your own (auth, chaos, rate limit, headers, date format, protocol options). Several demos with different auth or chaos run side by side on one server without touching the global settings. |
+| **Mutual TLS** | A built-in lab CA (no openssl needed) that issues client certificates as PEM or PKCS#12 (.p12) from the Auth page, with DNS, URI (e.g. `spiffe://…`), email and IP SANs. An optional mTLS listener (`MTLS_ENABLED`, port 8443) serves every protocol with a client certificate as the credential (`AUTH_MODE=mtls`, or the `/p/mtls` profile), and the OAuth server adds RFC 8705: `tls_client_auth`, `self_signed_tls_client_auth` and certificate-bound access tokens (`cnf.x5t#S256`). Your own CA can be trusted too. |
+| **OAuth 2.0 server** | client_credentials, authorization_code + PKCE (login/consent page), refresh_token (rotating), introspection (RFC 7662), revocation (RFC 7009), RFC 8414 metadata, JWKS, dynamic client registration (RFC 7591, with RFC 7592 read/delete) for MCP clients and other self-registering apps: public or confidential clients, loopback and custom-scheme redirects, open or token-protected, and resource indicators (RFC 8707: a `resource` parameter is added to the token's audience). Client authentication by secret (Basic or body), signed client assertions (RFC 7523 `private_key_jwt` with the client's JWKS or `jwks_uri`, and `client_secret_jwt`), or client certificate (RFC 8705). Client ID metadata documents (CIMD): an https URL as `client_id`, as newer MCP clients use instead of registration, with editable documents hosted by the lab. |
 | **Files** | One shared pool (local disk or S3-compatible) behind multipart, raw, base64-in-JSON, tus resumable, presigned URLs, range downloads (206) and chunked downloads. Sample CSV, XLSX, JSON, PNG, JPG, PDF, TXT, ZIP and a 10 MB binary are generated on seed. |
 | **SOAP** | Mock SOAP 1.1 and 1.2 services (`EmployeeService`, `ProductService`) over the same data, with live WSDLs (document/literal, a SOAP 1.1 and a 1.2 binding). Get, List (paging, filters, text search, sort), Create, Update, Delete. Auth mode, chaos, rate limits and required headers apply as on `/v1`; errors are SOAP faults with field-level detail. Optional WS-Security UsernameToken (PasswordText and PasswordDigest) and SOAPAction checking. |
 | **WebSocket** | Mock channels over the same data: `/ws/echo`, `/ws/rpc` (JSON-RPC 2.0: get/list employees, products, departments, categories) and `/ws/changes` (live created/updated/deleted events from any protocol), with an AsyncAPI 3.0 document. The upgrade goes through auth, rate limiting, required headers and chaos. Size limit (1009), idle timeout, keep-alive pings, and a live console in the dashboard. In-house RFC 6455 implementation, no dependency. |
@@ -194,7 +200,7 @@ Settings marked **restart** can only be set through the environment.
 | `DATE_FORMAT` | `iso` | `iso`, `iso-offset`, `epoch-s`, `epoch-ms`, `rfc1123`, `custom` |
 | `DATE_FORMAT_PATTERN` | `YYYY-MM-DD HH:mm:ss` | dayjs tokens, used by `custom` |
 | `DATE_TZ_OFFSET` | `+00:00` | Used by `iso-offset` and `custom` |
-| `AUTH_MODE` | `none` | `none`, `apikey`, `basic`, `bearer`, `jwt`, `oauth2`, `hmac` |
+| `AUTH_MODE` | `none` | `none`, `apikey`, `basic`, `bearer`, `jwt`, `oauth2`, `hmac`, `mtls` (client certificate on the mTLS listener) |
 | `API_KEY`, `API_KEY_NAME`, `API_KEY_IN` | `demo-key`, `X-API-Key`, `header` | `API_KEY_IN` is `header` or `query` |
 | `BASIC_USER` / `BASIC_PASS` | `demo` / `demo` | |
 | `BEARER_TOKEN` | `demo-token` | |
@@ -204,6 +210,12 @@ Settings marked **restart** can only be set through the environment.
 | `JWT_ISSUER` / `JWT_AUDIENCE` | base URL / `api-test-tool` | |
 | `HMAC_KEY_ID` / `HMAC_SECRET` | `demo` / `demo-hmac` | |
 | `HMAC_MAX_SKEW_SECONDS` | `300` | |
+| `MTLS_ALLOWED_SUBJECTS` | — | `AUTH_MODE=mtls`: accepted certificates, as common names or SAN values (DNS, URI such as `spiffe://lab/agent`, email), comma separated. Blank = any certificate a trusted CA issued |
+| `MTLS_ENABLED` | `false` | Run the mutual-TLS listener (restart). Needed for `AUTH_MODE=mtls`, OAuth client certificate authentication and certificate-bound tokens (RFC 8705) |
+| `MTLS_PORT` | `8443` | Port of the mTLS listener (restart) |
+| `MTLS_PUBLIC_URL` | — | Public URL of the mTLS listener for links and the OAuth metadata (blank = `https://<public host>:<MTLS_PORT>`) |
+| `MTLS_CERT_FILE` / `MTLS_KEY_FILE` | — | PEM certificate (chain) and key the listener presents (restart). Blank = one the lab CA issues for the public host name and localhost |
+| `MTLS_TRUSTED_CAS` | — | More CA certificates (PEM) whose client certificates are trusted besides the lab CA, e.g. your platform's own CA (restart) |
 | `OAUTH_CLIENTS` | `demo-client:demo-secret:read write` | `id:secret:scopes;…`. More clients can be added in the dashboard. |
 | `OAUTH_USERS` | `demo:demo` | Users for the authorization_code login page: `user:password[:roles[:attributes]];…`, e.g. `alice:alice:admin,buyer:region=EMEA,tier=gold`. More on the Auth page. |
 | `OAUTH_ROLES_CLAIM` | `realm_access.roles` | Where a user's roles go in the token: dotted claim paths, comma separated (`realm_access.roles` = Keycloak style; `realm_access.roles,roles` writes both) |
@@ -280,7 +292,7 @@ Settings marked **restart** can only be set through the environment.
 
 ## Route map
 
-These prefixes are reserved: `/v1`, `/soap`, `/ws`, `/sse`, `/graphql`, `/odata`, `/llm`, `/mcp`, `/a2a`, the S3 bucket name (`/files` by default), `/oauth`, `/.well-known`, `/admin`, `/dashboard`, `/app`, `/docs`, `/openapi.json`, `/openapi.yaml`, `/samples`, `/health`, `/ready`, and `GET /` (which redirects to the dashboard; a request signed with AWS Signature V4 to `/` is the S3 API's ListBuckets). **Every other path, and every method, is captured by the inspector.** Calls to `/v1`, `/soap`, `/ws` (the upgrade), `/sse`, `/graphql`, `/odata`, `/llm`, `/mcp`, `/a2a`, the S3 API and `/oauth` are recorded there too (unless `INSPECTOR_LOG_ALL=false`); the dashboard, admin API, docs and health probes never are.
+These prefixes are reserved: `/v1`, `/soap`, `/ws`, `/sse`, `/graphql`, `/odata`, `/llm`, `/mcp`, `/a2a`, the S3 bucket name (`/files` by default), `/p` (settings profiles), `/oauth`, `/.well-known`, `/admin`, `/dashboard`, `/app`, `/docs`, `/openapi.json`, `/openapi.yaml`, `/samples`, `/health`, `/ready`, and `GET /` (which redirects to the dashboard; a request signed with AWS Signature V4 to `/` is the S3 API's ListBuckets). **Every other path, and every method, is captured by the inspector.** Calls to `/v1`, `/soap`, `/ws` (the upgrade), `/sse`, `/graphql`, `/odata`, `/llm`, `/mcp`, `/a2a`, the S3 API and `/oauth` are recorded there too (unless `INSPECTOR_LOG_ALL=false`); the dashboard, admin API, docs and health probes never are.
 
 | Path | Purpose |
 |---|---|
@@ -311,6 +323,9 @@ These prefixes are reserved: `/v1`, `/soap`, `/ws`, `/sse`, `/graphql`, `/odata`
 | `POST /a2a`, `/a2a/rest/…`, `POST /a2a/v0.3` | Mock A2A agent: JSON-RPC 1.0 and 0.3, HTTP+JSON 1.0 (see [A2A agent](#a2a-agent)) |
 | `/{bucket}`, `/{bucket}/{key}` (bucket `files` by default), signed `GET /` | S3-compatible API over the file pool (see [S3-compatible API](#s3-compatible-api)) |
 | `/oauth/token`, `/oauth/authorize`, `/oauth/introspect`, `/oauth/revoke` | OAuth 2.0 server |
+| `GET /oauth/client-metadata/{name}.json` | Client ID metadata documents the lab hosts (CIMD; `demo` is built in) |
+| `/p/{profile}/…` | Any mock API path above with a settings profile's settings (see [Settings profiles](#settings-profiles)) |
+| `https://<host>:8443/…` (with `MTLS_ENABLED`) | The mTLS listener: the same routes, with a client certificate (see [Mutual TLS](#mutual-tls-and-certificate-bound-tokens)) |
 | `POST /oauth/register`, `GET`/`DELETE /oauth/register/{clientId}` | Dynamic client registration (RFC 7591) and its management (RFC 7592) |
 | `/.well-known/oauth-authorization-server`, `/.well-known/openid-configuration`, `/.well-known/jwks.json` | Discovery and JWKS |
 | `/samples/*` | Bundled specs (handy for the tester's URL loader) |
@@ -373,7 +388,7 @@ To change the password, set the new value and restart. Existing session cookies 
 
 ## Authentication
 
-Auth is global and applies to `/v1/*`, SOAP, WebSocket upgrades, SSE, GraphQL and OData (the S3 API signs with its own keys). Health, docs, the mock data API spec (`/openapi.json`), OAuth and well-known endpoints are always open; the admin API and its spec use the dashboard password instead. Change the mode with `AUTH_MODE` or on the dashboard's **Auth** page. The change takes effect immediately, and `/openapi.json` updates its `securitySchemes` to match.
+Auth is global and applies to `/v1/*`, SOAP, WebSocket upgrades, SSE, GraphQL and OData (the S3 API signs with its own keys). Health, docs, the mock data API spec (`/openapi.json`), OAuth and well-known endpoints are always open; the admin API and its spec use the dashboard password instead. Change the mode with `AUTH_MODE` or on the dashboard's **Auth** page. The change takes effect immediately, and `/openapi.json` updates its `securitySchemes` to match. To use several modes at once, call through a [settings profile](#settings-profiles) such as `/p/hmac/v1/…`.
 
 Below, `B` is your base URL, for example `B=http://localhost:3000`.
 
@@ -502,6 +517,12 @@ pm.request.headers.upsert({ key: 'Authorization', value: `HMAC ${pm.environment.
 pm.request.headers.upsert({ key: 'X-Timestamp', value: ts });
 ```
 
+**mtls**: the credential is a client certificate the server trusts (the lab CA's, or one under `MTLS_TRUSTED_CAS`), presented on the mTLS listener. It needs `MTLS_ENABLED=true`; on the plain listener every call is 401 `client-certificate-required` with the mTLS URL in the message. `MTLS_ALLOWED_SUBJECTS` narrows it to certain common names or SAN values. See [Mutual TLS](#mutual-tls-and-certificate-bound-tokens).
+
+```bash
+curl -s "https://localhost:8443/v1/employees?limit=2" --cert client.pem --key client-key.pem --cacert lab-ca.pem
+```
+
 **Dynamic client registration** (RFC 7591): clients can register themselves at `POST /oauth/register`, advertised as `registration_endpoint` in the discovery documents. This is how MCP clients connect to an authorization server they have never seen.
 
 ```bash
@@ -551,6 +572,92 @@ The dashboard's **Auth** page has a "Get a test token" button (for a client, or 
 curl -s -X PATCH "$B/admin/api/oauth/clients/demo-client" -u "admin:$ADMIN_PASSWORD" \
   -H 'Content-Type: application/json' -d '{"redirectUris":["https://oauth.pstmn.io/v1/callback","http://localhost:8080/callback"]}'
 # {"secret": ""} generates a new secret; "scopes", "grantTypes" and "clientName" work the same way
+```
+
+### Settings profiles
+
+A settings profile applies its settings to one request when the path starts with `/p/<profile>`. So one server can serve an SE's HMAC demo, another's OAuth demo and a chaos test at the same time, without anyone changing the global settings.
+
+- **Built-in:** one profile per auth mode, named after it: `/p/none`, `/p/apikey`, `/p/basic`, `/p/bearer`, `/p/jwt`, `/p/oauth2`, `/p/hmac`, `/p/mtls`. Each sets only `authMode`; everything else stays global.
+- **Your own:** on the dashboard's **Profiles** page, or `POST /admin/api/profiles` with `{"name":"acme","description":"…","settings":{"authMode":"apikey","apiKey":"acme-key","errorRate":10}}`. A profile may set per-request behaviour only: auth credentials, chaos, rate limit, response and required headers, date format, and protocol options (SOAP, GraphQL, OData, LLM, MCP, A2A). `GET /admin/api/profiles` lists the keys. Storage, the OAuth server, webhooks, the inspector and anything that needs a restart stay global.
+- **Every protocol:** `/p/<profile>/v1`, `/soap`, `/ws`, `/sse`, `/graphql`, `/odata`, `/llm/v1`, `/mcp`, `/a2a`, the S3 API, `/openapi.json` (which shows the profile's server URL and security scheme) and the well-known documents. Links in responses (`Location`, `Link`, `@odata.nextLink`, presigned URLs) keep the prefix.
+- **Shared:** data, files, OAuth clients, users and tokens, webhooks and sessions. A profile changes how requests are handled, not what they see. The rate limit is still one budget.
+- The dashboard, back office and admin API are global only; `/p/<profile>/admin/…` is a 404. An unknown profile is a 404 that lists the profiles.
+- HMAC and SigV4 sign the path as sent, prefix included.
+
+```bash
+curl -s "$B/p/apikey/v1/employees?limit=2" -H 'X-API-Key: demo-key'     # whatever the global AUTH_MODE is
+curl -s "$B/p/none/graphql" -H 'Content-Type: application/json' -d '{"query":"{ employees(limit: 1) { items { id } } }"}'
+```
+
+### Signed client assertions (private_key_jwt)
+
+Instead of a secret, a client can authenticate at `/oauth/token` with a signed JWT (RFC 7523), as enterprise IdPs and the FAPI profile require:
+
+- `private_key_jwt`: signed with the client's private key (RS256/384/512, PS256/384/512, ES256/384/512, EdDSA), checked against the client's `jwks` or `jwks_uri`.
+- `client_secret_jwt`: HS256/384/512 over the client secret.
+
+The token request sends `client_assertion_type=urn:ietf:params:oauth:client-assertion-type:jwt-bearer` and `client_assertion=<JWT>` (no `client_id` needed). The JWT needs `iss` = `sub` = the client id, `aud` = the issuer or the token endpoint URL (with or without a profile prefix, or the mTLS alias), `exp` at most one hour away, and a `jti` that has not been used before (replays are `invalid_client`). A client whose method is pinned (`tokenEndpointAuthMethod`) accepts only that method.
+
+On the Auth page, **Edit** a client and choose `private_key_jwt`, then **Generate key pair** (the public key goes in the client's JWKS; the private key is shown once more for download), or paste your own JWKS or a `jwks_uri`. The **Signed client assertions** card makes an assertion for any client and exchanges it for a token. Dynamic registration accepts `jwks`, `jwks_uri` and `token_endpoint_auth_method: private_key_jwt` too.
+
+```bash
+# a key pair for demo-client (pins it to private_key_jwt; {"use": false} keeps its current method)
+curl -s -X POST "$B/admin/api/oauth/clients/demo-client/keypair" -u "admin:$ADMIN_PASSWORD" -H 'Content-Type: application/json' -d '{"alg":"RS256"}'
+# an assertion signed with it, and the token request
+A=$(curl -s -X POST "$B/admin/api/auth/client-assertion" -u "admin:$ADMIN_PASSWORD" -H 'Content-Type: application/json' \
+  -d '{"clientId":"demo-client"}' | sed -E 's/.*"assertion":"([^"]+)".*/\1/')
+curl -s "$B/oauth/token" -d grant_type=client_credentials \
+  -d client_assertion_type=urn:ietf:params:oauth:client-assertion-type:jwt-bearer -d "client_assertion=$A"
+```
+
+The `?` guide on the Auth page has the same with openssl only. A `jwks_uri` (and a CIMD document, below) is fetched with an SSRF guard: https only, no redirects, no private, loopback or link-local addresses, 5 s and 64 KB limits. `OAUTH_FETCH_PRIVATE=true` lifts the address and https rules for a client on your own network.
+
+### Client ID metadata documents (CIMD)
+
+Newer MCP clients don't register. Their `client_id` is an https URL that serves their metadata as JSON (the MCP 2025-11-25 authorization spec, IETF draft *OAuth Client ID Metadata Document*). The server fetches it when the client first shows up.
+
+- Discovery advertises `client_id_metadata_document_supported: true` while `OAUTH_CIMD` is on (default).
+- The document's `client_id` must equal its URL. `token_endpoint_auth_method` may be `none` (PKCE) or `private_key_jwt` (with `jwks` or `jwks_uri`), never a secret. Scopes must be within `OAUTH_REGISTRATION_SCOPES`. Grants are `authorization_code` (the default) and `refresh_token`, plus `client_credentials` for a `private_key_jwt` client.
+- Fetched documents are cached for their `Cache-Control` max-age (at most 1 hour; 5 minutes without one; not at all with `no-store` or `no-cache`). Documents the lab hosts are always current. The Auth page lists the URL client_ids seen recently and can clear the cache.
+- The sign-in page shows the document's host under the client name, so a user can see who is asking.
+- `OAUTH_REGISTRATION=off` with `OAUTH_CIMD=true` makes CIMD the only way in, which is how a CIMD-only authorization server behaves.
+
+The lab hosts its own documents at `$B/oauth/client-metadata/<name>.json`, resolved locally without an HTTP call, so a demo needs nothing hosted elsewhere. `demo` is built in (a public PKCE client with Postman's, the MCP Inspector's and a loopback redirect URI); create and edit more on the Auth page's **Client ID metadata documents** card or with `PUT /admin/api/oauth/client-metadata/<name>`.
+
+```bash
+# start an authorization code flow with a URL as client_id (sign in as demo / demo)
+open "$B/oauth/authorize?response_type=code&client_id=$B/oauth/client-metadata/demo.json&redirect_uri=https://oauth.pstmn.io/v1/callback&scope=read&code_challenge=<S256>&code_challenge_method=S256"
+```
+
+### Mutual TLS and certificate-bound tokens
+
+TLS normally ends in front of the app (Caddy, the Fly edge), which cannot pass a client certificate on. So mTLS runs on a **second listener** where the app does TLS itself: `MTLS_ENABLED=true` opens `https://<host>:8443` (`MTLS_PORT`) with every route of the plain listener. It asks for a client certificate but does not require one at the TLS level, so a missing or untrusted certificate gets a readable 401 rather than a handshake failure.
+
+- **Lab CA.** Generated on first start (EC P-256, 10 years) and kept in the database. The Auth page's **Mutual TLS** card issues client certificates (CN, O, OU, DNS / URI / email / IP SANs, EC or RSA keys, 1-825 days) and downloads them as `cert.pem` + `key.pem` or a password-protected `.p12` that includes the CA (for Postman, Java keystores, browsers and `curl --cert-type P12`). It also downloads the CA certificate, which clients need to trust the listener.
+- **Server certificate.** Issued by the lab CA for the public host name, `localhost`, `127.0.0.1` and `::1`, unless `MTLS_CERT_FILE` / `MTLS_KEY_FILE` point to your own.
+- **Your own CA.** Paste CA certificates into `MTLS_TRUSTED_CAS` to trust certificates your platform already has.
+- **`AUTH_MODE=mtls`** (or the `/p/mtls` profile): any trusted certificate is the credential for every protocol; `MTLS_ALLOWED_SUBJECTS` limits it to common names or SAN values (for example `spiffe://lab/agent`). Errors: 401 `client-certificate-required` / `client-certificate-untrusted`, 403 `client-certificate-not-allowed`.
+- **RFC 8705 at the OAuth server:**
+  - `tls_client_auth`: the client is authenticated by a CA-issued certificate whose subject DN or a SAN (`subject_dn`, `san_dns`, `san_uri`, `san_ip`, `san_email`) matches the client's setting. On the Auth page, **OAuth client** next to an issued certificate creates such a client in one click.
+  - `self_signed_tls_client_auth`: the certificate must be one in the client's JWKS (`x5c`); paste the certificate PEM as the client's JWKS.
+  - **Certificate-bound tokens:** whenever a client certificate is presented at the token endpoint, the access token gets `cnf: {"x5t#S256": …}`. Under `jwt` and `oauth2`, a bound token is accepted only with the same certificate (401 `certificate-mismatch` otherwise, and on the plain listener). Introspection returns `cnf`.
+  - Discovery adds `tls_client_certificate_bound_access_tokens: true` and `mtls_endpoint_aliases` (the token, introspection and revocation endpoints on the mTLS listener). The issuer stays the plain base URL on both listeners.
+- Links in responses on the mTLS listener use `MTLS_PUBLIC_URL`, else the `Host` the client used, so paging stays on mTLS.
+- A public deployment must open the mTLS port; nothing in front of it may terminate TLS.
+
+```bash
+M=https://localhost:8443
+curl -s -u "admin:$ADMIN_PASSWORD" "$B/admin/api/mtls/ca.pem" -o lab-ca.pem
+# issue a client certificate and save its PEMs (the Auth page does the same)
+ID=$(curl -s -X POST "$B/admin/api/mtls/certs" -u "admin:$ADMIN_PASSWORD" -H 'Content-Type: application/json' \
+  -d '{"cn":"integration-a","san":{"uri":["spiffe://lab/integration-a"]}}' | sed -E 's/.*"id":"([^"]+)".*/\1/')
+curl -s -u "admin:$ADMIN_PASSWORD" "$B/admin/api/mtls/certs/$ID/cert.pem" -o client.pem
+curl -s -u "admin:$ADMIN_PASSWORD" "$B/admin/api/mtls/certs/$ID/key.pem" -o client-key.pem
+# a certificate-bound token, then a call with it (same certificate)
+TOKEN=$(curl -s "$M/oauth/token" --cert client.pem --key client-key.pem --cacert lab-ca.pem -u demo-client:demo-secret \
+  -d grant_type=client_credentials | sed -E 's/.*"access_token":"([^"]+)".*/\1/')
+curl -s "$M/p/jwt/v1/employees?limit=1" --cert client.pem --key client-key.pem --cacert lab-ca.pem -H "Authorization: Bearer $TOKEN"
 ```
 
 ---
@@ -1154,9 +1261,12 @@ the facade spec in the **API tester** and pressing **Run all** contract-tests yo
 
 ## Postman and Newman
 
-- `postman/API-Test-Tool.postman_collection.json` has 216 requests with test scripts, covering:
+- `postman/API-Test-Tool.postman_collection.json` has 224 requests with test scripts, covering:
   - health, OpenAPI and discovery;
   - OAuth: token, introspect, revoke, error cases, and dynamic client registration (register, token for the new client, RFC 7592 read and delete, invalid metadata);
+  - signed client assertions (RFC 7523): a `client_secret_jwt` token signed in the pre-request script, a replayed `jti`, a wrong audience, an assertion plus a secret, and a `private_key_jwt` client with a generated ES256 key pair;
+  - client ID metadata documents: discovery, the hosted `demo` document, an authorization code + PKCE flow with a URL client_id, a redirect URI not in the document and a client_id URL on a private address;
+  - mutual TLS (RFC 8705), on the mTLS listener with two client certificates: discovery aliases, the `/p/mtls` profile, a `tls_client_auth` client registered by SAN URI, a certificate-bound token accepted with its certificate and refused with the other certificate or none, and a certificate that doesn't match the client (skipped when `mtlsUrl` is not set);
   - each auth mode (with and without credentials);
   - CRUD with `Location`, `ETag`, `If-Match` and `Idempotency-Key`;
   - fields, filters and sort;
@@ -1174,8 +1284,8 @@ the facade spec in the **API tester** and pressing **Run all** contract-tests yo
   - headers and the inspector.
   - WebSocket channels and GraphQL subscriptions are not covered (Postman collections cannot drive WebSockets); `npm test` covers them.
 - `postman/API-Test-Tool.postman_environment.json` holds `baseUrl`, `authMode` and credentials. Set `authMode` to the server's `AUTH_MODE`; the collection-level pre-request script then authenticates every `/v1` call, SOAP request, SSE stream, GraphQL, OData, mock LLM, MCP and A2A request, fetching and caching an OAuth token for `jwt` and `oauth2` and signing requests for `hmac`. The S3 requests sign themselves with `s3AccessKeyId`, `s3SecretAccessKey` and `s3Region` in every mode.
-- `npm run postman` boots a fresh server for each auth mode and runs Newman against it. `npm run postman -- --mode hmac` runs one mode, and `npm run postman -- --url https://your-app.fly.dev --mode none` runs against a deployed instance.
-- `.github/workflows/newman.yml` runs on every push and pull request: `npm test` on SQLite + local files, the suite again on Postgres + S3, a Newman matrix over all seven auth modes, and a Docker build + smoke test. On a push to `master`, once all of those pass, a `deploy` job builds an arm64 image, smoke-tests it, pushes it to Amazon ECR and rolls it out to an EC2 instance over SSM. It is skipped until the repository variable `API_LAB_DEPLOY_ROLE_ARN` is set (optional: `API_LAB_REGION`, default `us-east-2`, `API_LAB_STACK`, default `api-lab`, and `API_LAB_URL`, the instance's public base URL, to check that its `/health` reports the new commit), and skips itself if `master` has moved on to a newer commit by the time its tests finish.
+- `npm run postman` boots a fresh server for each auth mode (with the mTLS listener on, and two client certificates from `scripts/mtls-newman-setup.js`) and runs Newman against it. `--mode mtls` runs the whole collection on the mTLS listener. `npm run postman -- --profiles` runs it through `/p/<mode>` on a server whose global auth mode is a different one, which proves a profile isolates every request. `npm run postman -- --mode hmac` runs one mode, and `npm run postman -- --url https://your-app.fly.dev --mode none` runs against a deployed instance (the mTLS folder skips itself there).
+- `.github/workflows/newman.yml` runs on every push and pull request: `npm test` on SQLite + local files, the suite again on Postgres + S3, a Newman matrix over all eight auth modes (each also through its settings profile on a second server), and a Docker build + smoke test. On a push to `master`, once all of those pass, a `deploy` job builds an arm64 image, smoke-tests it, pushes it to Amazon ECR and rolls it out to an EC2 instance over SSM. It is skipped until the repository variable `API_LAB_DEPLOY_ROLE_ARN` is set (optional: `API_LAB_REGION`, default `us-east-2`, `API_LAB_STACK`, default `api-lab`, and `API_LAB_URL`, the instance's public base URL, to check that its `/health` reports the new commit), and skips itself if `master` has moved on to a newer commit by the time its tests finish.
 - The collection is generated by `scripts/build-postman.js`. Edit that file and run `npm run postman:build`.
 
 ---
@@ -1264,10 +1374,11 @@ The `deploy` job in `.github/workflows/newman.yml` deploys every green push to `
 src/
   server.js            entry point (.env loader, listen, graceful shutdown)
   app.js               context + Express app (middleware order, routers, WebSocket upgrades, error handler)
-  config/              settings.js (settings registry: env -> override), baseUrl.js (base URL detection)
+  config/              settings.js (settings registry: env -> override, per-request profile scope), baseUrl.js (base URL detection)
   db/                  sqlite.js, postgres.js, repo.js (one generic docs table)
   middleware/          protocol (shared stack: error format, body, required headers, rate limit, auth, chaos),
-                       requestId, headers, cors, ratelimit, auth, chaos, idempotency, body, adminAuth, inspector
+                       requestId, headers, cors, ratelimit, auth, chaos, idempotency, body, adminAuth, inspector,
+                       profile (/p/<name> routing)
   routes/              platform, oauth, resources, files, admin, tester, appApi (back-office backend)
   protocols/           one folder per protocol, each with router.js and its error renderer:
     soap/              WSDL, services, WS-Security (model.js: one field table -> XSD, XML out, XML in)
@@ -1280,11 +1391,13 @@ src/
     mcp/               MCP server (catalog.js: tools, resources, prompts, completions)
     a2a/               A2A agent (wire, agent, tasks, card)
   services/            seed, schemas, resources, query, paginate, dateFormat, files + fileStore/ (local, s3, meter),
-                       sampleFiles, sampleIds, keys, oauth, inspector, webhooks,
+                       sampleFiles, sampleIds, keys, oauth, cimd (client ID metadata documents), ca (lab CA for mTLS),
+                       profiles, inspector, webhooks,
                        openapiGen (data spec), openapiAdminGen (admin spec),
                        tester/ (core: load, lint, sample, validate, runner, auth, mock, report, refs, operations;
                                 adapters/: openapi.js, wsdl/, websocket/)
-  util/                problem (errors + renderer registry), xml (tiny DOM on saxes), websocket (RFC 6455), build
+  util/                problem (errors + renderer registry), xml (tiny DOM on saxes), websocket (RFC 6455), build,
+                       safeFetch (SSRF-guarded fetch), der + pkcs12 (certificates and .p12 files), clientCert
   public/              dashboard (index.html, app.js, guides.js, styles.css)
   webapp/              back office app at /app (index.html, app.js, app.css)
 docs/                  multi-protocol-design.md, decisions.md, platform-test-checklist.md, ONBOARDING.md,
@@ -1293,7 +1406,7 @@ facade/                sample experience API (OpenAPI, data mapping, single-file
 images/                README screenshots and architecture diagrams
 samples/               Supplier_Order_Collaboration_OpenAPI_3_1.yaml, Inventory_Swagger_2_0.yaml
 postman/               collection, environment, fixtures (generated by scripts/build-postman.js)
-scripts/               seed.js, build-postman.js, run-newman.js
+scripts/               seed.js, build-postman.js, run-newman.js, mtls-newman-setup.js
 test/                  node:test + supertest
 .github/               workflows/newman.yml (CI + API Lab deploy), pull_request_template.md
 CLAUDE.md              how to work on this repo (conventions, CI, update checklist)
@@ -1303,7 +1416,7 @@ CLAUDE.md              how to work on this repo (conventions, CI, update checkli
 npm run dev            # node --watch
 npm test               # unit/integration tests (node:test + supertest)
 npm run seed -- --employees 100 --products 200 --seed 7
-npm run postman        # Newman across all auth modes
+npm run postman        # Newman across all auth modes (-- --profiles: through /p/<mode>; -- --mode mtls)
 ```
 
 ---
@@ -1321,6 +1434,11 @@ npm run postman        # Newman across all auth modes
 | Requests on Fly hang or queue while streams are open | The proxy's connection limit is reached. Raise `hard_limit` under `[http_service.concurrency]` in `fly.toml`. |
 | First request after an idle period is slow, or an MCP session / A2A task is gone | The machine stopped while idle and booted again. The repo's `fly.toml` keeps it running (`auto_stop_machines = "off"`, `min_machines_running = 1`); check that your copy still does. |
 | 401 under `jwt`/`oauth2` with a token from another environment | The issuer is the base URL. Tokens from `localhost` aren't valid on the Fly URL. Set `JWT_ISSUER` to pin it. |
+| `/p/<name>/…` returns 404 `profile-not-found` | The profile doesn't exist; the error lists the ones that do. Profile names are lowercase. |
+| 401 `client-certificate-required` | The call went to the plain listener, or the client sent no certificate. Use the mTLS URL in the message (`MTLS_ENABLED=true`, port 8443) and `--cert`/`--key`. |
+| curl: `SSL certificate problem: unable to get local issuer certificate` on the mTLS port | The client doesn't trust the lab CA. Download it from the Auth page and pass `--cacert lab-ca.pem` (Postman: Settings → Certificates → CA certificates). |
+| 401 `certificate-mismatch` | The token is certificate-bound (`cnf`): call over the mTLS listener with the same certificate that got the token, or get the token without a certificate. |
+| `invalid_client` with a `client_assertion` | The message names the check: `aud` must be the issuer or token URL, `iss`/`sub` the client id, `exp` at most an hour away, a fresh `jti`, and a key in the client's JWKS with a matching `kid`/`alg`. |
 | HMAC 401 "signature mismatch" | Compare your canonical string with the one in the 401 body's `errors[0]`. Usual causes: missing query string, wrong body bytes, or the hash for a streamed upload (use `UNSIGNED-PAYLOAD`). |
 | S3 client: `SignatureDoesNotMatch` | Check the secret, and that the client uses **path-style** addressing with the tool's base URL as the endpoint. The error body includes the `CanonicalRequest` and `StringToSign` the server computed, to compare with the client's. A proxy in front of the tool must not rewrite the `Host` header. |
 | S3 client: `AuthorizationHeaderMalformed` … region | The client signs with a different region; set it to `S3_API_REGION` (shown in the error), or change the setting. |

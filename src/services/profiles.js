@@ -12,7 +12,7 @@ const NAME = /^[a-z0-9][a-z0-9-]{0,39}$/;
 // Settings a profile may set: per-request behaviour only. Storage, the OAuth server, the inspector, webhooks,
 // the *_ENABLED switches and anything needing a restart stay global.
 const KEYS = [
-  'authMode', 'apiKey', 'apiKeyName', 'apiKeyIn', 'basicUser', 'basicPass', 'bearerToken', 'hmacKeyId', 'hmacSecret', 'hmacMaxSkewSeconds',
+  'authMode', 'apiKey', 'apiKeyName', 'apiKeyIn', 'basicUser', 'basicPass', 'bearerToken', 'hmacKeyId', 'hmacSecret', 'hmacMaxSkewSeconds', 'mtlsAllowedSubjects',
   'errorRate', 'errorTypes', 'latencyMinMs', 'latencyMaxMs', 'chaosTimeoutSeconds', 'chaosSlowDripMs', 'chaosRouteOverrides',
   'rateLimitRpm', 'responseHeaders', 'requiredHeaders',
   'dateFormat', 'dateFormatPattern', 'dateTzOffset',

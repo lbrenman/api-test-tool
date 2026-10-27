@@ -144,6 +144,7 @@
       client: client ? { clientId: client.clientId, secret: client.secret || '' } : null,
       required: (a.requiredHeaders || sval('requiredHeaders') || []).map((r) => ({ name: r.name, value: r.value })),
       adminPasswordRequired: PASSWORD_REQUIRED,
+      mtls: a.mtls,
     });
     return CURL;
   }
@@ -663,7 +664,7 @@
   // ---------------------------------------------------------------- auth
   VIEWS.auth = async (el) => {
     await loadSettings();
-    const a = await api('GET', '/auth');
+    const [a, mt] = await Promise.all([api('GET', '/auth'), api('GET', '/mtls')]);
     const tokenOut = h('div');
     const clientSel = h('select', null, a.clients.map((c) => h('option', { value: c.clientId }, `${c.clientId} (${c.scopes.join(' ')})`)));
     const scope = h('input', { type: 'text', placeholder: 'scope (blank = all of the client)' });
@@ -723,10 +724,19 @@
       const nameIn = h('input', { type: 'text', value: c.clientName || '' });
       const secretIn = h('input', { type: 'text', placeholder: c.public ? 'public client: no secret' : 'leave blank to keep the current secret', disabled: !!c.public });
       const regen = h('input', { type: 'checkbox', disabled: !!c.public });
-      const methodSel = h('select', { disabled: !!c.public }, [['', 'secret or signed JWT (not pinned)'], ['client_secret_basic', 'client_secret_basic'], ['client_secret_post', 'client_secret_post'], ['client_secret_jwt', 'client_secret_jwt (HS256 over the secret)'], ['private_key_jwt', 'private_key_jwt (public keys below)']]
+      const methodSel = h('select', { disabled: !!c.public }, [['', 'secret or signed JWT (not pinned)'], ['client_secret_basic', 'client_secret_basic'], ['client_secret_post', 'client_secret_post'], ['client_secret_jwt', 'client_secret_jwt (HS256 over the secret)'], ['private_key_jwt', 'private_key_jwt (public keys below)'], ['tls_client_auth', 'tls_client_auth (lab CA certificate, mTLS)'], ['self_signed_tls_client_auth', 'self_signed_tls_client_auth (certificate in JWKS, mTLS)']]
         .map(([v, l]) => h('option', { value: v, selected: (c.tokenEndpointAuthMethod || '') === v }, c.public ? 'none (public client)' : l)));
       const jwksIn = h('textarea', { rows: 4, class: 'mono', placeholder: 'JWKS {"keys":[…]}, one JWK, or a PEM public key / certificate (empty = none)', disabled: !!c.public }, c.jwks ? JSON.stringify(c.jwks, null, 2) : '');
       const jwksUriIn = h('input', { type: 'url', value: c.jwksUri || '', placeholder: 'https://client.example/jwks.json', disabled: !!c.public });
+      const tlsType = h('select', { style: { width: 'auto', flex: 'none' } }, [['subject_dn', 'subject DN'], ['san_dns', 'SAN DNS'], ['san_uri', 'SAN URI'], ['san_email', 'SAN email'], ['san_ip', 'SAN IP']].map(([v, l]) => h('option', { value: v, selected: c.tlsClientAuth?.type === v }, l)));
+      const tlsValue = h('input', { type: 'text', value: c.tlsClientAuth?.value || '', placeholder: 'CN=my-client, O=Acme   or   spiffe://lab/my-client' });
+      const fromCert = h('select', { style: { width: 'auto', flex: 'none' } }, h('option', { value: '' }, 'fill from an issued certificate…'), (mt.certs || []).map((x) => h('option', { value: x.id }, x.cn)));
+      fromCert.addEventListener('change', () => {
+        const x = (mt.certs || []).find((y) => y.id === fromCert.value);
+        if (!x) return;
+        tlsType.value = 'subject_dn'; tlsValue.value = x.subject.replace(/\n/g, ', ');
+        if (!methodSel.value || !methodSel.value.includes('tls')) methodSel.value = 'tls_client_auth';
+      });
       const algSel = h('select', { style: { width: 'auto' } }, ['RS256', 'ES256', 'PS256', 'EdDSA'].map((x) => h('option', { value: x }, x)));
       const keyOut = h('div');
       const showPrivateKey = (pem, kid) => clear(keyOut).append(h('div', { class: 'stack' },
@@ -743,7 +753,8 @@
         h('div', { class: 'grid cols-2' }, field('New secret', secretIn), h('label', { class: 'check', style: { alignSelf: 'end' } }, regen, 'Generate a new secret')),
         c.public ? null : h('div', { class: 'stack' }, h('h3', { class: 'with-tip' }, 'Client authentication', tip('auth.assertions')),
           h('div', { class: 'grid cols-2' }, field('Token endpoint auth method', methodSel, 'Pinning a method refuses the others (e.g. private_key_jwt: the secret stops working).'), field('JWKS URL', jwksUriIn, 'Fetched over https (private hosts need OAUTH_FETCH_PRIVATE), cached 5 minutes.')),
-          field('Public keys (JWKS)', jwksIn),
+          field('Public keys (JWKS)', jwksIn, 'For self_signed_tls_client_auth paste the client\'s certificate PEM here.'),
+          field('Certificate to expect (tls_client_auth, RFC 8705)', h('div', { class: 'row', style: { flexWrap: 'nowrap' } }, tlsType, tlsValue, fromCert), mt.enabled ? `Token requests come to ${mt.url}/oauth/token with client_id and the certificate, no secret.` : 'Needs the mTLS listener (MTLS_ENABLED=true).'),
           h('div', { class: 'row', style: { flexWrap: 'nowrap' } }, algSel, h('button', { onclick: guard(async () => {
             if (c.assertionKey && !confirm('Replace the generated key pair? Assertions signed with the old key stop working.')) return;
             const k = await api('POST', `/oauth/clients/${encodeURIComponent(c.clientId)}/keypair`, { alg: algSel.value });
@@ -760,6 +771,7 @@
             if (jw !== (c.jwks ? JSON.stringify(c.jwks, null, 2) : '')) body.jwks = jw;
             if (jwksUriIn.value !== (c.jwksUri || '')) body.jwksUri = jwksUriIn.value;
             if (methodSel.value !== (c.tokenEndpointAuthMethod || '')) body.tokenEndpointAuthMethod = methodSel.value;
+            if (tlsValue.value.trim() !== (c.tlsClientAuth?.value || '') || (tlsValue.value.trim() && tlsType.value !== c.tlsClientAuth?.type)) body.tlsClientAuth = tlsValue.value.trim() ? { type: tlsType.value, value: tlsValue.value.trim() } : null;
           }
           if (!c.public && regen.checked) body.secret = '';
           else if (!c.public && secretIn.value) body.secret = secretIn.value;
@@ -793,6 +805,51 @@
           }) }, 'Delete all registered')) : null),
       h('div', { class: 'card' }, titled('Registration settings', 'auth.registration-settings'),
         settingsForm(['oauthRegistration', 'oauthRegistrationToken', 'oauthRegistrationScopes', 'oauthRegistrationGrants', 'oauthRegistrationRate', 'oauthRegistrationTtlDays', 'oauthRegistrationMax'], { onSaved: () => { loadCurlCtx().catch(() => {}); route(); } }))));
+    // ---- mutual TLS: the lab CA, client certificates, the listener
+    const certCn = h('input', { type: 'text', placeholder: 'common name, e.g. fusion-client' });
+    const certUri = h('input', { type: 'text', placeholder: 'SAN URIs, e.g. spiffe://lab/fusion (optional)' });
+    const certDns = h('input', { type: 'text', placeholder: 'SAN DNS names (optional)' });
+    const certDays = h('input', { type: 'number', value: 365, min: 1, max: 825 });
+    const certKey = h('select', null, [['ec', 'EC P-256'], ['rsa', 'RSA 2048']].map(([v, l]) => h('option', { value: v }, l)));
+    const dl = (x, file, label) => h('a', { class: 'btn small', href: `/admin/api/mtls/certs/${encodeURIComponent(x.id)}/${file}`, download: '' }, label);
+    const p12 = (x) => guard(async () => {
+      const pw = prompt(`Password for ${x.cn}.p12 (at least 4 characters; Java and Postman ask for it)`, 'changeit');
+      if (!pw) return;
+      const res = await api('POST', `/mtls/certs/${encodeURIComponent(x.id)}/p12`, { password: pw }, { raw: true });
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || `HTTP ${res.status}`);
+      const a2 = h('a', { href: URL.createObjectURL(await res.blob()), download: `${x.cn}.p12` });
+      document.body.append(a2); a2.click(); a2.remove();
+    });
+    const tlsClient = (x) => guard(async () => {
+      const id = prompt('Client id for an OAuth client that authenticates with this certificate (tls_client_auth)', `${x.cn}-tls`.replace(/[^A-Za-z0-9._-]/g, '-'));
+      if (!id) return;
+      await api('POST', '/oauth/clients', { clientId: id, scopes: 'read write', tokenEndpointAuthMethod: 'tls_client_auth', tlsClientAuth: { type: 'subject_dn', value: x.subject.replace(/\n/g, ', ') } });
+      toast(`Client ${id} created: request tokens at ${mt.url}/oauth/token with client_id=${id} and this certificate`, 'ok');
+      route();
+    });
+    el.append(h('div', { class: 'card stack' }, titled('Mutual TLS (client certificates)', 'auth.mtls'),
+      h('div', { class: 'small muted' }, 'A second, TLS listener asks callers for a client certificate: the certificate is the credential in the mtls auth mode (profile /p/mtls), and OAuth clients can authenticate with it and get tokens bound to it (RFC 8705). The lab CA below issues the certificates.'),
+      mt.listening ? h('div', { class: 'kv' }, h('div', null, 'mTLS endpoint'), h('div', null, h('code', null, mt.url), ' ', h('button', { class: 'small', onclick: () => copy(mt.url) }, 'copy')),
+        h('div', null, 'Try'), h('div', null, h('code', null, `${mt.url}/p/mtls/v1/employees`)))
+        : h('div', { class: 'small', style: { color: 'var(--err)' } }, mt.enabled ? 'MTLS_ENABLED is set but the listener is not running (restart the server, or check the log).' : 'The mTLS listener is off. Set MTLS_ENABLED=true (and MTLS_PORT, default 8443) and restart. Certificates can be issued already.'),
+      h('div', { class: 'grid cols-2' },
+        h('div', { class: 'stack' }, h('h3', null, 'Lab CA'), kv({ subject: mt.ca.subject.replace(/\n/g, ', '), expires: fmtDate(mt.ca.validTo), 'SHA-256': mt.ca.fingerprint256 }),
+          h('div', { class: 'row' }, h('a', { class: 'btn small', href: '/admin/api/mtls/ca.pem', download: 'lab-ca.pem' }, 'Download lab-ca.pem'), h('span', { class: 'small muted' }, 'Trust it in clients: it also signed the listener\'s certificate.'))),
+        h('div', { class: 'stack' }, h('h3', null, 'Issue a client certificate'),
+          h('div', { class: 'grid cols-2' }, field('Common name', certCn), field('Key', certKey), field('SAN URIs', certUri), field('SAN DNS', certDns), field('Valid for (days)', certDays)),
+          h('div', { class: 'row' }, h('button', { class: 'primary', onclick: guard(async () => {
+            const x = await api('POST', '/mtls/certs', { cn: certCn.value.trim(), keyType: certKey.value, days: Number(certDays.value), san: { uri: certUri.value, dns: certDns.value } });
+            toast(`Issued ${x.cn}`, 'ok');
+            route();
+          }) }, 'Issue')))),
+      mt.certs.length ? h('div', { class: 'table-wrap' }, h('table', null, h('thead', null, h('tr', null, ['Common name', 'SANs', 'Expires', 'x5t#S256', ''].map((x) => h('th', null, x)))),
+        h('tbody', null, mt.certs.map((x) => h('tr', null, h('td', null, x.cn, h('div', { class: 'small muted' }, x.keyType === 'rsa' ? 'RSA 2048' : 'EC P-256')), h('td', { class: 'small' }, x.subjectAltName || '—'),
+          h('td', { class: 'small' }, fmtDate(x.validTo)), h('td', { class: 'mono small', title: x['x5t#S256'] }, `${x['x5t#S256'].slice(0, 12)}…`),
+          h('td', null, h('div', { class: 'row', style: { flexWrap: 'nowrap' } }, dl(x, 'cert.pem', 'cert.pem'), dl(x, 'key.pem', 'key.pem'), h('button', { class: 'small', onclick: p12(x) }, '.p12'),
+            h('button', { class: 'small', title: 'Create an OAuth client that authenticates with this certificate', onclick: tlsClient(x) }, 'OAuth client'),
+            h('button', { class: 'small danger', onclick: guard(async () => { if (!confirm(`Delete ${x.cn}? It stays valid until it expires (there is no revocation list); only the download goes away.`)) return; await api('DELETE', `/mtls/certs/${encodeURIComponent(x.id)}`); route(); }) }, 'Delete')))))))) : h('div', { class: 'small muted' }, 'No client certificates issued yet.'),
+      h('details', null, h('summary', { class: 'small' }, 'mTLS settings'), settingsForm(['mtlsEnabled', 'mtlsPort', 'mtlsPublicUrl', 'mtlsAllowedSubjects', 'mtlsTrustedCas', 'mtlsCertFile', 'mtlsKeyFile'], { onSaved: route }))));
+
     // ---- client ID metadata documents (CIMD): URL client_ids, hosted documents, what has been seen
     const cimd = await api('GET', '/oauth/client-metadata');
     const cimdName = h('input', { type: 'text', placeholder: 'name (becomes <name>.json)' });
@@ -2534,7 +2591,10 @@
           ['/mcp, /.well-known/oauth-protected-resource/mcp', 'Mock MCP server (Streamable HTTP): tools, resources and prompts over the same data. Protocol 2026-07-28 (stateless) and 2025-11-25/06-18/03-26 clients that initialize a session. The protected resource metadata points OAuth-capable MCP clients at the built-in OAuth server.'],
           ['/a2a, /a2a/rest/…, /a2a/v0.3, /.well-known/agent-card.json', 'Mock A2A agent: answers questions about the same data as tasks with artifacts. A2A 1.0 over JSON-RPC (/a2a, header A2A-Version: 1.0) and HTTP+JSON (/a2a/rest), and 0.3 JSON-RPC (/a2a/v0.3, or /a2a without the header). The Agent Card is always open.'],
           ['/files, /files/{key} (the S3 bucket name)', 'S3-compatible API over the file pool: path-style, signed with AWS Signature V4 using the S3 API keys (a signed GET / is ListBuckets). The bucket name is a setting.'],
-          ['/oauth/token, /oauth/authorize, /oauth/introspect, /oauth/revoke, /oauth/register', 'Built-in OAuth 2.0 server, with dynamic client registration (RFC 7591) at /oauth/register.'],
+          ['/oauth/token, /oauth/authorize, /oauth/introspect, /oauth/revoke, /oauth/register', 'Built-in OAuth 2.0 server, with dynamic client registration (RFC 7591) at /oauth/register, signed client assertions (private_key_jwt) and client certificate auth (RFC 8705).'],
+          ['/oauth/client-metadata/{name}.json', 'Client ID metadata documents (CIMD) hosted by the lab: use the URL as a client_id. Edit them on the Auth page.'],
+          ['/p/{profile}/…', 'Any API path above with a settings profile (built-in: one per auth mode, e.g. /p/hmac/v1/employees). See the Profiles page.'],
+          ['https://{host}:{MTLS_PORT, 8443}/…', 'The mutual-TLS listener (when MTLS_ENABLED): the same paths, with a client certificate from the lab CA (Auth page → Mutual TLS).'],
           ['/.well-known/jwks.json, /.well-known/oauth-authorization-server', 'Signing keys and OAuth discovery.'],
           ['/openapi.json, /openapi.yaml', 'Live OpenAPI for the mock data API (for integrations).'],
           ['/admin/api/openapi.json, .yaml', 'Live OpenAPI for the admin API (password protected).'],

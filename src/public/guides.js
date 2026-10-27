@@ -20,7 +20,7 @@
   /**
    * ctx: {
    *   base, root, mode, apiKey: {name, in, value}, basic: {user, pass}, bearer, hmac: {keyId, secret},
-   *   tokenUrl, client: {clientId, secret}, required: [{name, value}], adminPasswordRequired
+   *   tokenUrl, client: {clientId, secret}, required: [{name, value}], adminPasswordRequired, mtls: {url}
    * }
    * base is where the mock APIs are: the server itself (root), or root + /p/<name> when the dashboard's profile
    * picker selects a settings profile. The admin API and the S3 API are always at root.
@@ -28,6 +28,9 @@
   function makeCurl(ctx) {
     const root = ctx.root || ctx.base;
     const prefix = ctx.base.startsWith(root) ? ctx.base.slice(root.length) : ''; // '/p/<name>' or ''
+    // AUTH_MODE=mtls: API calls go to the mTLS listener with a lab CA client certificate (files from the Auth page).
+    const mtlsBase = `${ctx.mtls?.url || root.replace(/^http:/, 'https:')}${prefix}`;
+    const CERT_FLAGS = ['--cert client.pem', '--key client-key.pem', '--cacert lab-ca.pem'];
     const lines = (pre, parts) => {
       const flat = parts.join(' ');
       const cmd = flat.length > 110 ? parts.join(' \\\n  ') : flat;
@@ -55,7 +58,7 @@
         p += `${p.includes('?') ? '&' : '?'}${encodeURIComponent(ctx.apiKey.name)}=${encodeURIComponent(ctx.apiKey.value)}`;
       }
       if (method !== 'GET') parts.push(`-X ${method}`);
-      parts.push(q(ctx.base + p));
+      parts.push(q((api && ctx.mode === 'mtls' ? mtlsBase : ctx.base) + p));
 
       const bodyStr = o.json !== undefined ? JSON.stringify(o.json) : o.body;
       const hasInlineBody = bodyStr !== undefined;
@@ -87,6 +90,9 @@
             parts.push(`-H "Authorization: HMAC ${ctx.hmac.keyId}:$SIG"`, '-H "X-Timestamp: $TS"');
             break;
           }
+          case 'mtls':
+            parts.push(...CERT_FLAGS);
+            break;
           default: break;
         }
         for (const r of ctx.required || []) parts.push(`-H ${q(`${r.name}: ${r.value ?? 'test'}`)}`);
@@ -125,6 +131,7 @@
       jwt: 'a JWT Bearer token (fetched from the built-in OAuth server on the first line)',
       oauth2: 'an OAuth 2.0 access token (fetched with client credentials on the first line)',
       hmac: `an HMAC signature (key id "${ctx.hmac.keyId}", computed with openssl on the first lines)`,
+      mtls: `a client certificate from the lab CA (client.pem and client-key.pem, issued on the Auth page) on the mTLS listener ${mtlsBase}`,
     }[ctx.mode] || ctx.mode;
 
     /**
@@ -155,6 +162,9 @@
           pre.push(`SIG=$(printf '%s\\n%s\\n%s\\n%s' GET ${q(prefix + p)} "$TS" "${EMPTY_SHA256}" | openssl dgst -sha256 -hmac ${q(ctx.hmac.secret)} -binary | openssl base64 -A)`);
           envs.push('TS="$TS"', 'SIG="$SIG"');
           hdrs.push(['Authorization', `'HMAC ${ctx.hmac.keyId}:'+process.env.SIG`], ['X-Timestamp', 'process.env.TS']);
+          break;
+        case 'mtls':
+          pre.push('# Node\'s built-in WebSocket client cannot present a client certificate: pick a profile with another auth mode for WebSocket guides.');
           break;
         default: break;
       }
@@ -196,7 +206,7 @@
       return `AWS_ACCESS_KEY_ID=${q(c.accessKeyId)} AWS_SECRET_ACCESS_KEY=${q(c.secretAccessKey)} AWS_REGION=${q(c.region)} aws --endpoint-url ${q(root)} ${args}`;
     }
 
-    return { curl, admin, plain, ws, s3, aws, tokenLine, ctx, authLabel, base: ctx.base, root, prefix, mode: ctx.mode };
+    return { curl, admin, plain, ws, s3, aws, tokenLine, ctx, authLabel, base: ctx.base, root, prefix, mtlsBase, mode: ctx.mode };
   }
 
   /**
@@ -210,6 +220,8 @@
     const c = C.ctx.client || { clientId: 'demo-client', secret: 'demo-secret' };
     const fileId = extra.fileId || 'FILE_ID';
     const specId = extra.specId || 'SPEC_ID';
+    const mtlsRoot = C.ctx.mtls?.url || C.root.replace(/^http:/, 'https:');
+    const CERT_FLAGS_TEXT = '--cert client.pem --key client-key.pem --cacert lab-ca.pem';
     // A JWT client assertion built with openssl (RFC 7523), then the client_credentials grant with it.
     const assertionScript = (alg) => [
       `CLIENT_ID=${q(c.clientId)}`,
@@ -655,6 +667,27 @@
           ['Exchange the code (public client: client_id and PKCE verifier, no secret)', `curl -s -d grant_type=authorization_code -d code=CODE -d redirect_uri=https://oauth.pstmn.io/v1/callback -d code_verifier=VERIFIER --data-urlencode ${q(`client_id=${C.root}/oauth/client-metadata/demo.json`)} ${q(C.ctx.tokenUrl)}`],
           ['Host your own document on this server', admin('PUT', '/oauth/client-metadata/my-agent', { json: { client_name: 'My agent', redirect_uris: ['http://127.0.0.1:33418/callback'], grant_types: ['authorization_code', 'refresh_token'], token_endpoint_auth_method: 'none', scope: 'read' } })],
           ['Turn dynamic registration off (CIMD only)', admin('PUT', '/settings', { json: { oauthRegistration: 'off' } })],
+        ],
+      },
+      'auth.mtls': {
+        title: 'Mutual TLS (client certificates)',
+        purpose: 'A second, TLS listener that asks every caller for a client certificate. Use it for `AUTH_MODE=mtls` (or the `mtls` profile), where the certificate is the credential, and for OAuth with certificates (RFC 8705): `tls_client_auth` / `self_signed_tls_client_auth` client authentication and certificate-bound access tokens. The lab CA issues the certificates, so nothing else is needed.',
+        steps: [
+          'Issue a client certificate here (common name, and optional SANs such as `spiffe://lab/agent`). Download the certificate and key as PEM for curl and most tools, or as a password-protected .p12 for Java keystores, Postman and browsers. Download the lab CA too.',
+          `Call the APIs on the mTLS listener (${C.ctx.mtls?.url || 'https://<host>:8443'}) with \`/p/mtls\` in front of the path (or set AUTH_MODE=mtls). No certificate, an untrusted one, or one not in MTLS_ALLOWED_SUBJECTS gives a 401 or 403 that says why.`,
+          'The listener\'s own certificate is issued by the lab CA: trust `lab-ca.pem` in your client (or skip server verification for a quick test). Set MTLS_CERT_FILE / MTLS_KEY_FILE to present a publicly trusted certificate instead.',
+          'OAuth with certificates: edit a client, set its auth method to `tls_client_auth` and the expected subject DN or SAN (or `self_signed_tls_client_auth` with the certificate pasted as its public key), then request tokens at the mTLS token endpoint with `client_id` and no secret.',
+          'Every token issued over the mTLS listener with a client certificate is bound to it (`cnf.x5t#S256`): it only works on the mTLS listener with the same certificate, and gets a 401 anywhere else. That is the sender-constrained token demo.',
+          'The listener is off by default (MTLS_ENABLED=true, MTLS_PORT, restart). In the lab the port must also be open to the internet.',
+          ...pw,
+        ],
+        curls: [
+          ['Issue a client certificate (save certPem and keyPem from the reply)', admin('POST', '/mtls/certs', { json: { cn: 'my-client', san: { uri: ['spiffe://lab/my-client'] } } })],
+          ['Download the lab CA', admin('GET', '/mtls/ca.pem', { output: 'lab-ca.pem' })],
+          ['Call the API with the certificate (profile /p/mtls)', `curl -s ${CERT_FLAGS_TEXT} ${q(`${mtlsRoot}/p/mtls/v1/employees?limit=1`)}`],
+          ['Without a certificate: 401 with the reason', `curl -s --cacert lab-ca.pem ${q(`${mtlsRoot}/p/mtls/v1/employees?limit=1`)}`],
+          ['Token with tls_client_auth (no secret), bound to the certificate', `curl -s ${CERT_FLAGS_TEXT} -d grant_type=client_credentials -d client_id=MY_TLS_CLIENT ${q(`${mtlsRoot}/oauth/token`)}`],
+          ['Use the bound token: works with the certificate on the mTLS listener', `TOKEN=$(curl -s ${CERT_FLAGS_TEXT} -d grant_type=client_credentials -d client_id=MY_TLS_CLIENT ${q(`${mtlsRoot}/oauth/token`)} | sed -E 's/.*"access_token":"([^"]+)".*/\\1/')\ncurl -s ${CERT_FLAGS_TEXT} -H "Authorization: Bearer $TOKEN" ${q(`${mtlsRoot}/p/oauth2/v1/employees?limit=1`)}\ncurl -s -H "Authorization: Bearer $TOKEN" ${q(`${C.root}/p/oauth2/v1/employees?limit=1`)}   # 401: no certificate`],
         ],
       },
       'auth.users': {
