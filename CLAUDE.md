@@ -13,7 +13,8 @@ Project memory and chat history aren't visible across the two accounts, so anyth
 Related docs: `README.md` (about 1,300 lines; the user-facing spec), `docs/multi-protocol-design.md` (design
 record), `docs/decisions.md` (deliberate deviations, verification status, deployments),
 `docs/platform-test-checklist.md` (checks to run against the real integration platform), `docs/ONBOARDING.md`
-(longer map of the codebase).
+(longer map of the codebase), `docs/security-roadmap.md` (proposed order for new auth features; read it before
+adding an auth mode, OAuth client auth method or settings isolation).
 
 ## What this is
 

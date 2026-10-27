@@ -147,6 +147,7 @@ Test harness facts worth knowing:
   (it used to live only in Leor's Claude project instructions).
 - `docs/decisions.md`: deliberate deviations from the original spec, deployments, verification status.
 - `docs/platform-test-checklist.md`: checks to run against the real integration platform.
+- `docs/security-roadmap.md`: proposed order for new auth features (isolation, CIMD, mTLS, signed client assertions/SPIFFE).
 - `docs/multi-protocol-design.md`: design record (principles, delivery plan, open questions). Partly stale (see §7).
 
 ## 7. Known gaps and drift (candidate contributions)

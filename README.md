@@ -1285,7 +1285,8 @@ src/
   util/                problem (errors + renderer registry), xml (tiny DOM on saxes), websocket (RFC 6455), build
   public/              dashboard (index.html, app.js, guides.js, styles.css)
   webapp/              back office app at /app (index.html, app.js, app.css)
-docs/                  multi-protocol-design.md, decisions.md, platform-test-checklist.md, ONBOARDING.md
+docs/                  multi-protocol-design.md, decisions.md, platform-test-checklist.md, ONBOARDING.md,
+                       security-roadmap.md
 facade/                sample experience API (OpenAPI, data mapping, single-file app)
 images/                README screenshots and architecture diagrams
 samples/               Supplier_Order_Collaboration_OpenAPI_3_1.yaml, Inventory_Swagger_2_0.yaml
