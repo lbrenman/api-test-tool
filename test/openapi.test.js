@@ -41,12 +41,13 @@ test('data spec covers /v1, SSE and OAuth only; admin and health live in the adm
     assert.match(data.info.description, /\/admin\/api\/openapi\.json/);
 
     const adminPaths = Object.keys(admin.paths);
-    for (const p of ['/health', '/ready', '/admin/api/settings', '/admin/api/data/seed', '/admin/api/inspector', '/admin/api/tester/specs']) assert.ok(adminPaths.includes(p), p);
+    for (const p of ['/health', '/ready', '/metrics', '/admin/api/settings', '/admin/api/data/seed', '/admin/api/inspector', '/admin/api/tester/specs']) assert.ok(adminPaths.includes(p), p);
     assert.ok(!adminPaths.some((p) => p.startsWith('/v1')), 'admin spec must not describe /v1');
     assert.match(admin.info.title, /Admin API/);
     assert.match(admin.info.description, /\/openapi\.json/);
-    assert.deepEqual(Object.keys(admin.components.securitySchemes).sort(), ['AdminBasic', 'AdminSession']);
+    assert.deepEqual(Object.keys(admin.components.securitySchemes).sort(), ['AdminBasic', 'AdminSession', 'MetricsToken']);
     assert.deepEqual(admin.paths['/health'].get.security, []);
+    assert.deepEqual(admin.paths['/metrics'].get.security, [], '/metrics is open while METRICS_TOKEN is unset');
 
     // The admin spec does not follow the /v1 auth mode.
     await t.ctx.settings.set('authMode', 'oauth2');

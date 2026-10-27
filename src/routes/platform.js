@@ -85,7 +85,13 @@ module.exports = function platformRouter(ctx, { adminAuth } = {}) {
         return sendProblem(req, res, 401, { detail: 'This server\'s /metrics needs Authorization: Bearer <METRICS_TOKEN>', code: 'metrics-token-required', headers: { 'WWW-Authenticate': 'Bearer realm="metrics"' } });
       }
     }
-    res.set('Cache-Control', 'no-store').type('text/plain; version=0.0.4; charset=utf-8').send(ctx.telemetry.prometheus());
+    // Written directly: res.type()/send() would reorder the parameters, and some scrapers match the exact media type.
+    const body = Buffer.from(ctx.telemetry.prometheus(), 'utf8');
+    res.status(200);
+    res.setHeader('Cache-Control', 'no-store');
+    res.setHeader('Content-Type', 'text/plain; version=0.0.4; charset=utf-8');
+    res.setHeader('Content-Length', String(body.length));
+    res.end(req.method === 'HEAD' ? undefined : body);
   });
 
   r.get('/openapi.json', async (req, res) => {
