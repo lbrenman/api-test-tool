@@ -28,6 +28,13 @@ swap_size_mb = 512
   NODE_OPTIONS = "--max-old-space-size=384"
   # PUBLIC_BASE_URL is auto-detected from FLY_APP_NAME (https://<app>.fly.dev)
 
+# Fly scrapes the tool's Prometheus metrics (request rates, latencies, errors, chaos,
+# process memory) every 15 s and shows them in its managed Grafana (fly-metrics.net),
+# next to the machine metrics. Leave METRICS_TOKEN unset: the scraper can't send one.
+[metrics]
+  port = 3000
+  path = "/metrics"
+
 [[mounts]]
   source = "att_data"
   destination = "/data"

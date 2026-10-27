@@ -845,6 +845,7 @@ class OAuthService {
       { ttl, issuer: this.issuer(req), audience: resource && resource !== this.audience() ? [this.audience(), resource] : this.audience(), subject: subject || client.clientId },
     );
     await this.markUsed(client).catch(() => {}); // keeps a registered client from expiring (OAUTH_REGISTRATION_TTL_DAYS)
+    this.ctx.telemetry?.tokenIssued(req.body?.grant_type);
     const out = { access_token: token, token_type: 'Bearer', expires_in: ttl, scope: scopes.join(' ') };
     if (refresh) {
       const rt = crypto.randomBytes(32).toString('base64url');

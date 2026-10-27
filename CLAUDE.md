@@ -31,6 +31,8 @@ both calls APIs and exposes them:
 - **AI mocks** over the same data: OpenAI-compatible LLM `/llm/v1`, MCP server `/mcp` (2026-07-28 stateless and
   2025-xx session eras), A2A agent `/a2a` (1.0.1 JSON-RPC and HTTP+JSON, plus 0.3). No real model is called;
   the A2A agent is rule-based.
+- **Observability of the tool itself:** `/metrics` (Prometheus text) and optional OTLP/HTTP export (protobuf or JSON) of
+  the same metrics plus one span per API request to any OpenTelemetry backend, configured with the standard `OTEL_*` vars.
 - **Contract tester (incoming):** OpenAPI 3.0/3.1/Swagger 2.0, WSDL 1.1 (XSD validation), AsyncAPI 2.x/3.0 or
   scripted WebSocket scenarios. Lint, try-it, validation, run-all with ID chaining and negative tests, reports.
 
@@ -144,6 +146,15 @@ Leor also runs a Fly.io copy by hand (`fly deploy`), not from CI; see `docs/deci
   generates XSD, XML out and XML in), `s3/sigv4.js` (SigV4 + aws-chunked), `llm/generate.js` (text, usage, seeded
   RNG), `mcp/catalog.js` (the 22 tools, resources, prompts, completions — also used by the A2A agent),
   `a2a/{wire,agent,tasks,card}.js` (1.0↔0.3 converters, rule-based planner, task engine + push, Agent Cards).
+- **Telemetry:** `src/middleware/telemetry.js` is mounted right after `requestId` (before profile routing, so every
+  request is measured, rejected ones included) and calls `ctx.telemetry.begin/end` (`src/services/telemetry.js`). The
+  protocol label reuses the inspector's `apiKind`, plus `platform`/`admin`/`ui`/`inspector`; routes are templated
+  (`routeOf`) and each metric is capped at 2000 label sets. Services report activity through `ctx.events`
+  (`change`, `file`) or a direct `ctx.telemetry?.…` call (webhook deliveries, OAuth tokens); chaos is read from the
+  `X-Chaos-Injected` response header (set even for `reset`). Metric names follow OTel semantic conventions; `/metrics`
+  renders them as an OTLP-to-Prometheus bridge would. The exporter is in-house: OTLP JSON built once, encoded to
+  protobuf by `src/util/otlpProto.js` (field numbers from opentelemetry-proto v1). Spans only for API surfaces, never
+  for the tool's own exports (`User-Agent: api-test-tool-otlp/…`). Export is off until `OTEL_EXPORTER_OTLP_ENDPOINT` is set.
 - **Tester:** shared core in `src/services/tester/`, adapters in `adapters/{openapi.js,wsdl/,websocket/}`.
 - **OpenAPI:** two specs that must not overlap. `src/services/openapiGen.js` = data spec (`/v1`, `/oauth/token`,
   `/oauth/register`, `/sse`, `/llm/v1`) at `/openapi.json`; `src/services/openapiAdminGen.js` = admin spec
@@ -194,6 +205,8 @@ applies**, in the same PR. The help text once drifted for weeks because nothing 
   reserved paths, headers cheat sheet).
 - **`src/public/guides.js`:** every affected `?` guide.
 - **`/health`** settings summary and the admin overview URLs.
+- **Telemetry:** a new metric goes in the `TelemetryService` constructor and the README's "What is measured" table.
+  A new top-level API path gets its protocol label from `apiKind`; check `routeOf` turns its ids into `{id}`.
 - **Inspector:** `apiKind` and the source filter.
 - **Both OpenAPI specs:** `openapiGen.js` for `/v1`, `/oauth/*`, `/sse`, `/llm/v1`; `openapiAdminGen.js` for
   `/admin/api`. `test/openapi.test.js` checks every admin/tester route is documented and the specs don't overlap.
@@ -285,6 +298,8 @@ claim an issue: assign yourself and add the `in progress` label. Link the PR to 
   (data per profile) isn't built.
 - SPIFFE (roadmap step 4b) is parked: `spiffe://` URI SANs work in lab CA certificates and `tls_client_auth`
   (`san_uri`), but there is no SVID/trust-bundle handling.
+- Telemetry: no gRPC export (http/protobuf and http/json only), server spans only (no client spans or `traceparent`
+  on outgoing webhooks and inspector forwards yet), and no OTLP logs.
 - Run **one instance**. Resource lists, idempotency keys, MCP sessions, A2A tasks, the SSE/WebSocket change feeds,
   the Inspector live stream and the rate-limit budget are in-process, so even Postgres + S3 doesn't make two instances work.
 - More in `docs/decisions.md` (deliberate deviations, and what has and hasn't been verified in a real environment).

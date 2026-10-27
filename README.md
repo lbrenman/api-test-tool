@@ -85,6 +85,7 @@ Use cases:
   - [S3-compatible API](#s3-compatible-api)
   - [Inspector](#inspector)
   - [Outgoing webhooks](#outgoing-webhooks)
+  - [Observability: metrics and traces](#observability-metrics-and-traces)
   - [API tester walkthrough](#api-tester-walkthrough)
     - [SOAP services (WSDL)](#soap-services-wsdl)
     - [WebSocket APIs (AsyncAPI or a scenario)](#websocket-apis-asyncapi-or-a-scenario)
@@ -164,7 +165,8 @@ Fly.io, Render and Northflank are covered in [Deployment](#deployment).
 | **A2A agent** | A mock [Agent2Agent](https://a2a-protocol.org) agent that answers plain-language questions about the same employees, products, departments and categories ("Who works in Engineering at level L5?", "products under $50 in stock", "how many employees?") and can change the data, with rule-based matching (no LLM, so answers repeat). A2A **1.0** over JSON-RPC and HTTP+JSON, and **0.3** for older clients; Agent Card at `/.well-known/agent-card.json` with skills and security schemes that follow the auth mode. Tasks go SUBMITTED → WORKING → COMPLETED with streamed `answer` (text) and `data` (JSON) artifacts; FAILED, REJECTED and INPUT_REQUIRED (delete confirmations) happen naturally. SendMessage (blocking or return-immediately), streaming, GetTask, ListTasks, CancelTask, SubscribeToTask, push notifications, the extended Agent Card, A2A error codes and chaos (`X-Force-A2A-Error`). |
 | **Outgoing webhooks** | Any number of webhooks that POST `{event, resource, resourceId, href, …}` to your URL when an employee, product, department or category is created, updated or deleted, or a file is uploaded, downloaded or deleted, through any protocol. Per webhook: resources, events, optional record data, HMAC signing secret and extra headers. Stored in the database (they survive restarts); every delivery is logged with the response, with Test and Resend buttons. |
 | **Inspector** | Catch-all capture with the actual path, live stream (SSE), detected auth (Basic user, decoded JWT, API keys), pretty bodies and multipart parts, copy as curl, replay, auto-forward, configurable responses and path rules. |
-| **Generated OpenAPI** | Two OAS 3.1 specs, regenerated from the live settings. **Mock Data API** (`/openapi.json`, `/openapi.yaml`) is for integrations: `/v1` resources, every pagination path, the file endpoints, the SSE streams, the mock LLM and the OAuth token endpoint, reflecting the server URL, date format, auth scheme, required headers and chaos headers. **Admin API** (`/admin/api/openapi.json`, `.yaml`, password protected) is for operators and scripts: settings, seeding, files, OAuth clients, inspector, tester, `/health` and `/ready`. Swagger UI at `/docs` shows both (`/docs?spec=admin` for the admin spec). |
+| **Observability** | The tool reports on itself to an external dashboard. `/metrics` serves Prometheus text (request duration histogram by protocol, route, method, status and settings profile; in-flight requests; chaos injections; data changes; file events; webhook deliveries; OAuth tokens issued; open WebSockets, MCP sessions and A2A tasks; CPU, memory, heap and event-loop delay) for Fly.io, Prometheus or Grafana to scrape. With `OTEL_EXPORTER_OTLP_ENDPOINT` set, the same metrics and one trace span per API request (joining the caller's trace through W3C `traceparent`, tagged with `X-Request-Id` so it lines up with the Inspector) are pushed over OTLP/HTTP (protobuf or JSON) to Grafana Cloud, Honeycomb, New Relic, Datadog, SigNoz, Jaeger or an OpenTelemetry Collector. In-house exporter, no SDK dependency. |
+| **Generated OpenAPI** | Two OAS 3.1 specs, regenerated from the live settings. **Mock Data API** (`/openapi.json`, `/openapi.yaml`) is for integrations: `/v1` resources, every pagination path, the file endpoints, the SSE streams, the mock LLM and the OAuth token endpoint, reflecting the server URL, date format, auth scheme, required headers and chaos headers. **Admin API** (`/admin/api/openapi.json`, `.yaml`, password protected) is for operators and scripts: settings, seeding, files, OAuth clients, inspector, tester, `/health`, `/ready` and `/metrics`. Swagger UI at `/docs` shows both (`/docs?spec=admin` for the admin spec). |
 | **API tester** | Upload, paste or URL load for OAS 3.0, 3.1 and Swagger 2.0 (REST), WSDL 1.1 (SOAP 1.1/1.2, with XSD validation and WS-Security) and AsyncAPI 2.x/3.0 (WebSocket, with message validation, correlation and scripted scenarios). Spec lint, per-operation "try it" with generated samples that honour `pattern`/`format`/`enum`/limits, auth profiles (none, API key, Basic, Bearer, OAuth2 client credentials), response validation, run-all contract mode with ID chaining and negative tests, run history, and JSON and HTML reports. "Mock from spec" serves a spec's examples from this tool. |
 | **Back office app** | `/app` is a business-style app over the mock data, for demos and non-technical viewers: KPIs (headcount, payroll, stock value, stock health), charts, searchable and sortable lists, record pages with related records, and forms to create, edit and delete employees, products, departments and categories. It reads and writes the same data as `/v1` but through its own backend (`/admin/api/app/*`), so the `/v1` auth mode, chaos, rate limits and required headers never break it. Uses the dashboard password. |
 | **Facade API sample** | [`facade/`](facade/): a ready-made contract for an orchestration layer your platform builds in front of this tool. Six operations (people directory search, person 360° profile, idempotent new-hire onboarding, team list, department team snapshot, storefront catalog search), each combining one or more `/v1` calls into one business object; an OpenAPI 3.0.1 spec with examples, `DATA_MAPPING.md` (backend calls, field mappings, aggregation rules, error mapping), and **Acme Front Office** (Experience console), a single-file, mobile-friendly web app with demo mode, a settings tab for credentials (API key, Bearer, Basic, OAuth2 client credentials), a Trace tab showing every request and response with headers and payloads, and built-in help. |
@@ -280,6 +282,16 @@ Settings marked **restart** can only be set through the environment.
 | `WEBHOOKS_ENABLED` | `true` | Send the outgoing webhooks (off pauses them all; definitions are kept) |
 | `WEBHOOK_TIMEOUT_MS` | `10000` | How long a delivery waits for the receiver (100–60000) |
 | `WEBHOOK_DELIVERY_RETENTION` | `200` | Deliveries kept in the log, all webhooks together (10–10000) |
+| `METRICS_ENABLED` | `true` | Serve request, activity and process metrics in Prometheus text format at `/metrics` (off = 404). See [Observability](#observability-metrics-and-traces) |
+| `METRICS_TOKEN` | — | When set, `/metrics` needs `Authorization: Bearer <token>` (Fly.io's built-in scraper can't send one) |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | — | OTLP/HTTP base URL of an OpenTelemetry backend or collector; traces go to `<endpoint>/v1/traces`, metrics to `<endpoint>/v1/metrics`. Blank = no export |
+| `OTEL_EXPORTER_OTLP_HEADERS` | — | Headers for every export, `key=value,key2=value2` with percent-encoded values (e.g. `Authorization=Basic%20…`, `x-honeycomb-team=…`) |
+| `OTEL_EXPORTER_OTLP_PROTOCOL` | `http/protobuf` | `http/protobuf` or `http/json`. gRPC isn't built in; put an OpenTelemetry Collector in between if a backend needs it |
+| `OTEL_SERVICE_NAME` | — | `service.name` on everything exported (blank = `service.name` from `OTEL_RESOURCE_ATTRIBUTES`, else `api-test-tool`) |
+| `OTEL_RESOURCE_ATTRIBUTES` | — | Extra resource attributes, e.g. `deployment.environment.name=lab,team=integration` |
+| `OTEL_TRACES_EXPORTER` / `OTEL_METRICS_EXPORTER` | `otlp` / `otlp` | `none` turns that signal's export off (`/metrics` keeps working) |
+| `OTEL_TRACES_SAMPLER_ARG` | `1` | Share of requests traced (0–1); a request with a `traceparent` header follows the caller's sampled flag |
+| `OTEL_METRIC_EXPORT_INTERVAL` | `60000` | Milliseconds between metric exports (1000–3600000) |
 | `INSPECTOR_RETENTION` | `500` | Captures kept |
 | `INSPECTOR_LOG_ALL` | `true` | Also record `/v1/*`, `/soap/*`, `/ws/*` (upgrades), `/sse/*`, `/graphql`, `/odata/*`, `/llm/*`, `/mcp`, `/a2a/*`, S3 API and `/oauth/*` calls (with their real responses). Toggle with **Record API calls** on the Inspector page. |
 | `INSPECTOR_RESPONSE_STATUS`, `INSPECTOR_RESPONSE_CONTENT_TYPE`, `INSPECTOR_RESPONSE_BODY`, `INSPECTOR_RESPONSE_HEADERS`, `INSPECTOR_RESPONSE_DELAY_MS` | `200`, `application/json`, receipt, —, `0` | Default catch-all response |
@@ -292,12 +304,13 @@ Settings marked **restart** can only be set through the environment.
 
 ## Route map
 
-These prefixes are reserved: `/v1`, `/soap`, `/ws`, `/sse`, `/graphql`, `/odata`, `/llm`, `/mcp`, `/a2a`, the S3 bucket name (`/files` by default), `/p` (settings profiles), `/oauth`, `/.well-known`, `/admin`, `/dashboard`, `/app`, `/docs`, `/openapi.json`, `/openapi.yaml`, `/samples`, `/health`, `/ready`, and `GET /` (which redirects to the dashboard; a request signed with AWS Signature V4 to `/` is the S3 API's ListBuckets). **Every other path, and every method, is captured by the inspector.** Calls to `/v1`, `/soap`, `/ws` (the upgrade), `/sse`, `/graphql`, `/odata`, `/llm`, `/mcp`, `/a2a`, the S3 API and `/oauth` are recorded there too (unless `INSPECTOR_LOG_ALL=false`); the dashboard, admin API, docs and health probes never are.
+These prefixes are reserved: `/v1`, `/soap`, `/ws`, `/sse`, `/graphql`, `/odata`, `/llm`, `/mcp`, `/a2a`, the S3 bucket name (`/files` by default), `/p` (settings profiles), `/oauth`, `/.well-known`, `/admin`, `/dashboard`, `/app`, `/docs`, `/openapi.json`, `/openapi.yaml`, `/samples`, `/health`, `/ready`, `/metrics`, and `GET /` (which redirects to the dashboard; a request signed with AWS Signature V4 to `/` is the S3 API's ListBuckets). **Every other path, and every method, is captured by the inspector.** Calls to `/v1`, `/soap`, `/ws` (the upgrade), `/sse`, `/graphql`, `/odata`, `/llm`, `/mcp`, `/a2a`, the S3 API and `/oauth` are recorded there too (unless `INSPECTOR_LOG_ALL=false`); the dashboard, admin API, docs and health probes never are.
 
 | Path | Purpose |
 |---|---|
 | `GET /health` | Liveness, version, the running commit (`commit`), uptime, DB and file-store checks, settings summary (no secrets), data counts |
 | `GET /ready` | Readiness |
+| `GET /metrics` | Request, activity and process metrics in Prometheus text format (`METRICS_ENABLED`; Bearer `METRICS_TOKEN` when set). See [Observability](#observability-metrics-and-traces) |
 | `GET /openapi.json`, `GET /openapi.yaml` | Live OpenAPI 3.1 for the **mock data API** (`/v1`, `/oauth/token`). Import this into integrations. |
 | `GET /admin/api/openapi.json`, `GET /admin/api/openapi.yaml` | Live OpenAPI 3.1 for the **admin API** (`/admin/api/*`, `/health`, `/ready`). Password protected. |
 | `GET /docs` | Swagger UI with a tab per spec: mock data API (OAuth2 + PKCE pre-configured for `demo-client`) and admin API (`?spec=admin`, needs dashboard sign-in) |
@@ -1167,6 +1180,108 @@ printf '%s.%s' "$TIMESTAMP" "$RAW_BODY" | openssl dgst -sha256 -hmac 'change-me'
 
 ---
 
+## Observability: metrics and traces
+
+The tool can report its own activity to an external dashboard, so you can watch and measure the calls your integrations make (rates, latencies, errors, chaos) next to your other systems. Two ways, usable together:
+
+- **Pull:** `GET /metrics` serves Prometheus text. Fly.io, Prometheus, Grafana Alloy/Agent and most collectors can scrape it. On by default (`METRICS_ENABLED`); set `METRICS_TOKEN` to require a Bearer token.
+- **Push:** set `OTEL_EXPORTER_OTLP_ENDPOINT` and the tool sends the same metrics, plus one trace span per API request, over OTLP/HTTP to any OpenTelemetry backend. It uses the standard `OTEL_*` variables, so the setup is the same as for any OpenTelemetry-instrumented app. Every setting can also be changed live on **Settings → telemetry**.
+
+The exporter is built in (`src/services/telemetry.js`, `src/util/otlpProto.js`), not the OpenTelemetry SDK, in line with the other wire formats here: `http/protobuf` (the default, accepted everywhere) and `http/json`. gRPC isn't built in; if a backend only takes gRPC, send to an [OpenTelemetry Collector](https://opentelemetry.io/docs/collector/) and let it forward.
+
+### What is measured
+
+Metric names follow the OpenTelemetry semantic conventions. `/metrics` spells them the way an OTLP-to-Prometheus bridge does (dots become underscores, plus unit and `_total` suffixes), so a dashboard built on scraped metrics also works on pushed ones.
+
+| Metric (Prometheus name) | Type | Labels |
+|---|---|---|
+| `http_server_request_duration_seconds` | histogram | `att_protocol` (`v1`, `soap`, `ws`, `sse`, `graphql`, `odata`, `llm`, `mcp`, `a2a`, `s3`, `oauth`, `inspector`, plus `platform`, `admin`, `ui` for the tool's own pages), `http_route` (ids become `{id}`, inspector paths `/*`), `http_request_method`, `http_response_status_code`, `att_profile`, `error_type` (5xx, or `aborted` when the connection closed first) |
+| `http_server_active_requests` | gauge | — (includes open streams) |
+| `att_chaos_injections_total` | counter | `att_protocol`, `att_chaos_type` (`503`, `timeout`, `reset`, `slow-drip`, `status-418`, …) |
+| `att_data_changes_total` | counter | `att_resource`, `att_change_type` (created, updated, deleted; any protocol) |
+| `att_file_events_total` | counter | `att_file_event` (uploaded, downloaded, deleted), `att_file_via` (multipart, tus, s3, …) |
+| `att_webhook_deliveries_total`, `att_webhook_delivery_duration_seconds` | counter, histogram | `att_webhook_outcome` (success, http-error, no-response) |
+| `att_oauth_tokens_total` | counter | `oauth_grant_type` |
+| `att_websocket_connections`, `att_mcp_sessions`, `att_a2a_tasks` | gauge | — |
+| `process_cpu_time_seconds_total`, `process_memory_usage_bytes`, `v8js_memory_heap_used_bytes`, `nodejs_eventloop_delay_p99_seconds`, `process_uptime_seconds` | | `cpu_mode` on CPU time |
+| `target_info` | | resource attributes (`service_name`, `service_version`, `vcs_ref_head_revision`, …) |
+
+**Traces:** one server span per request to an API under test (every protocol, OAuth and the inspector catch-all; not the dashboard, admin API, `/health` or `/metrics`). The span is named `<METHOD> <route>` and carries the status, path, client address, user agent, settings profile, injected chaos type, and `att.request_id` / `att.correlation_id`, so a slow or failed span leads straight to its capture on the Inspector page (with `INSPECTOR_LOG_ALL`). A request with a W3C `traceparent` header joins the caller's trace: call the tool from an instrumented integration and its spans appear under your flow's trace. 5xx responses and dropped connections mark the span as an error.
+
+Every request is measured, including those rejected before they reach a handler (unknown profile, bad body, auth, rate limit, chaos). Route labels are templates and each metric is capped at 2000 label sets (beyond that, new ones are counted under `otel_metric_overflow="true"`), so scanners hitting random paths can't blow up a metrics backend.
+
+`/health` (`settings.telemetry`) shows what is on, the export endpoint's origin (never the headers), and the last export of each signal with its error; the Overview page warns while an export is failing.
+
+### Grafana Cloud
+
+1. In the Grafana Cloud portal, open your stack and the **OpenTelemetry (OTLP)** tile → **Configure**. Note the **OTLP endpoint** (`https://otlp-gateway-<zone>.grafana.net/otlp`) and the **instance ID**, and generate an API token.
+2. Build the header value: `echo -n '<instance id>:<token>' | base64` (one line; `base64 -w0` on Linux).
+3. Set (Fly secrets, `.env`, or Settings → telemetry):
+
+   ```bash
+   OTEL_EXPORTER_OTLP_ENDPOINT=https://otlp-gateway-<zone>.grafana.net/otlp
+   OTEL_EXPORTER_OTLP_HEADERS=Authorization=Basic%20<base64 from step 2>
+   OTEL_SERVICE_NAME=api-test-tool-lab
+   OTEL_RESOURCE_ATTRIBUTES=deployment.environment.name=lab
+   ```
+
+   The space after `Basic` must be written `%20`. On Fly: `fly secrets set OTEL_EXPORTER_OTLP_ENDPOINT=… OTEL_EXPORTER_OTLP_HEADERS='Authorization=Basic%20…'`.
+4. Make a few calls, then in Grafana: **Explore → Tempo** for traces (service `api-test-tool-lab`), and **Explore → Prometheus** (your stack's Mimir data source) for metrics. Useful queries:
+
+   ```promql
+   # requests per second, by protocol
+   sum by (att_protocol) (rate(http_server_request_duration_seconds_count[5m]))
+   # 95th percentile latency, by route
+   histogram_quantile(0.95, sum by (le, http_route) (rate(http_server_request_duration_seconds_bucket{att_protocol!~"platform|admin|ui"}[5m])))
+   # share of 5xx responses
+   sum(rate(http_server_request_duration_seconds_count{http_response_status_code=~"5.."}[5m])) / sum(rate(http_server_request_duration_seconds_count[5m]))
+   # chaos injected in the last hour, by type
+   sum by (att_chaos_type) (increase(att_chaos_injections_total[1h]))
+   ```
+
+Pushed metrics get a `job` label from `service.name`, so give each deployment its own `OTEL_SERVICE_NAME` (e.g. `api-test-tool-lab`, `api-test-tool-fly`) to tell them apart.
+
+### Other backends
+
+| Backend | `OTEL_EXPORTER_OTLP_ENDPOINT` | `OTEL_EXPORTER_OTLP_HEADERS` |
+|---|---|---|
+| Honeycomb | `https://api.honeycomb.io` (EU: `https://api.eu1.honeycomb.io`) | `x-honeycomb-team=<API key>` |
+| New Relic | `https://otlp.nr-data.net` (EU: `https://otlp.eu01.nr-data.net`) | `api-key=<license key>` |
+| Datadog | Send to a Datadog Agent or an OpenTelemetry Collector with OTLP enabled, e.g. `http://<agent host>:4318` | — |
+| SigNoz Cloud | `https://ingest.<region>.signoz.cloud:443` | `signoz-ingestion-key=<key>` |
+| Jaeger, SigNoz or a Collector you run | `http://<host>:4318` | — |
+
+Check the vendor's current OTLP docs for the exact endpoint and header; these change from time to time.
+
+### Fly.io metrics, no account needed
+
+The repo's `fly.toml` has a `[metrics]` block, so Fly scrapes `/metrics` and the numbers appear in Fly's managed Grafana (**Metrics** on the app's Fly dashboard, or `https://fly-metrics.net`), next to Fly's own machine metrics. Leave `METRICS_TOKEN` blank on Fly: its scraper can't send a token.
+
+### Local Prometheus and Jaeger
+
+```bash
+# Jaeger (traces) with an OTLP receiver on 4318; UI at http://localhost:16686
+docker run --rm -d --name jaeger -p 16686:16686 -p 4318:4318 jaegertracing/jaeger:latest
+OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318 OTEL_METRICS_EXPORTER=none npm start
+```
+
+Jaeger takes traces only, hence `OTEL_METRICS_EXPORTER=none`; scrape the metrics with Prometheus instead:
+
+```yaml
+# prometheus.yml
+scrape_configs:
+  - job_name: api-test-tool
+    scrape_interval: 15s
+    static_configs: [{ targets: ['host.docker.internal:3000'] }]
+    # authorization: { credentials: '<METRICS_TOKEN>' }   # when METRICS_TOKEN is set
+```
+
+### See exactly what is exported
+
+Point the export at this tool's own Inspector: set `OTEL_EXPORTER_OTLP_PROTOCOL=http/json` and `OTEL_EXPORTER_OTLP_ENDPOINT=$B/otel-debug`, make a call, and the next export shows up as `POST /otel-debug/v1/traces` with a readable OTLP JSON body (metrics follow every `OTEL_METRIC_EXPORT_INTERVAL`). The tool doesn't trace its own exports, so this doesn't loop.
+
+---
+
 ## API tester walkthrough
 
 This walkthrough uses the bundled Supplier Order Collaboration spec (`samples/Supplier_Order_Collaboration_OpenAPI_3_1.yaml`).
@@ -1261,8 +1376,8 @@ the facade spec in the **API tester** and pressing **Run all** contract-tests yo
 
 ## Postman and Newman
 
-- `postman/API-Test-Tool.postman_collection.json` has 224 requests with test scripts, covering:
-  - health, OpenAPI and discovery;
+- `postman/API-Test-Tool.postman_collection.json` has 225 requests with test scripts, covering:
+  - health, metrics, OpenAPI and discovery;
   - OAuth: token, introspect, revoke, error cases, and dynamic client registration (register, token for the new client, RFC 7592 read and delete, invalid metadata);
   - signed client assertions (RFC 7523): a `client_secret_jwt` token signed in the pre-request script, a replayed `jti`, a wrong audience, an assertion plus a secret, and a `private_key_jwt` client with a generated ES256 key pair;
   - client ID metadata documents: discovery, the hosted `demo` document, an authorization code + PKCE flow with a URL client_id, a redirect URI not in the document and a client_id URL on a private address;
@@ -1315,6 +1430,7 @@ fly status                                 # one machine; if there are two: fly 
 
 `fly.toml` mounts `/data` for SQLite and the file pool, and health-checks `/health`. `PUBLIC_BASE_URL` is detected from `FLY_APP_NAME`. It also sets:
 
+- **Metrics** (`[metrics]`): Fly scrapes `/metrics` and shows the tool's request rates, latencies, errors and chaos in its managed Grafana, with no extra account (see [Observability](#observability-metrics-and-traces)). Leave `METRICS_TOKEN` unset on Fly.
 - **Concurrency** (`[http_service.concurrency]`, 200 soft / 250 hard connections). The tool holds long-lived connections (the Inspector's live stream, `/sse`, `/ws`, MCP and A2A streams, GraphQL subscriptions), and Fly's defaults (20 / 25) are easy to reach; the proxy then queues requests, which looks like a slow app.
 - **Swap** (`swap_size_mb = 512`) and `NODE_OPTIONS=--max-old-space-size=384`, so memory spikes (sample-file generation, large uploads) don't end in an out-of-memory kill. Keep the Node limit at about 75% of the VM memory if you resize it.
 - **Always on** (`auto_stop_machines = "off"`, `min_machines_running = 1`): there is no cold start after a quiet period, and MCP sessions, A2A tasks and open streams survive it (they still reset on a deploy or restart). The machine is billed all the time. To save money, set `auto_stop_machines = "stop"` and `min_machines_running = 0`: the machine then stops when idle, the first request after a quiet period waits for it to boot, and a stop ends MCP sessions, A2A tasks and open streams.
@@ -1377,8 +1493,8 @@ src/
   config/              settings.js (settings registry: env -> override, per-request profile scope), baseUrl.js (base URL detection)
   db/                  sqlite.js, postgres.js, repo.js (one generic docs table)
   middleware/          protocol (shared stack: error format, body, required headers, rate limit, auth, chaos),
-                       requestId, headers, cors, ratelimit, auth, chaos, idempotency, body, adminAuth, inspector,
-                       profile (/p/<name> routing)
+                       requestId, telemetry (request metrics and spans), headers, cors, ratelimit, auth, chaos,
+                       idempotency, body, adminAuth, inspector, profile (/p/<name> routing)
   routes/              platform, oauth, resources, files, admin, tester, appApi (back-office backend)
   protocols/           one folder per protocol, each with router.js and its error renderer:
     soap/              WSDL, services, WS-Security (model.js: one field table -> XSD, XML out, XML in)
@@ -1392,12 +1508,13 @@ src/
     a2a/               A2A agent (wire, agent, tasks, card)
   services/            seed, schemas, resources, query, paginate, dateFormat, files + fileStore/ (local, s3, meter),
                        sampleFiles, sampleIds, keys, oauth, cimd (client ID metadata documents), ca (lab CA for mTLS),
-                       profiles, inspector, webhooks,
+                       profiles, inspector, webhooks, telemetry (/metrics registry, OTLP export),
                        openapiGen (data spec), openapiAdminGen (admin spec),
                        tester/ (core: load, lint, sample, validate, runner, auth, mock, report, refs, operations;
                                 adapters/: openapi.js, wsdl/, websocket/)
   util/                problem (errors + renderer registry), xml (tiny DOM on saxes), websocket (RFC 6455), build,
-                       safeFetch (SSRF-guarded fetch), der + pkcs12 (certificates and .p12 files), clientCert
+                       safeFetch (SSRF-guarded fetch), der + pkcs12 (certificates and .p12 files), clientCert,
+                       otlpProto (OTLP protobuf encoding)
   public/              dashboard (index.html, app.js, guides.js, styles.css)
   webapp/              back office app at /app (index.html, app.js, app.css)
 docs/                  multi-protocol-design.md, decisions.md, platform-test-checklist.md, ONBOARDING.md,
@@ -1453,6 +1570,9 @@ npm run postman        # Newman across all auth modes (-- --profiles: through /p
 | Inspector doesn't show API calls (`/v1`, SOAP, GraphQL, S3, …) | Tick **Record API calls** on the Inspector page (or set `INSPECTOR_LOG_ALL=true`). The dashboard, docs and `/health` are never recorded. |
 | Tester: "No usable base URL" | The spec's servers are relative or placeholders. Set a base URL override on the Target tab. |
 | Tester: every `Shipment` response fails | That's the spec's allOf issue. Fix the spec, or enable **Lenient allOf**. |
+| `/metrics` returns 401 | `METRICS_TOKEN` is set: send `Authorization: Bearer <token>`. Fly.io's built-in scraper can't, so leave it blank there. |
+| No traces or metrics arrive in the OpenTelemetry backend | `/health` → `settings.telemetry.otlp` shows the last export of each signal and its error, and the Overview page warns while one is failing. Usual causes: the endpoint must be the base URL without `/v1/traces` (it's appended), header values must be percent-encoded (`Authorization=Basic%20…`), and a backend that only takes gRPC needs a Collector in between. To see exactly what is sent, set `OTEL_EXPORTER_OTLP_PROTOCOL=http/json` and point the endpoint at this tool's own Inspector (e.g. `$B/otel-debug`). |
+| A trace in the backend doesn't connect to the caller's trace | The caller must send a W3C `traceparent` header. With `OTEL_TRACES_SAMPLER_ARG` below 1, a request without one may simply not be sampled. |
 | Large uploads time out on the host | Check the platform's request timeout. tus uploads are resumable and avoid this. |
 
 ---

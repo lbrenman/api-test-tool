@@ -234,6 +234,7 @@ class WebhookService {
       rec.error = err.name === 'TimeoutError' ? `No response within ${this.ctx.settings.get('webhookTimeoutMs')} ms` : (err.cause?.message || err.message);
     }
     rec.durationMs = Date.now() - started;
+    this.ctx.telemetry?.webhookDelivery(rec);
     await this.record(hook, rec);
     return rec;
   }

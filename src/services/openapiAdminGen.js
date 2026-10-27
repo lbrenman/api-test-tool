@@ -1,5 +1,5 @@
 'use strict';
-// OpenAPI 3.1 document for the ADMIN / control-plane API: /admin/api/* (dashboard backend) plus /health and /ready.
+// OpenAPI 3.1 document for the ADMIN / control-plane API: /admin/api/* (dashboard backend) plus /health, /ready and /metrics.
 // Served at /admin/api/openapi.json|yaml behind the dashboard password. The mock data API that integrations call
 // is described separately by openapiGen.js (/openapi.json).
 const pkg = require('../../package.json');
@@ -39,6 +39,15 @@ async function generateAdminOpenApi(ctx, req) {
   add('/ready', 'get', op('Platform', 'ready', 'Readiness probe', {
     security: [],
     responses: { ...ok('Ready', obj({ ready: { type: 'boolean' } }, ['ready'])), 503: { description: 'Not ready', content: json(obj({ ready: { type: 'boolean' } })) } },
+  }));
+
+  add('/metrics', 'get', op('Platform', 'metrics', 'Request, activity and process metrics in Prometheus text format (METRICS_ENABLED; Bearer METRICS_TOKEN when set)', {
+    security: settings.get('metricsToken') ? [{ MetricsToken: [] }] : [],
+    responses: {
+      200: { description: 'Prometheus text exposition format 0.0.4: http_server_request_duration_seconds by protocol, route, method, status and profile; chaos, data, file, webhook and OAuth counters; process metrics', content: { 'text/plain': { schema: { type: 'string' } } } },
+      401: { description: 'METRICS_TOKEN is set and the Bearer token is missing or wrong', content: { 'application/problem+json': { schema: S('Problem') } } },
+      404: { description: 'Metrics are off (METRICS_ENABLED=false)', content: { 'application/problem+json': { schema: S('Problem') } } },
+    },
   }));
 
   // ---- Session (open)
@@ -435,6 +444,7 @@ async function generateAdminOpenApi(ctx, req) {
       securitySchemes: {
         AdminBasic: { type: 'http', scheme: 'basic', description: 'Any username; the password is ADMIN_PASSWORD.' },
         AdminSession: { type: 'apiKey', in: 'cookie', name: 'att_admin', description: 'Session cookie set by POST /admin/api/login.' },
+        MetricsToken: { type: 'http', scheme: 'bearer', description: 'METRICS_TOKEN, required by /metrics only when it is set.' },
       },
       schemas: {
         Problem: obj({ type: { type: 'string' }, title: { type: 'string' }, status: { type: 'integer' }, detail: { type: 'string' }, instance: { type: 'string' }, requestId: { type: 'string' }, timestamp: { type: 'string', format: 'date-time' }, code: { type: 'string' } }, ['title', 'status'], { additionalProperties: true }),

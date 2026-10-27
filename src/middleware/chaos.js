@@ -149,6 +149,7 @@ function makeChaos(ctx) {
       });
     }
     if (type === 'reset') {
+      res.setHeader('X-Chaos-Injected', 'reset'); // never sent (the socket is destroyed), but read by telemetry
       req.socket.destroy();
       return;
     }

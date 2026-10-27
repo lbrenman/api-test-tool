@@ -20,18 +20,20 @@ const { CaService } = require('./services/ca');
 const { InspectorService } = require('./services/inspector');
 const { TesterService } = require('./services/tester');
 const { WebhookService } = require('./services/webhooks');
+const { TelemetryService } = require('./services/telemetry');
 const { seedAll } = require('./services/seed');
 const { generateSamples } = require('./services/sampleFiles');
 const { HttpError, sendProblem } = require('./util/problem');
 
 const requestId = require('./middleware/requestId');
+const telemetry = require('./middleware/telemetry');
 const cors = require('./middleware/cors');
 const idempotency = require('./middleware/idempotency');
 const { responseHeaders } = require('./middleware/headers');
 const { protocolStack } = require('./middleware/protocol');
 const { v1Body } = require('./middleware/body');
 const { makeAdminAuth } = require('./middleware/adminAuth');
-const { catchAll, logAll } = require('./middleware/inspector');
+const { catchAll, logAll, apiKind } = require('./middleware/inspector');
 const { profileRouting } = require('./middleware/profile');
 
 const platformRouter = require('./routes/platform');
@@ -93,6 +95,7 @@ async function createContext({ env = process.env, overrides = {} } = {}) {
   ctx.tester = new TesterService(ctx);
   ctx.webhooks = new WebhookService(ctx); // outgoing webhooks on data changes (stored in the database)
   await ctx.webhooks.init();
+  ctx.telemetry = new TelemetryService(ctx, { apiKind }); // /metrics and optional OTLP export of traces and metrics
   return ctx;
 }
 
@@ -147,6 +150,7 @@ async function createApp(opts = {}) {
   const adminAuth = makeAdminAuth(settings);
 
   app.use(requestId());
+  app.use(telemetry(ctx)); // request duration metrics (/metrics) and, with OTLP export on, one span per API request
   app.use(profileRouting(ctx)); // /p/<profile>/… : the rest of the request runs with that settings profile
   app.use(responseHeaders(settings));
   app.use(cors(settings));
@@ -257,7 +261,7 @@ async function createApp(opts = {}) {
   };
 
   ctx.ready = true;
-  return { app, ctx, close: async () => { ctx.oauth.close(); await ctx.webhooks.drain(); await ctx.repo.close(); } };
+  return { app, ctx, close: async () => { ctx.oauth.close(); await ctx.webhooks.drain(); await ctx.telemetry.shutdown(); await ctx.repo.close(); } };
 }
 
 module.exports = { createApp, createContext, seedOnStart };
