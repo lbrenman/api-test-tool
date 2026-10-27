@@ -52,7 +52,7 @@ test('data spec covers /v1, SSE and OAuth only; admin and health live in the adm
     // The admin spec does not follow the /v1 auth mode.
     await t.ctx.settings.set('authMode', 'oauth2');
     const admin2 = (await request(t.app).get('/admin/api/openapi.json')).body;
-    assert.deepEqual(Object.keys(admin2.components.securitySchemes).sort(), ['AdminBasic', 'AdminSession']);
+    assert.deepEqual(Object.keys(admin2.components.securitySchemes).sort(), ['AdminBasic', 'AdminSession', 'MetricsToken']);
     assert.ok((await request(t.app).get('/openapi.json')).body.components.securitySchemes.OAuth2);
 
     const y = await request(t.app).get('/admin/api/openapi.yaml').expect(200);
