@@ -16,6 +16,7 @@ const { FileService, createStore } = require('./services/files');
 const { KeyService } = require('./services/keys');
 const { OAuthService } = require('./services/oauth');
 const { ProfileService } = require('./services/profiles');
+const { ToolAclService } = require('./services/toolAcl');
 const { CaService } = require('./services/ca');
 const { InspectorService } = require('./services/inspector');
 const { TesterService } = require('./services/tester');
@@ -91,6 +92,7 @@ async function createContext({ env = process.env, overrides = {} } = {}) {
   await ctx.oauth.init();
   ctx.profiles = new ProfileService(ctx);
   await ctx.profiles.init();
+  ctx.toolAcl = new ToolAclService(ctx); // MCP tool access control (MCP_TOOL_ACL) and its decision log
   ctx.ca = new CaService(ctx); // lab CA for mutual TLS: client certificates and the mTLS listener's certificate
   await ctx.ca.init();
   ctx.inspector = new InspectorService(ctx);

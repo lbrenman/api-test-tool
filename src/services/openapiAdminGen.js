@@ -117,6 +117,23 @@ async function generateAdminOpenApi(ctx, req) {
     responses: { 200: { description: 'File content', content: { '*/*': { schema: { type: 'string', format: 'binary' } } } }, ...AUTHED, ...NF },
   }));
 
+  // ---- MCP tool access control (the dashboard's Tool access page)
+  const toolAclDemo = anyObj('The demo: profile (tool-acl), enabled, endpoint, tokenUrl, baseScope, tools (name, scope, why), agents (clientId, clientName, role, exists, scopes, secret) and policy (tool, requiredScopes, allowed agents)');
+  add(`${A}/tool-acl`, 'get', op('Tool access', 'getToolAcl', 'The tool access control demo: its profile, tools, agents (with their secrets) and the policy as data', { responses: { ...ok('Demo', toolAclDemo), ...AUTHED } }));
+  add(`${A}/tool-acl`, 'patch', op('Tool access', 'setToolAcl', 'Turn tool access control on or off in the tool-acl profile (creates the demo when missing)', {
+    requestBody: { required: true, content: json(obj({ enabled: { type: 'boolean' } }, ['enabled']), { enabled: false }) },
+    responses: { ...ok('Demo', toolAclDemo), ...BAD, ...AUTHED },
+  }));
+  add(`${A}/tool-acl/demo`, 'post', op('Tool access', 'setupToolAclDemo', 'Create or reset the demo: the /p/tool-acl profile (jwt auth, 4 tools, MCP_TOOL_ACL) and the agents alice-agent, bob-agent and carol-agent. Secrets are kept; reset (default true) restores the default grants', {
+    requestBody: { required: false, content: json(obj({ enabled: { type: 'boolean', default: true }, reset: { type: 'boolean', default: true } }), {}) },
+    responses: { ...ok('Demo', toolAclDemo), ...AUTHED },
+  }));
+  add(`${A}/tool-acl/decisions`, 'get', op('Tool access', 'listToolAclDecisions', 'The access control decisions (in memory, the last 500), oldest first', {
+    parameters: [{ name: 'after', in: 'query', schema: { type: 'integer', minimum: 0 }, description: 'Only decisions with a larger seq' }, { name: 'limit', in: 'query', schema: { type: 'integer', minimum: 1, maximum: 500, default: 200 } }],
+    responses: { ...ok('Decisions', obj({ data: { type: 'array', items: obj({ seq: { type: 'integer' }, at: { type: 'string', format: 'date-time' }, requestId: { type: 'string' }, profile: { type: ['string', 'null'] }, method: { type: 'string' }, tool: { type: ['string', 'null'] }, allowed: { type: 'boolean' }, requiredScope: { type: ['string', 'null'] }, reason: { type: 'string' }, sub: { type: ['string', 'null'] }, clientId: { type: ['string', 'null'] }, scopes: { type: 'array', items: { type: 'string' } } }) } }, ['data'])), ...AUTHED },
+  }));
+  add(`${A}/tool-acl/decisions`, 'delete', op('Tool access', 'clearToolAclDecisions', 'Clear the decision log', { responses: { ...noContent('Cleared'), ...AUTHED } }));
+
   // ---- Settings profiles
   const profName = pathParam('name', 'Profile name (built-in: one per auth mode)', 'hmac');
   const profExample = { name: 'flaky-oauth', description: 'OAuth2 with 20% 503s', settings: { authMode: 'oauth2', errorRate: 20, errorTypes: '503' } };
@@ -433,6 +450,7 @@ async function generateAdminOpenApi(ctx, req) {
       { name: 'Files', description: 'Manage the shared file pool' },
       { name: 'Auth', description: '/v1 auth configuration and OAuth clients' },
       { name: 'Profiles', description: 'Settings profiles: /p/<name>/… runs a request with the profile\'s auth mode, chaos, headers, rate limit and formats, so several setups can be used side by side' },
+      { name: 'Tool access', description: 'MCP tool access control (MCP_TOOL_ACL): which agent may call which tool, by per-tool scopes in its JWT; the demo profile, its agents and the decision log' },
       { name: 'mTLS', description: 'Mutual TLS: the lab CA, client certificates (PEM and PKCS#12) and the mTLS listener (MTLS_ENABLED)' },
       { name: 'Inspector', description: 'Captured requests (webhook-style catch-all)' },
       { name: 'Webhooks', description: 'Outgoing webhooks: POST to your URL when mock data is created, updated or deleted, or a file is uploaded, downloaded or deleted, through any protocol' },

@@ -155,6 +155,16 @@ module.exports = function adminRouter(ctx, { adminAuth, filesApi }) {
   r.patch('/profiles/:name', async (req, res) => res.json(presentProfile(req, await ctx.profiles.save(req.params.name, req.body || {}))));
   r.delete('/profiles/:name', async (req, res) => { await ctx.profiles.remove(req.params.name); res.status(204).end(); });
 
+  // ---- MCP tool access control (the Tool access tab): the demo profile and agents, the on/off switch, decisions
+  r.get('/tool-acl', async (req, res) => res.json(await ctx.toolAcl.demo(req)));
+  r.post('/tool-acl/demo', async (req, res) => res.json(await ctx.toolAcl.setupDemo(req, { enabled: req.body?.enabled !== false, reset: req.body?.reset !== false })));
+  r.patch('/tool-acl', async (req, res) => {
+    if (typeof req.body?.enabled !== 'boolean') throw new HttpError(400, 'Send {"enabled": true|false}', { code: 'invalid-request' });
+    res.json(await ctx.toolAcl.setEnabled(req, req.body.enabled));
+  });
+  r.get('/tool-acl/decisions', (req, res) => res.json({ data: ctx.toolAcl.decisions({ after: Number(req.query.after) || 0, limit: Math.min(Number(req.query.limit) || 200, 500) }) }));
+  r.delete('/tool-acl/decisions', (req, res) => { ctx.toolAcl.clear(); res.status(204).end(); });
+
   // ---- auth / oauth
   // ?profile=<name> describes the credentials inside that profile (the dashboard's profile picker uses it for the guides).
   r.get('/auth', async (req, res) => {

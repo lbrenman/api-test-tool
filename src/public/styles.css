@@ -189,3 +189,13 @@ hr { border: none; border-top: 1px solid var(--border); margin: 14px 0; }
 .tip-pop .tip-curl pre { margin-top: 4px; max-height: 220px; white-space: pre; overflow-x: auto; word-break: normal; }
 .tip-pop .tip-foot { border-top: 1px solid var(--border); padding-top: 8px; margin-top: 4px; }
 .tip-pop code { background: var(--code-bg); padding: 0 4px; border-radius: 4px; }
+
+/* Tool access page: grant matrix and switch */
+.acl-matrix th, .acl-matrix td { text-align: center; vertical-align: middle; }
+.acl-matrix tbody th { text-align: left; }
+.acl-cell { min-width: 92px; justify-content: center; font-weight: 600; font-size: 12px; }
+.acl-cell.allow { color: #fff; background: var(--ok); border-color: var(--ok); }
+.acl-cell.deny { color: var(--err); border-color: color-mix(in srgb, var(--err) 45%, var(--border)); }
+.acl-cell.blocked { opacity: .45; }
+.acl-switch { gap: 8px; cursor: pointer; }
+.acl-switch input { width: 18px; height: 18px; }
