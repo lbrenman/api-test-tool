@@ -18,7 +18,7 @@ const KEYS = [
   'dateFormat', 'dateFormatPattern', 'dateTzOffset',
   'soapWsse', 'soapActionCheck', 'graphqlIntrospection', 'graphqlMaxDepth', 'odataMaxPageSize',
   'llmModels', 'llmRequireKnownModel', 'llmCompletionTokensMin', 'llmCompletionTokensMax', 'llmStreamDelayMs', 'llmToolCallRate',
-  'mcpAllowWrites', 'mcpResponseMode', 'mcpValidateHeaders', 'a2aAllowWrites', 'a2aWorkMs',
+  'mcpAllowWrites', 'mcpResponseMode', 'mcpValidateHeaders', 'mcpTools', 'mcpToolAcl', 'mcpToolAclBaseScope', 'a2aAllowWrites', 'a2aWorkMs',
 ];
 const PROFILE_KEYS = new Set(KEYS.filter((k) => BY_KEY[k] && !BY_KEY[k].restart));
 

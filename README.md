@@ -81,6 +81,7 @@ Use cases:
   - [GraphQL](#graphql)
   - [Mock LLM (OpenAI-compatible)](#mock-llm-openai-compatible)
   - [MCP server](#mcp-server)
+    - [Tool access control (MCP)](#tool-access-control-mcp)
   - [A2A agent](#a2a-agent)
   - [S3-compatible API](#s3-compatible-api)
   - [Inspector](#inspector)
@@ -162,6 +163,7 @@ Fly.io, Render and Northflank are covered in [Deployment](#deployment).
 | **GraphQL** | `/graphql` over the same data: queries with offset pages and Relay connections (filters, sort, search), nested department/category/manager resolvers, CRUD mutations with merge-patch updates, and a live `changes` subscription over WebSocket (graphql-transport-ws). Field errors come back as HTTP 200 with partial data and `extensions.code`; auth, rate-limit and chaos errors keep their HTTP status. GraphQL-over-HTTP media types, introspection on/off, depth limit, injected field errors (`X-Force-GraphQL-Error`), SDL at `/graphql/schema.graphql`, GraphiQL in the browser and a query console in the dashboard. |
 | **Mock LLM** | An OpenAI-compatible API at `/llm/v1` for testing LLM connectors, proxies and cost tracking without a real model: `chat/completions` answers with vague, plausible prose (or JSON for `response_format`, or tool calls generated from each tool's JSON Schema) and reports `usage` with prompt tokens estimated from the request and a random number of completion tokens; `max_tokens` cuts with `finish_reason: "length"`, `reasoning_effort` adds reasoning tokens, `seed` makes it repeatable. Streaming (`chat.completion.chunk`, usage chunk, `[DONE]`) with stream chaos (`X-Force-Stream-Drop`, `X-Force-Stream-Error`), `embeddings` (deterministic unit vectors), `models`, OpenAI-shaped errors and `x-ratelimit-*` headers. Auth mode, chaos, rate limits and required headers apply as on `/v1`. |
 | **MCP server** | A mock MCP server at `/mcp` (Streamable HTTP) for MCP clients, agent platforms and MCP gateways. 22 tools that search, read and change the same employees, products, departments, categories and files (structured output, annotations, tool errors as `isError`), resources (`att://…`, templates, subscriptions), prompts and completions. Dual-era: protocol **2026-07-28** (stateless; `_meta` version and capabilities, `MCP-Protocol-Version` / `Mcp-Method` / `Mcp-Name` / `Mcp-Param-*` header checks with -32020, `server/discover`, `subscriptions/listen`, `resultType`, `ttlMs`/`cacheScope`) and **2025-11-25 / 2025-06-18 / 2025-03-26** clients (initialize, `Mcp-Session-Id`, GET stream, DELETE). JSON or SSE responses with progress notifications, MCP chaos (`X-Force-MCP-Error`), RFC 9728 protected resource metadata so OAuth-capable clients find the built-in OAuth server, and a console in the dashboard. |
+| **MCP tool access control** | Which agent may call which MCP tool, as a reference for what a gateway in front of an MCP server enforces. Off by default (`MCP_TOOL_ACL`); on, every MCP request needs a base scope (`mcp:access`) and each `tools/call` the scope `tool:<name>` in the caller's JWT: a missing tool scope is a tool error (visible but denied), a missing base scope is 403 for everything (suspended). A one-click demo (`/p/tool-acl`, three agents as OAuth clients), a grant matrix, a try-it with real tokens and a live decision log on the dashboard's **Tool access** page. |
 | **A2A agent** | A mock [Agent2Agent](https://a2a-protocol.org) agent that answers plain-language questions about the same employees, products, departments and categories ("Who works in Engineering at level L5?", "products under $50 in stock", "how many employees?") and can change the data, with rule-based matching (no LLM, so answers repeat). A2A **1.0** over JSON-RPC and HTTP+JSON, and **0.3** for older clients; Agent Card at `/.well-known/agent-card.json` with skills and security schemes that follow the auth mode. Tasks go SUBMITTED → WORKING → COMPLETED with streamed `answer` (text) and `data` (JSON) artifacts; FAILED, REJECTED and INPUT_REQUIRED (delete confirmations) happen naturally. SendMessage (blocking or return-immediately), streaming, GetTask, ListTasks, CancelTask, SubscribeToTask, push notifications, the extended Agent Card, A2A error codes and chaos (`X-Force-A2A-Error`). |
 | **Outgoing webhooks** | Any number of webhooks that POST `{event, resource, resourceId, href, …}` to your URL when an employee, product, department or category is created, updated or deleted, or a file is uploaded, downloaded or deleted, through any protocol. Per webhook: resources, events, optional record data, HMAC signing secret and extra headers. Stored in the database (they survive restarts); every delivery is logged with the response, with Test and Resend buttons. |
 | **Inspector** | Catch-all capture with the actual path, live stream (SSE), detected auth (Basic user, decoded JWT, API keys), pretty bodies and multipart parts, copy as curl, replay, auto-forward, configurable responses and path rules. |
@@ -274,6 +276,9 @@ Settings marked **restart** can only be set through the environment.
 | `MCP_LEGACY` | `true` | Also serve clients that `initialize` (2025-11-25, 2025-06-18, 2025-03-26); off = 2026-07-28 only |
 | `MCP_SESSION_TTL_MINUTES` | `30` | Idle legacy sessions are dropped after this long |
 | `MCP_KEEPALIVE_SECONDS` | `15` | Keep-alive comment interval on open notification streams; 0 = off |
+| `MCP_TOOLS` | (blank) | Tools the server offers, comma separated; blank = all. Others are left out of `tools/list` and are unknown to `tools/call` |
+| `MCP_TOOL_ACL` | `false` | Tool access control: every MCP request needs `MCP_TOOL_ACL_BASE_SCOPE` and each `tools/call` the scope `tool:<name>` (or `tool:*`) in the caller's JWT. See [Tool access control](#tool-access-control-mcp) |
+| `MCP_TOOL_ACL_BASE_SCOPE` | `mcp:access` | With tool access control on: the scope every MCP request needs (403 `insufficient_scope` without it); blank = none |
 | `A2A_ENABLED` | `true` | Serve the mock A2A agent at `/a2a` and its Agent Card at `/.well-known/agent-card.json` |
 | `A2A_ALLOW_WRITES` | `true` | Let the agent change data; off = change requests end `TASK_STATE_REJECTED` |
 | `A2A_LEGACY` | `true` | Also speak A2A 0.3 (no `A2A-Version` header, or `/a2a/v0.3`); off = 1.0 only |
@@ -334,6 +339,7 @@ These prefixes are reserved: `/v1`, `/soap`, `/ws`, `/sse`, `/graphql`, `/odata`
 | `/llm/v1/chat/completions`, `/llm/v1/embeddings`, `/llm/v1/models` | OpenAI-compatible mock LLM (see [Mock LLM](#mock-llm-openai-compatible)) |
 | `POST /mcp` (and `GET`/`DELETE /mcp` with a legacy session) | Mock MCP server (see [MCP server](#mcp-server)) |
 | `GET /.well-known/oauth-protected-resource/mcp` | Protected resource metadata (RFC 9728) for `/mcp` |
+| `POST /p/tool-acl/mcp` | The tool access control demo's MCP endpoint (see [Tool access control](#tool-access-control-mcp)); `/admin/api/tool-acl` sets it up |
 | `GET /.well-known/agent-card.json` (also `/a2a/.well-known/agent-card.json`; 0.3 card at `/a2a/v0.3/.well-known/agent-card.json`) | A2A Agent Card (open) |
 | `POST /a2a`, `/a2a/rest/…`, `POST /a2a/v0.3` | Mock A2A agent: JSON-RPC 1.0 and 0.3, HTTP+JSON 1.0 (see [A2A agent](#a2a-agent)) |
 | `/{bucket}`, `/{bucket}/{key}` (bucket `files` by default), signed `GET /` | S3-compatible API over the file pool (see [S3-compatible API](#s3-compatible-api)) |
@@ -1009,6 +1015,38 @@ curl -s "$B/mcp" $H -H 'Mcp-Method: tools/call' -H 'Mcp-Name: get_employee' \
 
 The dashboard's **Protocols** page holds the MCP settings and a console that sends any request as a 2026-07-28 client or as a session-based 2025 client (it initializes for you), showing streamed notifications and the result.
 
+### Tool access control (MCP)
+
+Which agent may call which tool. A gateway in front of an MCP server usually makes this decision; the MCP server can make it too, as a reference to demo or to compare a gateway against. It is **off by default** (`MCP_TOOL_ACL=false`), so a gateway under test does the enforcing, and it can be switched on globally or in a settings profile:
+
+| Check | Without it |
+|---|---|
+| The caller's JWT (auth mode `jwt` or `oauth2`) | 401, with a detail saying the access control needs a JWT |
+| The base scope `mcp:access` (`MCP_TOOL_ACL_BASE_SCOPE`; blank = none) on **every** MCP request | 403 `insufficient_scope` (`WWW-Authenticate: Bearer … scope="mcp:access"`): a suspended agent gets nothing through, not even `tools/list` |
+| `tool:<name>`, or `tool:*`, on each `tools/call` | A tool error (HTTP 200, `isError: true`, "Access denied: … lacks the scope \"tool:get_employee\"", `structuredContent: {error: "access_denied", tool, requiredScope}`): the tools stay visible, the call is denied, nothing runs |
+
+No grant, no call: a tool is denied unless a scope allows it. `MCP_TOOLS` (comma separated, blank = all) narrows the tools the server offers. Every decision (who, which tool, allowed or not, the scope needed, why, the request id) goes to an in-memory log (the last 500). The protected resource metadata lists `mcp:access` and the `tool:*` scopes when the access control is on.
+
+**The demo** (dashboard → **Tool access** → *Set up the demo*, or `POST /admin/api/tool-acl/demo`) creates the profile `/p/tool-acl` (auth mode `jwt`, the tools `search_employees`, `get_employee`, `search_products` and `update_product`, access control on) and three agents, OAuth clients whose scopes are their grants:
+
+| Agent | Scopes | search_employees | get_employee (salary) | search_products | update_product (write) |
+|---|---|---|---|---|---|
+| `alice-agent` (admin) | `mcp:access` + all four `tool:` scopes | ✓ | ✓ | ✓ | ✓ |
+| `bob-agent` (developer) | `mcp:access tool:search_employees tool:search_products` | ✓ | denied | ✓ | denied |
+| `carol-agent` (suspended) | `tool:search_employees` (no `mcp:access`) | 403 | 403 | 403 | 403 |
+
+Agents get tokens with `client_credentials` from `/oauth/token` and call `/p/tool-acl/mcp`. The page has the switch (on: this tool enforces; off: pass-through, for a gateway in front, with this tool as the token issuer and the backend), a grant matrix (click to grant or revoke; the next token carries the change), a try-it that shows the token's claims and the result, *Run all* (every agent × every tool), the decision log and *Copy policy JSON* (tool → required scopes → allowed agents, to configure a gateway with). Nothing outside the profile changes; the global `/mcp` keeps all 22 tools.
+
+```bash
+SECRET='<bob-agent secret: GET /admin/api/tool-acl>'
+TOKEN=$(curl -s -u "bob-agent:$SECRET" -d grant_type=client_credentials "$B/oauth/token" | sed -E 's/.*"access_token":"([^"]+)".*/\1/')
+curl -s "$B/p/tool-acl/mcp" -H "Authorization: Bearer $TOKEN" $H -H 'Mcp-Method: tools/call' -H 'Mcp-Name: get_employee' \
+  -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"get_employee\",\"arguments\":{\"id\":1},$META}}"
+# → result.isError: true, "Access denied: bob-agent may not call get_employee; the token lacks the scope \"tool:get_employee\"."
+```
+
+Admin API: `GET /admin/api/tool-acl` (the demo, agents with secrets, policy), `PATCH /admin/api/tool-acl` `{"enabled": false}`, `POST /admin/api/tool-acl/demo` (create or reset; secrets are kept), `GET|DELETE /admin/api/tool-acl/decisions?after=<seq>`. Postman: the *Tool access control (MCP)* folder, or the standalone `postman/Tool-Access-Control.postman_collection.json`.
+
 ---
 
 ## A2A agent
@@ -1382,7 +1420,7 @@ the facade spec in the **API tester** and pressing **Run all** contract-tests yo
 
 ## Postman and Newman
 
-- `postman/API-Test-Tool.postman_collection.json` has 225 requests with test scripts, covering:
+- `postman/API-Test-Tool.postman_collection.json` has 241 requests with test scripts, covering:
   - health, metrics, OpenAPI and discovery;
   - OAuth: token, introspect, revoke, error cases, and dynamic client registration (register, token for the new client, RFC 7592 read and delete, invalid metadata);
   - signed client assertions (RFC 7523): a `client_secret_jwt` token signed in the pre-request script, a replayed `jti`, a wrong audience, an assertion plus a secret, and a `private_key_jwt` client with a generated ES256 key pair;
@@ -1401,12 +1439,14 @@ the facade spec in the **API tester** and pressing **Run all** contract-tests yo
   - the S3-compatible API with Postman's AWS Signature auth: ListBuckets, HeadBucket, paged ListObjectsV2, put with metadata (MD5 ETag), head, get, Range, copy, delimiter listing, DeleteObjects, and NoSuchKey / NoSuchBucket / SignatureDoesNotMatch / AccessDenied / injected 503 errors (multipart uploads are covered by `npm test`);
   - the mock LLM: models, chat completions (usage, `max_tokens` → `length`, repeatable `seed`, tool calls, JSON output), streaming with a usage chunk and `[DONE]`, embeddings, and OpenAI-shaped errors (400, 404, injected 429);
   - the MCP server: server/discover, tools/list, tool calls (structured results, tool errors, an unknown tool), a header mismatch, an unsupported version, resources and prompts, a streamed progress call, and a legacy session (initialize, initialized, tools/list, DELETE);
+  - MCP tool access control: the demo set up through the admin API, a token per agent, allowed and denied tool calls (tool errors), the suspended agent's 403, the decision log, and the switch off and on;
   - the A2A agent: both Agent Cards, a direct message, completed, failed, rejected and input-required tasks (answered "no" on the same task), GetTask, ListTasks, a streamed answer, errors, the HTTP+JSON binding and a 0.3 request;
   - headers and the inspector.
   - WebSocket channels and GraphQL subscriptions are not covered (Postman collections cannot drive WebSockets); `npm test` covers them.
 - `postman/API-Test-Tool.postman_environment.json` holds `baseUrl`, `authMode` and credentials. Set `authMode` to the server's `AUTH_MODE`; the collection-level pre-request script then authenticates every `/v1` call, SOAP request, SSE stream, GraphQL, OData, mock LLM, MCP and A2A request, fetching and caching an OAuth token for `jwt` and `oauth2` and signing requests for `hmac`. The S3 requests sign themselves with `s3AccessKeyId`, `s3SecretAccessKey` and `s3Region` in every mode.
 - `npm run postman` boots a fresh server for each auth mode (with the mTLS listener on, and two client certificates from `scripts/mtls-newman-setup.js`) and runs Newman against it. `--mode mtls` runs the whole collection on the mTLS listener. `npm run postman -- --profiles` runs it through `/p/<mode>` on a server whose global auth mode is a different one, which proves a profile isolates every request. `npm run postman -- --mode hmac` runs one mode, and `npm run postman -- --url https://your-app.fly.dev --mode none` runs against a deployed instance (the mTLS folder skips itself there).
 - `.github/workflows/newman.yml` runs on every push and pull request: `npm test` on SQLite + local files, the suite again on Postgres + S3, a Newman matrix over all eight auth modes (each also through its settings profile on a second server), and a Docker build + smoke test. On a push to `master`, once all of those pass, a `deploy` job builds an arm64 image, smoke-tests it, pushes it to Amazon ECR and rolls it out to an EC2 instance over SSM. It is skipped until the repository variable `API_LAB_DEPLOY_ROLE_ARN` is set (optional: `API_LAB_REGION`, default `us-east-2`, `API_LAB_STACK`, default `api-lab`, and `API_LAB_URL`, the instance's public base URL, to check that its `/health` reports the new commit), and skips itself if `master` has moved on to a newer commit by the time its tests finish.
+- `postman/Tool-Access-Control.postman_collection.json` (and its environment) is the tool access control folder on its own, for demos: set `rootUrl` to the server and `adminPassword` to `ADMIN_PASSWORD` (blank when none); it sets up the demo, gets each agent's token and walks through allowed, denied and blocked calls.
 - The collection is generated by `scripts/build-postman.js`. Edit that file and run `npm run postman:build`.
 
 ---
@@ -1514,7 +1554,7 @@ src/
     a2a/               A2A agent (wire, agent, tasks, card)
   services/            seed, schemas, resources, query, paginate, dateFormat, files + fileStore/ (local, s3, meter),
                        sampleFiles, sampleIds, keys, oauth, cimd (client ID metadata documents), ca (lab CA for mTLS),
-                       profiles, inspector, webhooks, telemetry (/metrics registry, OTLP export),
+                       profiles, toolAcl (MCP tool access control), inspector, webhooks, telemetry (/metrics registry, OTLP export),
                        openapiGen (data spec), openapiAdminGen (admin spec),
                        tester/ (core: load, lint, sample, validate, runner, auth, mock, report, refs, operations;
                                 adapters/: openapi.js, wsdl/, websocket/)
@@ -1571,6 +1611,7 @@ npm run postman        # Newman across all auth modes (-- --profiles: through /p
 | A2A client: `-32601` "SendMessage is a 1.0 method" | The request has no `A2A-Version` header, which A2A treats as 0.3. Send `A2A-Version: 1.0`, or use the 0.3 method names. |
 | A2A client can't find the agent | Give it the Agent Card URL `$B/.well-known/agent-card.json` (0.3 clients: `$B/a2a/v0.3/.well-known/agent-card.json`). |
 | MCP client: 404 "Session not found" | The legacy session expired (`MCP_SESSION_TTL_MINUTES`) or the server restarted; the client must send `initialize` again. |
+| MCP tool call: `isError` "Access denied … lacks the scope" | Tool access control is on (`MCP_TOOL_ACL`, e.g. in `/p/tool-acl`) and the token lacks `tool:<name>`. Grant it on the Tool access page (or the client's scopes), get a new token, or switch the access control off when a gateway enforces. A 403 `insufficient_scope` on every request means the token lacks `mcp:access`. |
 | OpenAI client: 404 `model_not_found` | `LLM_REQUIRE_KNOWN_MODEL` is on; use a model from `LLM_MODELS`, or turn the setting off. |
 | `/v1/...` returns 400 "Missing required header" | `REQUIRED_HEADERS` is set (see the Headers page). |
 | Inspector doesn't show API calls (`/v1`, SOAP, GraphQL, S3, …) | Tick **Record API calls** on the Inspector page (or set `INSPECTOR_LOG_ALL=true`). The dashboard, docs and `/health` are never recorded. |

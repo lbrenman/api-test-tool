@@ -54,6 +54,9 @@ module.exports = function mcpRouter(ctx) {
   ctx.mcpSessions = sessions;
 
   const allowWrites = () => settings.get('mcpAllowWrites');
+  // MCP_TOOLS: the tools this server offers (blank = all); the others are unknown here.
+  const offered = () => { const l = String(settings.get('mcpTools') || '').split(/[\s,]+/).filter(Boolean); return l.length ? new Set(l) : null; };
+  const isOffered = (name) => { const o = offered(); return !o || o.has(name); };
   const capabilities = () => ({ tools: { listChanged: true }, resources: { subscribe: true, listChanged: true }, prompts: { listChanged: false }, completions: {}, logging: {} });
 
   // ---- server -> client notifications (subscriptions/listen streams and legacy GET streams) ----
@@ -69,7 +72,7 @@ module.exports = function mcpRouter(ctx) {
     broadcast('resource', `att://files/${e.id}`);
     broadcast('resourcesList');
   });
-  settings.on('change', ({ key }) => { if (key === 'mcpAllowWrites') broadcast('toolsList'); });
+  settings.on('change', ({ key }) => { if (key === 'mcpAllowWrites' || key === 'mcpTools') broadcast('toolsList'); });
 
   const sweep = setInterval(() => {
     const ttl = settings.get('mcpSessionTtlMinutes') * 60000;
@@ -118,9 +121,14 @@ module.exports = function mcpRouter(ctx) {
   async function dispatch(method, params, x) {
     const p = isObj(params) ? params : {};
     switch (method) {
-      case 'tools/list': return { tools: catalog.tools({ allowWrites: allowWrites() }) };
+      case 'tools/list': return { tools: catalog.tools({ allowWrites: allowWrites() }).filter((t) => isOffered(t.name)) };
       case 'tools/call': {
         if (typeof p.name !== 'string') throw new McpError(-32602, 'params.name (the tool name) is required');
+        if (!isOffered(p.name)) throw new McpError(-32602, `Unknown tool: ${p.name}`);
+        if (catalog.toolDef(p.name) && !(catalog.toolDef(p.name).write && !allowWrites())) {
+          const denied = ctx.toolAcl.checkTool(x.req, p.name); // MCP_TOOL_ACL: tool:<name> scope, else a tool error
+          if (denied) return denied;
+        }
         if (x.forced === 'tool') return { content: [{ type: 'text', text: 'Tool error forced by X-Force-MCP-Error: tool' }], isError: true };
         const token = p._meta?.progressToken;
         const progress = token !== undefined ? (n, total, message) => x.notify({ jsonrpc: '2.0', method: 'notifications/progress', params: { progressToken: token, progress: n, total, message } }) : undefined;
@@ -212,6 +220,11 @@ module.exports = function mcpRouter(ctx) {
       return reply(400, rpcError(isObj(body) ? body.id : null, -32600, 'Invalid Request: the body must be a JSON-RPC 2.0 request or notification ({"jsonrpc": "2.0", "method": …})'));
     }
     const { method } = body;
+    // MCP_TOOL_ACL: every request needs the caller's JWT and the base scope (a suspended agent gets nothing through).
+    const blocked = ctx.toolAcl.checkRequest(req, method, method === 'tools/call' && isObj(body.params) && typeof body.params.name === 'string' ? body.params.name : undefined);
+    if (blocked) {
+      return sendProblem(req, res, blocked.status, { detail: blocked.detail, code: blocked.code, headers: { 'WWW-Authenticate': blocked.scope ? `Bearer realm="api-test-tool", error="insufficient_scope", scope="${blocked.scope}"` : 'Bearer realm="api-test-tool"' } });
+    }
     const isNotification = !('id' in body);
     const id = body.id;
     const params = isObj(body.params) ? body.params : {};
@@ -365,7 +378,7 @@ module.exports = function mcpRouter(ctx) {
     if (forced === 'tool') res.setHeader('X-Chaos-Injected', 'mcp-tool');
     else if (forced && forced !== 'tool') return reply(400, rpcError(id, -32600, 'X-Force-MCP-Error must be tool, rpc, rpc:<code> or drop'));
     try {
-      const result = await dispatch(method, params, { era, forced, signal: abort.signal, notify: (m) => o.notify(m), log });
+      const result = await dispatch(method, params, { era, forced, req, signal: abort.signal, notify: (m) => o.notify(m), log });
       if (result === undefined) {
         const status = era === 'modern' ? 404 : 200;
         return o.finish(status, rpcError(id, -32601, `Method not found: ${method}`));
@@ -425,7 +438,7 @@ module.exports.wellKnown = function mcpWellKnown(ctx) {
     return {
       resource: `${base}/mcp`,
       authorization_servers: [ctx.baseUrl.root(req)],
-      scopes_supported: ['read', 'write'],
+      scopes_supported: ctx.settings.get('mcpToolAcl') ? ['read', 'write', ...(ctx.settings.get('mcpToolAclBaseScope') ? [ctx.settings.get('mcpToolAclBaseScope')] : []), 'tool:*', ...require('./catalog').toolDefs().map((d) => `tool:${d.name}`)] : ['read', 'write'],
       bearer_methods_supported: ['header'],
       resource_name: 'API Test Tool mock MCP server',
       resource_documentation: 'https://github.com/lbrenman/api-test-tool#mcp-server',

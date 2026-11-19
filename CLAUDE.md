@@ -147,6 +147,14 @@ Leor also runs a Fly.io copy by hand (`fly deploy`), not from CI; see `docs/deci
   generates XSD, XML out and XML in), `s3/sigv4.js` (SigV4 + aws-chunked), `llm/generate.js` (text, usage, seeded
   RNG), `mcp/catalog.js` (the 22 tools, resources, prompts, completions — also used by the A2A agent),
   `a2a/{wire,agent,tasks,card}.js` (1.0↔0.3 converters, rule-based planner, task engine + push, Agent Cards).
+- **MCP tool access control:** `src/services/toolAcl.js` (`ctx.toolAcl`), switched by `MCP_TOOL_ACL` (off by default; profile
+  settable, so the `/p/tool-acl` demo profile has it on while the global `/mcp` is untouched). The MCP router calls
+  `checkRequest` for every POST (JWT + base scope `mcp:access`, else 401/403 via `sendProblem`) and `checkTool` in
+  `tools/call` (`tool:<name>` or `tool:*`, else an `isError` tool result). Decisions are an in-memory ring buffer (500) for the
+  dashboard's **Tool access** page (`VIEWS['tool-access']`) and `/admin/api/tool-acl/*`. The demo agents are ordinary OAuth
+  clients (`alice-agent`, `bob-agent`, `carol-agent`): their scopes are the grants. `MCP_TOOLS` filters the offered tools.
+  The Postman folder and the standalone `postman/Tool-Access-Control.postman_collection.json` come from `toolAclItems()` in
+  `scripts/build-postman.js`; they call `{{rootUrl}}` and carry their own credentials (independent of `{{authMode}}`).
 - **Telemetry:** `src/middleware/telemetry.js` is mounted right after `requestId` (before profile routing, so every
   request is measured, rejected ones included) and calls `ctx.telemetry.begin/end` (`src/services/telemetry.js`). The
   protocol label reuses the inspector's `apiKind`, plus `platform`/`admin`/`ui`/`inspector`; routes are templated

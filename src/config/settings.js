@@ -148,6 +148,9 @@ const DEFS = [
   { key: 'mcpLegacy', env: 'MCP_LEGACY', def: true, type: 'bool', section: 'mcp', desc: 'also serve clients that start with initialize (sessions with Mcp-Session-Id, GET stream, DELETE); off = 2026-07-28 only' },
   { key: 'mcpSessionTtlMinutes', env: 'MCP_SESSION_TTL_MINUTES', def: 30, type: 'int', section: 'mcp', min: 1, max: 1440, desc: 'Idle legacy sessions are forgotten after this long (the client then gets 404 and must initialize again)' },
   { key: 'mcpKeepAliveSeconds', env: 'MCP_KEEPALIVE_SECONDS', def: 15, type: 'int', section: 'mcp', min: 0, max: 3600, desc: 'Comment line sent this often on open notification streams (subscriptions/listen, legacy GET); 0 = off' },
+  { key: 'mcpTools', env: 'MCP_TOOLS', def: '', type: 'string', section: 'mcp', desc: 'Tools the server offers, comma separated (blank = all); others are left out of tools/list and are unknown to tools/call' },
+  { key: 'mcpToolAcl', env: 'MCP_TOOL_ACL', def: false, type: 'bool', section: 'mcp', desc: 'Tool access control (reference enforcement): every MCP request needs MCP_TOOL_ACL_BASE_SCOPE and each tools/call the scope tool:<name> (or tool:*) in the caller\'s JWT (auth mode jwt or oauth2). A denied call is a tool error (isError). Off when a gateway in front does the enforcing' },
+  { key: 'mcpToolAclBaseScope', env: 'MCP_TOOL_ACL_BASE_SCOPE', def: 'mcp:access', type: 'string', section: 'mcp', desc: 'With tool access control on: the scope every MCP request needs (403 insufficient_scope without it, so nothing gets through); blank = none' },
 
   // ---- a2a (mock A2A agent) ----
   { key: 'a2aEnabled', env: 'A2A_ENABLED', def: true, type: 'bool', section: 'a2a', desc: 'serve the mock A2A agent at /a2a (Agent Card at /.well-known/agent-card.json) that answers questions about the mock data' },

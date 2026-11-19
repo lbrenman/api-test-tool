@@ -452,6 +452,52 @@ const mcpFolder = folder('MCP server', [
   req('Legacy: the ended session → 404', 'POST', '/mcp', { headers: legacyH(), body: json({ jsonrpc: '2.0', id: 3, method: 'tools/list' }), tests: [status(404), rpcErr(-32001)] }),
 ], 'Mock MCP server at /mcp: protocol 2026-07-28 requests (with the required headers) and a 2025-11-25 session. Uses the active auth mode.');
 
+// ---------------------------------------------------------------- MCP tool access control
+// The same requests make the "Tool access control (MCP)" folder of the main collection and the standalone
+// Tool-Access-Control collection. They call {{rootUrl}} (the server root: the demo profile is /p/tool-acl, and the
+// OAuth server and admin API live at the root) and authenticate every request themselves.
+function toolAclItems({ adminAuth } = {}) {
+  const ready = ["if (pm.environment.get('aclReady') !== 'yes') pm.execution.skipRequest();"];
+  const EP = '{{rootUrl}}/p/tool-acl/mcp';
+  const admin = (item) => (adminAuth ? withAuth(item, adminAuth) : item);
+  const agentToken = (who) => withAuth(req(`Token for ${who}-agent (client_credentials)`, 'POST', '{{rootUrl}}/oauth/token', {
+    body: { mode: 'urlencoded', urlencoded: [{ key: 'grant_type', value: 'client_credentials' }] }, pre: ready,
+    tests: [status(200), "const t = pm.response.json();", `pm.test('scope is the grants', () => pm.expect(t.scope).to.be.a('string'));`, `pm.environment.set('${who}Token', t.access_token);`],
+  }), { type: 'basic', basic: [{ key: 'username', value: `${who}-agent` }, { key: 'password', value: `{{${who}Secret}}` }] });
+  const call = (title, who, method, params, tests) => req(title, 'POST', EP, {
+    headers: { ...mcpH(method, params.name), Authorization: `Bearer {{${who}Token}}`, 'X-Skip-Auth': '1' },
+    body: json({ jsonrpc: '2.0', id: 1, method, params: { ...params, _meta: MCP_META } }), pre: ready, tests,
+  });
+  const allowed = "pm.test('allowed (no tool error)', () => pm.expect(pm.response.json().result.isError).to.not.eql(true));";
+  const denied = (tool) => [status(200), `pm.test('denied as a tool error', () => { const r = pm.response.json().result; pm.expect(r.isError).to.eql(true); pm.expect(r.structuredContent.requiredScope).to.eql('tool:${tool}'); pm.expect(r.content[0].text).to.match(/^Access denied/); });`];
+  const blocked = [status(403), "pm.test('insufficient_scope mcp:access', () => pm.expect(pm.response.headers.get('WWW-Authenticate')).to.match(/insufficient_scope.*mcp:access/));", "pm.test('JSON-RPC error body', () => pm.expect(pm.response.json().jsonrpc).to.eql('2.0'));"];
+  return [
+    admin(req('Set up the demo (admin API)', 'POST', '{{rootUrl}}/admin/api/tool-acl/demo', {
+      headers: { 'Content-Type': 'application/json' }, body: json({ enabled: true }),
+      description: 'Creates (or resets) the /p/tool-acl profile and the agents alice-agent (admin), bob-agent (developer) and carol-agent (suspended), and stores their secrets. Needs the admin API (401 when ADMIN_PASSWORD is set and not given: the rest of the folder is then skipped).',
+      pre: ["pm.environment.set('rootUrl', (pm.environment.get('rootUrl') || pm.environment.get('baseUrl')).replace(/\\/p\\/[^/]+\\/?$/, '').replace(/\\/$/, ''));"],
+      tests: ["pm.test('200, or 401 when the admin API needs a password', () => pm.expect([200, 401]).to.include(pm.response.code));",
+        "pm.environment.set('aclReady', pm.response.code === 200 ? 'yes' : 'no');",
+        "if (pm.response.code === 200) { const d = pm.response.json(); pm.test('on, 3 agents, 4 tools', () => { pm.expect(d.enabled).to.eql(true); pm.expect(d.agents.length).to.eql(3); pm.expect(d.tools.length).to.eql(4); }); for (const a of d.agents) pm.environment.set(a.clientId.replace('-agent', '') + 'Secret', a.secret); }"],
+    })),
+    agentToken('alice'), agentToken('bob'), agentToken('carol'),
+    call('Bob: tools/list → the 4 demo tools', 'bob', 'tools/list', {}, [status(200), "pm.test('4 tools', () => pm.expect(pm.response.json().result.tools.map((t) => t.name)).to.eql(['search_employees', 'get_employee', 'search_products', 'update_product']));"]),
+    call('Alice: get_employee (salary) → allowed', 'alice', 'tools/call', { name: 'get_employee', arguments: { id: 1 } }, [status(200), allowed, "pm.test('has the salary', () => pm.expect(pm.response.json().result.structuredContent).to.have.property('salary'));"]),
+    call('Alice: update_product → allowed', 'alice', 'tools/call', { name: 'update_product', arguments: { id: 1, changes: { stockQty: 42 } } }, [status(200), allowed]),
+    call('Bob: search_employees → allowed', 'bob', 'tools/call', { name: 'search_employees', arguments: { limit: 2 } }, [status(200), allowed]),
+    call('Bob: get_employee → denied (tool error)', 'bob', 'tools/call', { name: 'get_employee', arguments: { id: 1 } }, denied('get_employee')),
+    call('Bob: update_product → denied (tool error)', 'bob', 'tools/call', { name: 'update_product', arguments: { id: 1, changes: { stockQty: 1 } } }, denied('update_product')),
+    call('Carol (suspended): tools/list → 403', 'carol', 'tools/list', {}, blocked),
+    call('Carol (suspended): search_employees → 403', 'carol', 'tools/call', { name: 'search_employees', arguments: { limit: 1 } }, blocked),
+    admin(req('Decision log shows Bob denied get_employee', 'GET', '{{rootUrl}}/admin/api/tool-acl/decisions', { pre: ready, tests: [status(200), "pm.test('recorded with sub, tool and scope', () => pm.expect(pm.response.json().data.some((e) => e.sub === 'bob-agent' && e.tool === 'get_employee' && e.allowed === false && e.requiredScope === 'tool:get_employee')).to.eql(true));"] })),
+    admin(req('Turn access control off (a gateway enforces)', 'PATCH', '{{rootUrl}}/admin/api/tool-acl', { headers: { 'Content-Type': 'application/json' }, body: json({ enabled: false }), pre: ready, tests: [status(200), "pm.test('off', () => pm.expect(pm.response.json().enabled).to.eql(false));"] })),
+    call('Off: Bob get_employee → allowed', 'bob', 'tools/call', { name: 'get_employee', arguments: { id: 1 } }, [status(200), allowed]),
+    admin(req('Turn access control back on', 'PATCH', '{{rootUrl}}/admin/api/tool-acl', { headers: { 'Content-Type': 'application/json' }, body: json({ enabled: true }), pre: ready, tests: [status(200), "pm.test('on', () => pm.expect(pm.response.json().enabled).to.eql(true));"] })),
+  ];
+}
+const toolAclDesc = 'Which agent can call which MCP tool: the /p/tool-acl profile (jwt auth, 4 tools, MCP_TOOL_ACL on) and three agents whose OAuth scopes are their grants. Every MCP request needs mcp:access; each tools/call needs tool:<name>. Requests carry their own credentials, independent of {{authMode}}.';
+const toolAclFolder = folder('Tool access control (MCP)', toolAclItems(), toolAclDesc);
+
 // ---------------------------------------------------------------- A2A agent
 const a2aMsg = (text, extra = {}) => ({ messageId: `pm-${text.length}-${Math.floor(text.charCodeAt(0))}`, role: 'ROLE_USER', parts: [{ text }], ...extra });
 const a2aH = { 'Content-Type': 'application/json', 'A2A-Version': '1.0' };
@@ -571,7 +617,7 @@ const collection = {
     { listen: 'test', script: { type: 'text/javascript', exec: collectionTest } },
   ],
   variable: [{ key: 'cachedToken', value: '' }, { key: 'cachedTokenExp', value: '0' }],
-  item: [platform, oauth, assertions, cimdFolder, mtlsFolder, authFolder, crud, query, pagination, chaos, files, soapFolder, sseFolder, llmFolder, mcpFolder, a2aFolder, graphqlFolder, odataFolder, s3Folder, misc],
+  item: [platform, oauth, assertions, cimdFolder, mtlsFolder, authFolder, crud, query, pagination, chaos, files, soapFolder, sseFolder, llmFolder, mcpFolder, toolAclFolder, a2aFolder, graphqlFolder, odataFolder, s3Folder, misc],
 };
 
 const environment = {
@@ -588,7 +634,26 @@ const environment = {
   _postman_variable_scope: 'environment',
 };
 
+// Standalone collection for demos: the tool access control requests only, with the admin password as Basic auth.
+const toolAclCollection = {
+  info: {
+    _postman_id: 'b1f0d7c8-tool-access-control',
+    name: 'API Test Tool — Tool access control (MCP)',
+    description: `${toolAclDesc} Set {{rootUrl}} to the server (no /p/…) and {{adminPassword}} to ADMIN_PASSWORD (blank when none). Generated by scripts/build-postman.js.`,
+    schema: 'https://schema.getpostman.com/json/collection/v2.1.0/collection.json',
+  },
+  item: toolAclItems({ adminAuth: { type: 'basic', basic: [{ key: 'username', value: 'admin' }, { key: 'password', value: '{{adminPassword}}' }] } }),
+};
+const toolAclEnvironment = {
+  id: 'c7d0f2a1-tool-access-control-env',
+  name: 'Tool access control (local)',
+  values: [['rootUrl', 'http://localhost:3000', 'default'], ['adminPassword', '', 'secret']].map(([key, value, type]) => ({ key, value, type, enabled: true })),
+  _postman_variable_scope: 'environment',
+};
+
 fs.mkdirSync(path.join(OUT, 'fixtures'), { recursive: true });
+fs.writeFileSync(path.join(OUT, 'Tool-Access-Control.postman_collection.json'), `${JSON.stringify(toolAclCollection, null, 2)}\n`);
+fs.writeFileSync(path.join(OUT, 'Tool-Access-Control.postman_environment.json'), `${JSON.stringify(toolAclEnvironment, null, 2)}\n`);
 fs.writeFileSync(path.join(OUT, 'API-Test-Tool.postman_collection.json'), `${JSON.stringify(collection, null, 2)}\n`);
 fs.writeFileSync(path.join(OUT, 'API-Test-Tool.postman_environment.json'), `${JSON.stringify(environment, null, 2)}\n`);
 fs.writeFileSync(path.join(OUT, 'fixtures', 'hello.txt'), 'Hello from the API Test Tool fixture.\nUsed by the multipart upload request.\n');

@@ -259,7 +259,7 @@
   // ---------------------------------------------------------------- shell & routing
   const PAGES = [
     ['overview', 'Overview'], ['settings', 'Settings'], ['data', 'Data'], ['inspector', 'Inspector'], ['webhooks', 'Webhooks'], ['files', 'Files'],
-    ['auth', 'Auth'], ['profiles', 'Profiles'], ['chaos', 'Chaos'], ['headers', 'Headers'], ['protocols', 'Protocols'], ['openapi', 'OpenAPI'], ['tester', 'API Tester'],
+    ['auth', 'Auth'], ['profiles', 'Profiles'], ['chaos', 'Chaos'], ['headers', 'Headers'], ['protocols', 'Protocols'], ['tool-access', 'Tool access'], ['openapi', 'OpenAPI'], ['tester', 'API Tester'],
     ['help', 'About & Help'],
   ];
   // One-line purpose of each page; shown in the Help guide and as the tooltip of each page's help link.
@@ -275,6 +275,7 @@
     chaos: { purpose: 'Make the mock API misbehave on purpose: random errors, latency, timeouts, broken JSON and rate limits, globally or per route, so you can test client error handling.' },
     headers: { purpose: 'Headers added to every response, and headers every API request must carry on every protocol (missing ones are rejected with 400 in that protocol\'s error format).' },
     protocols: { purpose: 'The same mock data over other protocols: SOAP 1.1/1.2 services with live WSDLs, WebSocket channels (echo, JSON-RPC, live change feed) with an AsyncAPI document and a live console, Server-Sent Events streams (change feed with replay, ticks, LLM-style streaming) with a live viewer, GraphQL (queries, mutations, subscriptions), OData v4, an OpenAI-compatible mock LLM (chat completions with random token usage, tool calls, streaming, embeddings), an MCP server (tools, resources and prompts over the data; protocol 2026-07-28 and session-based 2025 clients), an A2A agent that answers questions about the data as tasks (A2A 1.0 JSON-RPC and HTTP+JSON, and 0.3), and the file pool as an S3-compatible bucket (AWS Signature V4), each with a console. Auth (the S3 API uses its own keys), chaos, rate limits and required headers apply as on /v1.' },
+    'tool-access': { purpose: 'Which agent can call which tool on the MCP server: a demo profile (/p/tool-acl) with three agents as OAuth clients whose scopes are their grants, an on/off switch (on: this tool enforces; off: a gateway in front does), a grant matrix, a try-it that gets real tokens, and the live decision log.' },
     openapi: { purpose: 'Two live OpenAPI 3.1 specs: the Mock Data API (/openapi.json) for integrations to import, and the Admin API (/admin/api/openapi.json) for scripting the tool itself.' },
     tester: { purpose: 'Test an API you built: load its OpenAPI spec (REST), WSDL (SOAP) or AsyncAPI document (WebSocket), call your implementation, and check every response or message against the contract.' },
     help: { purpose: 'What this tool does and how to use each page.' },
@@ -2100,6 +2101,166 @@
   }
 
   // ---------------------------------------------------------------- openapi
+  // ---------------------------------------------------------------- Tool access (MCP tool access control)
+  // Which agent may call which MCP tool: the demo profile (/p/tool-acl), three agents (OAuth clients whose scopes are
+  // their grants), the on/off switch, a grant matrix, a try-it that gets a real token and calls the profile's /mcp,
+  // and the live decision log. Tokens and MCP calls go from the browser to the real endpoints (same origin).
+  const ACL_ARGS = { search_employees: { limit: 3 }, get_employee: { id: 1 }, search_products: { limit: 3 }, update_product: { id: 1, changes: { stockQty: 42 } } };
+  const jwtClaims = (tok) => { try { return JSON.parse(atob(tok.split('.')[1].replace(/-/g, '+').replace(/_/g, '/'))); } catch { return null; } };
+
+  VIEWS['tool-access'] = async (el) => {
+    let d = await api('GET', '/tool-acl');
+    let lastSeq = 0;
+    el.append(header('Tool access', 'Which agent can call which tool: per-tool scopes in the caller\'s JWT, checked on every MCP call'));
+    const top = h('div');
+    const matrixCard = h('div', { class: 'card' });
+    const tryCard = h('div', { class: 'card' });
+    const logBody = h('tbody');
+    const logCard = h('div', { class: 'card' });
+    el.append(top, matrixCard, tryCard, logCard);
+    const path = (u) => { try { return new URL(u).pathname; } catch { return u; } };
+    const reload = async () => { d = await api('GET', '/tool-acl'); renderTop(); renderMatrix(); renderTry(); };
+
+    function renderTop() {
+      clear(top);
+      if (!d.exists) {
+        top.append(h('div', { class: 'card' }, titled('Set up the demo', 'toolacl.demo'),
+          h('p', null, 'Creates the settings profile ', h('code', null, `/p/${d.profile}`), ' (JWT auth, 4 MCP tools, access control on) and three agents as OAuth clients: Alice (admin, every tool), Bob (developer, safe reads only) and Carol (suspended: no ', h('code', null, 'mcp:access'), '). Nothing outside the profile changes.'),
+          h('button', { class: 'primary', onclick: guard(async () => { d = await api('POST', '/tool-acl/demo', {}); toast('Demo ready', 'ok'); renderTop(); renderMatrix(); renderTry(); }) }, 'Set up the demo')));
+        return;
+      }
+      const on = d.enabled;
+      const sw = h('input', { type: 'checkbox', checked: on, 'aria-label': 'Tool access control', onchange: guard(async (e) => { d = await api('PATCH', '/tool-acl', { enabled: e.target.checked }); toast(`Tool access control ${d.enabled ? 'on' : 'off'}`, 'ok'); renderTop(); renderMatrix(); }) });
+      top.append(h('div', { class: 'card', style: { borderLeft: `4px solid var(${on ? '--ok' : '--warn'})` } },
+        h('div', { class: 'row between' }, titled('Access control', 'toolacl.demo'),
+          h('label', { class: 'row acl-switch' }, sw, h('b', null, on ? 'ON — this tool enforces' : 'OFF — pass-through'))),
+        h('p', { class: 'muted', style: { margin: '4px 0 10px' } }, on
+          ? 'Standalone demo: every MCP request needs mcp:access, and each tools/call needs tool:<name>. Denied calls come back as tool errors (visible but denied); a suspended agent gets 403 on everything.'
+          : 'Off: the profile serves every agent with a valid token. Use this when a gateway in front of the MCP server does the enforcing, with this tool as the token issuer and the backend.'),
+        h('table', null, h('tbody', null,
+          [['MCP endpoint', d.endpoint], ['Token URL (client_credentials)', d.tokenUrl], ['Issuer (iss)', d.tokenUrl.replace(/\/oauth\/token$/, '')], ['JWKS', `${d.tokenUrl.replace(/\/oauth\/token$/, '')}/.well-known/jwks.json`], ['Base scope', d.baseScope || '(none)']]
+            .map(([k, v]) => h('tr', null, h('th', null, k), h('td', null, h('code', null, v)), h('td', null, h('button', { class: 'small', onclick: () => copy(v) }, 'copy')))))),
+        h('div', { class: 'row', style: { marginTop: '10px' } },
+          h('button', { class: 'small', title: 'Put the default grants back (secrets are kept)', onclick: guard(async () => { d = await api('POST', '/tool-acl/demo', { enabled: d.enabled }); toast('Default grants restored', 'ok'); renderMatrix(); renderTry(); }) }, 'Reset grants'),
+          h('button', { class: 'small', title: 'Who may call each tool, as JSON (to copy into a gateway policy)', onclick: () => copy(JSON.stringify({ baseScope: d.baseScope, policy: d.policy }, null, 2)) }, 'Copy policy JSON'),
+          h('a', { class: 'btn small', href: '#/profiles' }, 'Profile settings'))));
+    }
+
+    function renderMatrix() {
+      clear(matrixCard);
+      if (!d.exists) return;
+      const base = d.baseScope;
+      const setScopes = (a, scopes) => guard(async () => { await api('PATCH', `/oauth/clients/${encodeURIComponent(a.clientId)}`, { scopes: scopes.join(' ') }); await reload(); })();
+      const toggle = (a, scope) => { const has = a.scopes.includes(scope); const next = has ? a.scopes.filter((s) => s !== scope) : [...a.scopes, scope]; if (!next.length) { toast('An agent needs at least one scope', 'err'); return; } setScopes(a, next); };
+      matrixCard.append(titled('Who may call what', 'toolacl.matrix'),
+        h('p', { class: 'small muted', style: { margin: '2px 0 10px' } }, 'Each agent is an OAuth client; its scopes are its grants. Click a cell to grant or revoke (the next token carries the change). Without the base scope an agent is suspended: nothing gets through.'),
+        d.enabled ? null : h('div', { class: 'card', style: { borderLeft: '4px solid var(--warn)', margin: '0 0 10px' } }, 'Access control is off: these grants are still in the tokens, but this tool does not enforce them. A gateway in front of the MCP server should.'),
+        h('div', { class: 'table-wrap' }, h('table', { class: 'acl-matrix' },
+          h('thead', null, h('tr', null, h('th', null, 'Agent'), base ? h('th', { title: 'Needed for every MCP request' }, h('code', null, base)) : null,
+            d.tools.map((t) => h('th', { title: t.why }, h('code', null, t.name), h('div', { class: 'small muted' }, t.why))))),
+          h('tbody', null, d.agents.map((a) => {
+            const suspended = base && !a.scopes.includes(base);
+            const cell = (scope, label) => {
+              const has = a.scopes.includes(scope) || (scope !== base && a.scopes.includes('tool:*'));
+              const blocked = scope !== base && suspended;
+              return h('td', null, h('button', { class: `acl-cell ${has ? 'allow' : 'deny'}${blocked ? ' blocked' : ''}`, title: `${has ? 'Revoke' : 'Grant'} ${scope}${blocked ? ' (suspended: blocked anyway)' : ''}`, disabled: !a.exists, onclick: () => toggle(a, scope) }, has ? (blocked ? '✓ blocked' : '✓ allow') : (label || '✗ deny')));
+            };
+            return h('tr', null,
+              h('th', null, a.clientName, ' ', h('span', { class: `badge ${a.role === 'admin' ? 'ok' : a.role === 'suspended' ? 'error' : 'info'}` }, suspended ? 'suspended' : a.role), h('div', { class: 'small muted' }, h('code', null, a.clientId))),
+              base ? cell(base, '✗ suspended') : null,
+              d.tools.map((t) => cell(t.scope)));
+          })))));
+    }
+
+    let pickAgent = 'bob-agent';
+    let pickTool = 'get_employee';
+    const out = h('div');
+    async function runOne(agentId, tool, { quiet = false } = {}) {
+      const a = d.agents.find((x) => x.clientId === agentId);
+      const tr = await fetch('/oauth/token', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded', Authorization: `Basic ${btoa(`${a.clientId}:${a.secret}`)}` }, body: 'grant_type=client_credentials' });
+      const tj = await tr.json();
+      if (!tr.ok) return { verdict: 'error', detail: tj.error_description || `token HTTP ${tr.status}` };
+      const method = tool ? 'tools/call' : 'tools/list';
+      const params = tool ? { name: tool, arguments: ACL_ARGS[tool] || {} } : {};
+      const body = { jsonrpc: '2.0', id: 1, method, params: { ...params, _meta: { 'io.modelcontextprotocol/protocolVersion': '2026-07-28', 'io.modelcontextprotocol/clientCapabilities': {}, 'io.modelcontextprotocol/clientInfo': { name: 'dashboard', version: '1' } } } };
+      const r = await fetch(path(d.endpoint), { method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream', 'MCP-Protocol-Version': '2026-07-28', 'Mcp-Method': method, ...(tool ? { 'Mcp-Name': tool } : {}), Authorization: `Bearer ${tj.access_token}` }, body: JSON.stringify(body) });
+      const text = await r.text();
+      let j = null; try { j = JSON.parse(text); } catch { /* not JSON */ }
+      let verdict = 'allowed';
+      if (r.status === 403) verdict = 'blocked';
+      else if (r.status >= 400 || j?.error) verdict = 'error';
+      else if (j?.result?.isError) verdict = /^Access denied/.test(j.result.content?.[0]?.text || '') ? 'denied' : 'error';
+      const res = { verdict, status: r.status, claims: jwtClaims(tj.access_token), body: j || text, wwwAuth: r.headers.get('WWW-Authenticate'), method, tool };
+      if (!quiet) poll();
+      return res;
+    }
+    const VERDICT = { allowed: ['ok', 'ALLOWED'], denied: ['error', 'DENIED — tool error'], blocked: ['error', 'BLOCKED — 403'], error: ['warn', 'ERROR'] };
+    const verdictBadge = (v) => h('span', { class: `badge ${VERDICT[v][0]}` }, VERDICT[v][1]);
+
+    function renderTry() {
+      clear(tryCard);
+      if (!d.exists) return;
+      const agentBtns = h('div', { class: 'row' }, d.agents.map((a) => h('button', { class: `small${a.clientId === pickAgent ? ' primary' : ''}`, onclick: () => { pickAgent = a.clientId; renderTry(); } }, a.clientName)));
+      const toolBtns = h('div', { class: 'row' }, h('button', { class: `small${pickTool === '' ? ' primary' : ''}`, onclick: () => { pickTool = ''; renderTry(); } }, 'tools/list'),
+        d.tools.map((t) => h('button', { class: `small${t.name === pickTool ? ' primary' : ''}`, onclick: () => { pickTool = t.name; renderTry(); } }, t.name)));
+      const grid = h('div');
+      tryCard.append(titled('Try it as an agent', 'toolacl.try'),
+        h('p', { class: 'small muted', style: { margin: '2px 0 10px' } }, 'Gets a real token for the agent (client_credentials), shows its claims, and calls the profile\'s MCP endpoint, as an MCP client would.'),
+        field('Agent', agentBtns), field('Call', toolBtns),
+        h('div', { class: 'row', style: { margin: '8px 0' } },
+          h('button', { class: 'primary', onclick: guard(async () => { clear(out); out.append(h('div', { class: 'muted' }, 'Calling…')); showResult(await runOne(pickAgent, pickTool)); }) }, 'Run'),
+          h('button', { title: 'Every agent × every tool, side by side', onclick: guard(async () => { await runAll(grid); }) }, 'Run all (3 × 4)')),
+        out, grid);
+    }
+
+    function showResult(r) {
+      clear(out);
+      if (r.verdict === 'error' && !r.claims) { out.append(h('div', null, verdictBadge('error'), ' ', r.detail)); return; }
+      const c = r.claims || {};
+      out.append(h('div', { class: 'grid cols-2' },
+        h('div', null, h('div', { class: 'tip-label' }, 'Token claims'),
+          kv({ sub: c.sub, client_id: c.client_id, scope: c.scope, iss: c.iss, aud: Array.isArray(c.aud) ? c.aud.join(', ') : c.aud, exp: c.exp ? new Date(c.exp * 1000).toLocaleTimeString() : '' })),
+        h('div', null, h('div', { class: 'tip-label' }, `${r.method}${r.tool ? ` ${r.tool}` : ''} → HTTP ${r.status}`), h('div', { style: { margin: '4px 0 8px' } }, verdictBadge(r.verdict)),
+          r.wwwAuth ? h('div', { class: 'small' }, h('code', null, `WWW-Authenticate: ${r.wwwAuth}`)) : null,
+          codeBlock(pretty(r.body), { maxHeight: '260px' }))));
+    }
+
+    async function runAll(grid) {
+      clear(grid);
+      const cells = {};
+      const tbl = h('table', { class: 'acl-matrix' }, h('thead', null, h('tr', null, h('th', null, 'Agent'), h('th', null, 'tools/list'), d.tools.map((t) => h('th', null, h('code', null, t.name))))),
+        h('tbody', null, d.agents.map((a) => h('tr', null, h('th', null, a.clientName), ['', ...d.tools.map((t) => t.name)].map((t) => { cells[`${a.clientId}|${t}`] = h('td', { class: 'muted' }, '…'); return cells[`${a.clientId}|${t}`]; })))));
+      grid.append(h('div', { class: 'tip-label', style: { marginTop: '12px' } }, 'Run all: what each agent actually gets'), h('div', { class: 'table-wrap' }, tbl));
+      for (const a of d.agents) {
+        for (const t of ['', ...d.tools.map((x) => x.name)]) {
+          const r = await runOne(a.clientId, t, { quiet: true });
+          clear(cells[`${a.clientId}|${t}`]).append(verdictBadge(r.verdict));
+        }
+      }
+      poll();
+    }
+
+    logCard.append(h('div', { class: 'row between' }, titled('Decisions (live)', 'toolacl.decisions'),
+      h('button', { class: 'small', onclick: guard(async () => { await api('DELETE', '/tool-acl/decisions'); lastSeq = 0; clear(logBody); }) }, 'Clear')),
+      h('p', { class: 'small muted', style: { margin: '2px 0 10px' } }, 'Every decision the access control made, newest first: from this page, Postman, an MCP client or a gateway calling the profile. Nothing is recorded while it is off.'),
+      h('div', { class: 'table-wrap' }, h('table', null, h('thead', null, h('tr', null, ['Time', 'Agent (sub)', 'Call', 'Decision', 'Required scope', 'Why'].map((x) => h('th', null, x)))), logBody)));
+    async function poll() {
+      const r = await api('GET', `/tool-acl/decisions?after=${lastSeq}`).catch(() => null);
+      if (!r) return;
+      for (const e of r.data) {
+        lastSeq = Math.max(lastSeq, e.seq);
+        logBody.prepend(h('tr', { class: 'flash' }, h('td', { style: { whiteSpace: 'nowrap' } }, fmtTime(e.at)), h('td', { style: { whiteSpace: 'nowrap' } }, h('code', null, e.sub || '—')),
+          h('td', null, e.tool ? h('code', null, e.tool) : e.method), h('td', null, h('span', { class: `badge ${e.allowed ? 'ok' : 'error'}` }, e.allowed ? 'allow' : 'deny')),
+          h('td', null, e.requiredScope ? h('code', null, e.requiredScope) : '—'), h('td', { class: 'small' }, e.reason)));
+      }
+      while (logBody.children.length > 200) logBody.lastChild.remove();
+    }
+    renderTop(); renderMatrix(); renderTry();
+    await poll();
+    const timer = setInterval(() => { poll().catch(() => {}); }, 2000);
+    return () => clearInterval(timer);
+  };
+
   VIEWS.openapi = async (el) => {
     const base = location.origin;
     const SPECS = {

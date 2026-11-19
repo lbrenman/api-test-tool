@@ -553,6 +553,75 @@
           ['Same call without credentials (expect 401)', plain('GET', '/v1/employees?limit=1', { include: true })],
         ],
       },
+      // ------------------------------------------------------------ tool access (MCP tool access control)
+      ...(() => {
+        const EP = `${C.root}/p/tool-acl/mcp`;
+        const tok = (agent) => `TOKEN=$(curl -s -u ${q(`${agent}:`)}"$SECRET" -d grant_type=client_credentials ${q(C.ctx.tokenUrl)} | sed -E 's/.*"access_token":"([^"]+)".*/\\1/')`;
+        const mcp = (method, params = {}) => `curl -s ${q(EP)} -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' -H 'MCP-Protocol-Version: 2026-07-28' -H ${q(`Mcp-Method: ${method}`)}${params.name ? ` -H ${q(`Mcp-Name: ${params.name}`)}` : ''} -d ${q(JSON.stringify({ jsonrpc: '2.0', id: 1, method, params: { ...params, _meta: { 'io.modelcontextprotocol/protocolVersion': '2026-07-28', 'io.modelcontextprotocol/clientCapabilities': {} } } }))}`;
+        return {
+          'toolacl.demo': {
+            title: 'Tool access control',
+            purpose: 'Which agent can call which tool on the MCP server. On, this tool makes the decision a gateway would (standalone demo); off, a gateway in front of the MCP server does the enforcing and this tool is the token issuer and the backend.',
+            steps: [
+              `Set up the demo once: it creates the profile \`/p/tool-acl\` (auth mode jwt, the tools search_employees, get_employee, search_products and update_product, access control on) and three OAuth clients: alice-agent, bob-agent and carol-agent. Nothing outside the profile changes.`,
+              `Agents get tokens with client_credentials from \`${C.ctx.tokenUrl}\` and call \`${EP}\`. The token's \`scope\` claim is the agent's grants; \`iss\`, \`aud\` and the signature (JWKS at \`${C.root}/.well-known/jwks.json\`) are checked as for any jwt profile.`,
+              'Every MCP request needs the base scope `mcp:access` (403 insufficient_scope without it: a suspended agent gets nothing, not even tools/list). Each tools/call needs `tool:<name>`, or `tool:*` for every tool; without it the call returns a tool error (`isError: true`, "Access denied"), so the tools stay visible but are denied.',
+              'The switch turns `mcpToolAcl` on or off in the profile only. Settings: `MCP_TOOL_ACL`, `MCP_TOOL_ACL_BASE_SCOPE` and `MCP_TOOLS` can also be set globally or in any other profile.',
+              '"Copy policy JSON" gives the same rules as data (tool → required scopes → allowed agents), e.g. to configure a gateway.',
+              ...pw,
+            ],
+            curls: [
+              ['Set up (or reset) the demo', admin('POST', '/tool-acl/demo', { json: {} })],
+              ['Turn access control off (a gateway enforces)', admin('PATCH', '/tool-acl', { json: { enabled: false } })],
+              ['Turn it back on', admin('PATCH', '/tool-acl', { json: { enabled: true } })],
+              ['The demo: agents, secrets, policy', admin('GET', '/tool-acl')],
+            ],
+          },
+          'toolacl.matrix': {
+            title: 'Who may call what',
+            purpose: 'The agents\' grants: each agent is an OAuth client and its scopes are what it may do. Change a cell and the agent\'s next token carries the change (tokens already issued keep their scopes until they expire).',
+            steps: [
+              'Alice (admin) has every tool; Bob (developer) only the safe reads (search_employees, search_products), so get_employee (salary) and update_product (a write) are denied; Carol is suspended: she still has tool:search_employees but not mcp:access, so nothing gets through.',
+              'Click a cell to grant or revoke that scope. "Reset grants" puts the defaults back and keeps the secrets.',
+              'The same change from the Auth page or the admin API: edit the client\'s scopes.',
+              ...pw,
+            ],
+            curls: [
+              ['Give Bob every tool (tool:*)', admin('PATCH', '/oauth/clients/bob-agent', { json: { scopes: 'mcp:access tool:*' } })],
+              ['Suspend Bob (remove mcp:access)', admin('PATCH', '/oauth/clients/bob-agent', { json: { scopes: 'tool:search_employees tool:search_products' } })],
+            ],
+          },
+          'toolacl.try': {
+            title: 'Try it as an agent',
+            purpose: 'Get a real token for an agent and call the profile\'s MCP endpoint, exactly as an MCP client or agent would, to see what each one gets.',
+            steps: [
+              'Pick an agent and a call, then Run: the page shows the token\'s claims (sub, client_id, scope, iss, aud, exp), the HTTP status and the MCP result.',
+              'ALLOWED is a normal result; DENIED is a tool error (HTTP 200, `isError: true`); BLOCKED is HTTP 403 with `WWW-Authenticate: … error="insufficient_scope", scope="mcp:access"`.',
+              '"Run all" calls tools/list and every tool as every agent and fills a grid: the matrix above, proved with real calls.',
+              'From a terminal: the client secrets are on this page (GET /admin/api/tool-acl).',
+            ],
+            curls: [
+              ['Bob: a token, then a denied call (get_employee)', `SECRET='<bob-agent secret from this page>'\n${tok('bob-agent')}\n${mcp('tools/call', { name: 'get_employee', arguments: { id: 1 } })}`],
+              ['Alice: the same call, allowed', `SECRET='<alice-agent secret from this page>'\n${tok('alice-agent')}\n${mcp('tools/call', { name: 'get_employee', arguments: { id: 1 } })}`],
+              ['Carol: even tools/list is 403', `SECRET='<carol-agent secret from this page>'\n${tok('carol-agent')}\ncurl -s -i ${q(EP)} -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' -H 'MCP-Protocol-Version: 2026-07-28' -H 'Mcp-Method: tools/list' -d ${q(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list', params: { _meta: { 'io.modelcontextprotocol/protocolVersion': '2026-07-28', 'io.modelcontextprotocol/clientCapabilities': {} } } }))}`],
+            ],
+          },
+          'toolacl.decisions': {
+            title: 'Decisions',
+            purpose: 'The audit trail: every allow and deny the access control made, with the agent (sub), the tool, the scope it needed and why. Calls from this page, Postman, an MCP client or a gateway all show up.',
+            steps: [
+              'Kept in memory (the last 500), newest first; Clear empties it. Nothing is recorded while access control is off.',
+              'Each entry carries the request id, so it matches the call on the Inspector page.',
+              ...pw,
+            ],
+            curls: [
+              ['Decisions as JSON', admin('GET', '/tool-acl/decisions')],
+              ['Only newer than a sequence number', admin('GET', '/tool-acl/decisions?after=10')],
+            ],
+          },
+        };
+      })(),
+
       'profiles.list': {
         title: 'Settings profiles',
         purpose: 'Several auth modes or chaos setups at once on one server: a request to `/p/<name>/…` runs with that profile\'s settings, and nothing global changes.',
