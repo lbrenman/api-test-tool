@@ -830,10 +830,23 @@ class OAuthService {
     const r = Array.isArray(resource) ? resource[0] : String(resource);
     const base = this.ctx.baseUrl.root(req); // any resource on this server, including inside a profile (/p/<name>/mcp)
     const bases = [base, ...(this.ctx.settings.get('mtlsEnabled') ? [this.ctx.baseUrl.mtls(req)] : [])];
+    const external = this.externalResources();
     let ok = false;
-    try { const u = new URL(r); ok = !u.hash && bases.some((b) => r === b || r.startsWith(`${b}/`)); } catch { ok = false; }
-    if (!ok) throw new OAuthError('invalid_target', `resource must be an absolute URL on this server (${base}/…)`);
+    try {
+      const u = new URL(r);
+      ok = !u.hash && [...bases, ...external].some((b) => r === b || r.startsWith(`${b}/`) || r.startsWith(`${b}?`));
+    } catch { ok = false; }
+    if (!ok) {
+      const also = external.length ? ` or under ${external.join(', ')}` : ' (other hosts: OAUTH_EXTERNAL_RESOURCES)';
+      throw new OAuthError('invalid_target', `resource must be an absolute URL on this server (${base}/…)${also}`);
+    }
     return r;
+  }
+
+  /** OAUTH_EXTERNAL_RESOURCES: resource indicators on other hosts (e.g. an MCP gateway) that tokens may be issued for. */
+  externalResources() {
+    return String(this.ctx.settings.get('oauthExternalResources') || '').split(',').map((v) => v.trim().replace(/\/+$/, ''))
+      .filter((v) => { try { const u = new URL(v); return /^https?:$/.test(u.protocol) && !u.hash; } catch { return false; } });
   }
 
   async issueAccessToken(req, { client, scopes, subject, user, refresh, resource }) {
