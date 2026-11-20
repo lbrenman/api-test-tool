@@ -223,6 +223,7 @@ Settings marked **restart** can only be set through the environment.
 | `OAUTH_CLIENTS` | `demo-client:demo-secret:read write` | `id:secret:scopes;…`. More clients can be added in the dashboard. |
 | `OAUTH_USERS` | `demo:demo` | Users for the authorization_code login page: `user:password[:roles[:attributes]];…`, e.g. `alice:alice:admin,buyer:region=EMEA,tier=gold`. More on the Auth page. |
 | `OAUTH_ROLES_CLAIM` | `realm_access.roles` | Where a user's roles go in the token: dotted claim paths, comma separated (`realm_access.roles` = Keycloak style; `realm_access.roles,roles` writes both) |
+| `OAUTH_EXTERNAL_RESOURCES` | — | Resource indicators (RFC 8707) on other hosts that tokens may be issued for: absolute URLs, comma separated, each covering the paths below it (e.g. an MCP gateway in front of an MCP server that signs in here). Blank = only resources on this server |
 | `OAUTH_TOKEN_TTL` / `OAUTH_REFRESH_TTL` | `3600` / `86400` | seconds |
 | `OAUTH_REGISTRATION` | `open` | Dynamic client registration at `/oauth/register`: `open`, `token` (needs `OAUTH_REGISTRATION_TOKEN`) or `off` |
 | `OAUTH_REGISTRATION_TOKEN` | | Initial access token clients send as `Authorization: Bearer …` when `OAUTH_REGISTRATION=token` |
@@ -464,6 +465,8 @@ curl -s -u demo-client:demo-secret -d "token=$TOKEN" "$B/oauth/revoke"
 - Roles go to each path in `OAUTH_ROLES_CLAIM`. The default `realm_access.roles` is what Keycloak issues; `realm_access.roles,roles` writes both shapes, and paths such as `groups` or `resource_access.my-app.roles` work too. A user without roles gets no roles claim.
 - Each attribute is a top-level claim with its JSON value (string, number, boolean, array or object). Standard and server claims (`iss`, `sub`, `aud`, `exp`, `nbf`, `iat`, `jti`, `scope`, `client_id`, `azp`, `token_use`, `preferred_username`) and the roles claim's top level are refused as attribute names.
 - Introspection returns the same claims. A refreshed token gets the user's current roles and attributes; when a user is deleted, their codes and refresh tokens stop working (`invalid_grant`).
+
+**Resource indicators (RFC 8707).** A `resource` parameter on the authorize and token requests is added to the token's audience, next to `JWT_AUDIENCE`. By default it must be a URL on this server (otherwise `invalid_target`). An MCP client that signs in here for an MCP server behind a gateway on another host sends that gateway's URL as `resource`; list it in `OAUTH_EXTERNAL_RESOURCES` (e.g. `https://gateway.example.com:4443/my-mcp`) so the sign-in works. The token then carries both audiences, so a gateway that checks `JWT_AUDIENCE` keeps working.
 
 ```bash
 # a user with roles and attributes (admin API; the Auth page does the same)
