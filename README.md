@@ -224,6 +224,7 @@ Settings marked **restart** can only be set through the environment.
 | `OAUTH_USERS` | `demo:demo` | Users for the authorization_code login page: `user:password[:roles[:attributes]];…`, e.g. `alice:alice:admin,buyer:region=EMEA,tier=gold`. More on the Auth page. |
 | `OAUTH_ROLES_CLAIM` | `realm_access.roles` | Where a user's roles go in the token: dotted claim paths, comma separated (`realm_access.roles` = Keycloak style; `realm_access.roles,roles` writes both) |
 | `OAUTH_EXTERNAL_RESOURCES` | — | Resource indicators (RFC 8707) on other hosts that tokens may be issued for: absolute URLs, comma separated, each covering the paths below it (e.g. an MCP gateway in front of an MCP server that signs in here). Blank = only resources on this server |
+| `OAUTH_LOGIN_LABELS` | — | Labels for the login page by redirect URI: `<redirect URI>=<label>\|<username>` entries separated by `;`, each URI also covering paths below it. The match sets the page title and heading and prefills the username. Blank = no labels |
 | `OAUTH_TOKEN_TTL` / `OAUTH_REFRESH_TTL` | `3600` / `86400` | seconds |
 | `OAUTH_REGISTRATION` | `open` | Dynamic client registration at `/oauth/register`: `open`, `token` (needs `OAUTH_REGISTRATION_TOKEN`) or `off` |
 | `OAUTH_REGISTRATION_TOKEN` | | Initial access token clients send as `Authorization: Bearer …` when `OAUTH_REGISTRATION=token` |
@@ -467,6 +468,8 @@ curl -s -u demo-client:demo-secret -d "token=$TOKEN" "$B/oauth/revoke"
 - Introspection returns the same claims. A refreshed token gets the user's current roles and attributes; when a user is deleted, their codes and refresh tokens stop working (`invalid_grant`).
 
 **Resource indicators (RFC 8707).** A `resource` parameter on the authorize and token requests is added to the token's audience, next to `JWT_AUDIENCE`. By default it must be a URL on this server (otherwise `invalid_target`). An MCP client that signs in here for an MCP server behind a gateway on another host sends that gateway's URL as `resource`; list it in `OAUTH_EXTERNAL_RESOURCES` (e.g. `https://gateway.example.com:4443/my-mcp`) so the sign-in works. The token then carries both audiences, so a gateway that checks `JWT_AUDIENCE` keeps working.
+
+**Login page labels.** The login page always shows where the sign-in returns to (the `redirect_uri` without its query). When several clients sign in at once and look alike, for example one MCP client per demo persona, each on its own callback port, `OAUTH_LOGIN_LABELS` names them: `http://localhost:3341=Alice (admin)|alice; http://localhost:3342=Bob (developer)|bob` shows "Sign in as Bob (developer)" with `bob` filled in for a sign-in that returns to `http://localhost:3342/oauth/callback`. A label only names the page; the user still signs in with their own password.
 
 ```bash
 # a user with roles and attributes (admin API; the Auth page does the same)

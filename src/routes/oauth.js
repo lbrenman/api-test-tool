@@ -17,10 +17,29 @@ function oauthError(res, e) {
   return res.status(e.status).json({ error: e.error, error_description: e.description });
 }
 
-function loginPage({ client, params, error }) {
+// OAUTH_LOGIN_LABELS: "<redirect URI>=<label>|<username>" entries (; or newline separated). The entry whose URI equals
+// the redirect_uri, or is a prefix of it at a / or ? boundary, labels the page and prefills the username, so several
+// sign-ins open at once (e.g. one MCP client per demo persona on its own callback port) can be told apart.
+function loginLabel(setting, redirectUri) {
+  for (const entry of String(setting || '').split(/[;\n]/)) {
+    const i = entry.indexOf('=');
+    if (i < 1) continue;
+    const uri = entry.slice(0, i).trim().replace(/\/+$/, '');
+    const [label, username] = entry.slice(i + 1).split('|').map((v) => v.trim());
+    if (!uri || !label || !redirectUri) continue;
+    if (redirectUri === uri || redirectUri.startsWith(`${uri}/`) || redirectUri.startsWith(`${uri}?`)) return { label, username: username || '' };
+  }
+  return null;
+}
+
+function returnsTo(uri) {
+  try { const u = new URL(uri); return `${u.origin}${u.pathname}`; } catch { return String(uri || ''); }
+}
+
+function loginPage({ client, params, error, label, username }) {
   const hidden = Object.entries(params).map(([k, v]) => `<input type="hidden" name="${esc(k)}" value="${esc(v)}">`).join('');
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Sign in · API Test Tool</title>
+<title>${label ? `Sign in as ${esc(label.label)}` : 'Sign in'} · API Test Tool</title>
 <style>
 :root{--bg:#f6f7f9;--card:#fff;--fg:#1d2330;--muted:#5b6475;--accent:#2f6fed;--border:#dde1e8;--err:#b42318}
 @media (prefers-color-scheme:dark){:root{--bg:#0f1218;--card:#171b24;--fg:#e6e9ef;--muted:#9aa3b2;--accent:#6c9cff;--border:#2a3140;--err:#ff7b72}}
@@ -29,15 +48,17 @@ function loginPage({ client, params, error }) {
 h1{font-size:20px;margin:0 0 4px}p{color:var(--muted);margin:0 0 18px}label{display:block;font-size:13px;color:var(--muted);margin:12px 0 4px}
 input[type=text],input[type=password]{width:100%;padding:10px 12px;border:1px solid var(--border);border-radius:8px;background:transparent;color:inherit;font:inherit}
 .scopes{font-family:ui-monospace,monospace;font-size:13px;background:var(--bg);padding:8px 10px;border-radius:6px;margin-top:6px}
+.persona{display:inline-block;background:var(--accent);color:#fff;border-radius:8px;padding:6px 12px;font-size:22px;font-weight:700;margin:2px 0 10px}
 .row{display:flex;gap:8px;margin-top:20px}button{flex:1;padding:10px;border-radius:8px;border:1px solid var(--border);font:inherit;cursor:pointer;background:transparent;color:inherit}
 button.primary{background:var(--accent);border-color:var(--accent);color:#fff}.err{color:var(--err);margin-top:10px}.hint{font-size:12px;color:var(--muted);margin-top:14px}
 </style></head><body><form class="card" method="post" action="/oauth/authorize">
-<h1>Sign in</h1><p><strong>${esc(client.clientName || client.clientId)}</strong> is requesting access.</p>
+${label ? `<h1>Sign in as</h1><div class="persona">${esc(label.label)}</div>` : '<h1>Sign in</h1>'}<p><strong>${esc(client.clientName || client.clientId)}</strong> is requesting access.</p>
 ${client.source === 'cimd' ? `<p class="hint">Identified by its metadata document on <strong>${esc(client.metadataHost)}</strong> (CIMD)${client.hostedHere ? ', hosted by this server' : ''}. Only continue if you trust that site.</p>` : ''}
 ${hidden}
-<label for="u">Username</label><input id="u" type="text" name="username" autocomplete="username" required autofocus>
-<label for="p">Password</label><input id="p" type="password" name="password" autocomplete="current-password" required>
+${(() => { const user = username ?? label?.username ?? ''; return `<label for="u">Username</label><input id="u" type="text" name="username" autocomplete="username" required${user ? ` value="${esc(user)}"` : ' autofocus'}>
+<label for="p">Password</label><input id="p" type="password" name="password" autocomplete="current-password" required${user ? ' autofocus' : ''}>`; })()}
 <label>Requested scopes</label><div class="scopes">${esc(params.scope || client.scopes.join(' '))}</div>
+<div class="hint">Returning to <code>${esc(returnsTo(params.redirect_uri))}</code></div>
 ${error ? `<div class="err">${esc(error)}</div>` : ''}
 <div class="row"><button type="submit" name="decision" value="deny">Deny</button><button class="primary" type="submit" name="decision" value="allow">Allow</button></div>
 <div class="hint">Users come from OAUTH_USERS and the dashboard's Auth page (default demo / demo).</div>
@@ -83,7 +104,7 @@ module.exports = function oauthRouter(ctx) {
     try {
       const { client } = await validateAuthorize(req.query, req);
       const params = Object.fromEntries(AUTH_PARAMS.filter((k) => req.query[k]).map((k) => [k, req.query[k]]));
-      res.type('html').send(loginPage({ client, params }));
+      res.type('html').send(loginPage({ client, params, label: loginLabel(settings.get('oauthLoginLabels'), params.redirect_uri) }));
     } catch (e) {
       if (e instanceof OAuthError) return res.status(400).type('html').send(`<!doctype html><meta charset="utf-8"><title>OAuth error</title><body style="font-family:system-ui;padding:24px"><h1>Authorization error</h1><p><code>${esc(e.error)}</code>: ${esc(e.description)}</p></body>`);
       throw e;
@@ -102,7 +123,7 @@ module.exports = function oauthRouter(ctx) {
     const params = Object.fromEntries(AUTH_PARAMS.filter((k) => b[k]).map((k) => [k, b[k]]));
     if (b.decision === 'deny') return redirectWith(res, b.redirect_uri, { error: 'access_denied', state: b.state });
     if (!(await oauth.checkUser(b.username, b.password))) {
-      return res.status(401).type('html').send(loginPage({ client: ctxv.client, params, error: 'Invalid username or password' }));
+      return res.status(401).type('html').send(loginPage({ client: ctxv.client, params, error: 'Invalid username or password', label: loginLabel(settings.get('oauthLoginLabels'), b.redirect_uri), username: b.username }));
     }
     const code = oauth.createCode({
       clientId: ctxv.client.clientId, redirectUri: b.redirect_uri, scopes: ctxv.scopes, subject: b.username,
